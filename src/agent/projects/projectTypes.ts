@@ -3,11 +3,38 @@
 // part of this registry and remains disabled until a future explicit PUBLISH gate is implemented.
 
 import type { EditorialVoiceBody } from "./drLurie/editorialVoice.js";
+import type { GenesisSiteNameSource } from "./genesisSiteName.js";
 export const projectAuthModes = ["none", "bearer_env"] as const;
 export type ProjectAuthMode = typeof projectAuthModes[number];
 
-export const projectStatuses = ["active", "disabled"] as const;
+// A2.2 (2026-09-15) — "provisioning" exists so a HALF-BORN TENANT IS VISIBLE.
+//
+// The live mint of genesis-lab-3 created a Netlify site, wrote two env vars, hit a 422 and threw —
+// leaving a real site with no registry record at all. `project_test_connection genesis-lab-3`
+// answered "Unknown projectId", so from CMS-Agent's side the tenant did not exist, and the only
+// evidence it did was in the Netlify UI. A record written early and marked provisioning is what makes
+// the gap observable and the mint resumable.
+//
+// WHAT IT MEANS, PRECISELY: "genesis has not finished with this one". Not "switched off" — the two
+// are enforced separately and on purpose:
+//   REACHABLE, because reaching it is how the mint gets finished — genesis itself, the fleet
+//     credential reconciler (it walks every bearer_env project), project.get/list, and
+//     project.test_connection, which is the honest way to learn whether the remaining steps landed.
+//   REFUSED wherever the tenant would be treated as a working publishing target — capture, clone,
+//     artifact materialization, template instantiation, admin chat (agent_resolve / agent_converse),
+//     visual_identity and site.duplicate's targetProjectId — each with the DISTINCT code
+//     `project_provisioning`, because "disabled" sends an operator looking for a switch when what is
+//     needed is a re-run. This matters because the record is now written EARLY and carries the fleet's
+//     autonomous publish posture: without these gates a mint that died at the third env write would
+//     leave an immediately-publishable tenant whose site has no deploy and maybe no PUBLISH_SECRET.
+// `projectUpdateStatuses` below keeps it off both MCP surfaces (create and update), so it can never
+// become an operator's parking brake — only genesis sets it and only genesis clears it.
+export const projectStatuses = ["active", "disabled", "provisioning"] as const;
 export type ProjectStatus = typeof projectStatuses[number];
+
+/** The statuses project.update accepts. "provisioning" is written by genesis and cleared by genesis;
+ *  an operator setting it by hand would only strand a tenant mid-birth. */
+export const projectUpdateStatuses = ["active", "disabled"] as const;
 
 // Per-tool permission, mirroring Claude Code's allow/ask/deny model:
 //   allowed        — project.call_tool forwards the call to the remote server.
@@ -155,6 +182,10 @@ export function resolveTrackingPartition(
 export type ClientSiteBinding = {
   netlifySiteName: string;
   netlifySiteId?: string;
+  // A2.3 (2026-09-15) — did genesis DERIVE this name from the convention, or was it handed one?
+  // Absent on every record that predates the field, which is exactly the right default: an unknown
+  // provenance is not an override, and the parity check only speaks about genesis-minted records.
+  netlifySiteNameSource?: GenesisSiteNameSource;
 };
 
 export type ProjectPublishingPolicy = {

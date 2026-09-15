@@ -22,7 +22,9 @@ export type ProjectDialectFinding = { projectId: string; missingFields: string[]
 export function auditProjectObjectDialects(projects: ProjectConnectionConfig[]): ProjectDialectFinding[] {
   const findings: ProjectDialectFinding[] = [];
   for (const project of projects) {
-    if (project.status !== "active" || !needsObjectDialect(project.projectId)) continue;
+    // A2.2: audit a provisioning tenant too — a missing dialect is exactly what an unfinished mint
+    // is likely to be missing.
+    if (project.status === "disabled" || !needsObjectDialect(project.projectId)) continue;
     const missingFields = project.objectDialect
       ? REQUIRED_DIALECT_FIELDS.filter((field) => !project.objectDialect![field])
       : [...REQUIRED_DIALECT_FIELDS];

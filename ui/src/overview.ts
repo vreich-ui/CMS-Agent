@@ -139,7 +139,8 @@ export function buildAttentionItems(input: {
   }
 
   for (const project of input.projects) {
-    if (project.status !== "active") continue;
+    // A2.2: show tenants whose mint has not finished; only disabled ones drop out.
+    if (project.status === "disabled") continue;
     if (!project.connection.endpointConfigured) {
       items.push({
         id: `project-endpoint:${project.projectId}`,

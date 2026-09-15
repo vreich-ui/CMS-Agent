@@ -33,7 +33,8 @@ import { isSecretVersionRef } from "./secretManager.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
 import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
-import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectObjectDialect, type ProjectPublishingPolicy, type ProjectSummary, type ProjectTrackingBinding } from "./projectTypes.js";
+import { genesisSiteNameSources } from "./genesisSiteName.js";
+import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectUpdateStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectObjectDialect, type ProjectPublishingPolicy, type ProjectStatus, type ProjectSummary, type ProjectTrackingBinding } from "./projectTypes.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -89,7 +90,11 @@ export const secretVersionRefSchema = z.string().min(1).max(512).superRefine((va
 // project.update's MCP-facing path can never drift apart on what counts as a valid binding.
 const clientSiteBindingSchema = z.object({
   netlifySiteName: z.string().min(1).max(256),
-  netlifySiteId: z.string().min(1).max(256).optional()
+  netlifySiteId: z.string().min(1).max(256).optional(),
+  // A2.3 — provenance of the name, so genesisParity can tell a divergence from a deliberate
+  // override. Accepted on the MCP patch path too: backfilling "override" is exactly how an operator
+  // silences the check for a tenant whose site name will never match the convention.
+  netlifySiteNameSource: z.enum(genesisSiteNameSources).optional()
 }).strict();
 
 // canonicalArticleBody was removed (R-23): every definition declared the identical value, making it
@@ -195,7 +200,10 @@ export const projectCreateSchema = z.object({
   toolPolicies: toolPoliciesSchema.optional(),
   contentContract: contentContractSchema.default({ contentContract: "content_source.v1" }),
   capturePolicy: capturePolicySchema.default(DEFAULT_PROJECT_CAPTURE_POLICY),
-  status: z.enum(projectStatuses).default("active")
+  // A2.2: "provisioning" is genesis-owned and genesis-cleared, so it is off BOTH MCP surfaces.
+  // runSiteGenesis calls createProject in-process through ProjectCreateInput, which is typed on
+  // ProjectStatus and can still pass it.
+  status: z.enum(projectUpdateStatuses).default("active")
 }).strict();
 
 export const projectUpdateSchema = z.object({
@@ -213,7 +221,7 @@ export const projectUpdateSchema = z.object({
   toolPolicies: toolPoliciesSchema.optional(),
   contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
   capturePolicy: capturePolicySchema.optional(),
-  status: z.enum(projectStatuses).optional(),
+  status: z.enum(projectUpdateStatuses).optional(),
   // T15.6 (2026-09-04) — the one identity-shaped field project.update DOES accept, and deliberately
   // not on projectCreateSchema (see ProjectCreateInput.clientSiteBinding). Safe here in a way
   // publishingPolicy is not: this is non-secret metadata (a Netlify site name/id, nothing that
@@ -243,8 +251,12 @@ export const projectUpdateSchema = z.object({
 
 // The MCP boundary parses defaults before calling createProject. Keeping this optional also lets
 // trusted in-process callers use the same fail-closed default rather than having to duplicate it.
-export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capturePolicy"> & {
+export type ProjectCreateInput = Omit<z.infer<typeof projectCreateSchema>, "capturePolicy" | "status"> & {
   capturePolicy?: ProjectCapturePolicy;
+  // A2.2 — the FULL status set, including "provisioning", which projectCreateSchema deliberately
+  // refuses over MCP. Same trust boundary as clientSiteBinding below: only in-process genesis may
+  // mark a record as a mint in progress.
+  status: ProjectStatus;
   // Trusted in-process genesis identity. Deliberately absent from projectCreateSchema so an MCP
   // project.create call cannot hand-mark a record as a generated client site.
   clientSiteBinding?: ClientSiteBinding;
@@ -514,7 +526,7 @@ export function projectRegistrationContract() {
       allowedTools: { required: false, default: [], note: "Deny-all until remote tool names are explicitly allow-listed; project.call_tool refuses anything else." },
       contentContract: { required: false, default: { contentContract: "content_source.v1" } },
       capturePolicy: { required: false, default: DEFAULT_PROJECT_CAPTURE_POLICY, note: "Per-project capture governance. Missing policy denies all capture (maxPages=0, no origins); design references may never contribute copied content or media." },
-      status: { required: false, default: "active", enum: [...projectStatuses] }
+      status: { required: false, default: "active", enum: [...projectUpdateStatuses] }
     },
     publishingPolicy: "Server-enforced: publishEnabled=true by default (go-live 2026-07-31). The per-project *_PUBLISH_ENABLED=false env flag is the operator kill-switch.",
     onboardingSteps: [

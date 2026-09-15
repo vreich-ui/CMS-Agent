@@ -78,7 +78,7 @@ const isMisconfiguration = (reasons: string[] | undefined): boolean =>
 // Just enough of project.list to judge whether a connection can actually be used.
 export type ProjectConnectionSnapshot = {
   projectId: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "provisioning";
   connection: { endpointConfigured: boolean; tokenConfigured: boolean; mcpEndpointEnvVar: string; tokenEnvVar?: string };
 };
 
@@ -488,7 +488,9 @@ export function configurationAttentionItems(inputs: ConstellationInputs): Conste
   // Unconfigured client connections. An active project whose endpoint or token is missing fails
   // closed at call time — correct behaviour, but silent until something tries to publish.
   for (const project of [...(inputs.projects ?? [])].sort((a, b) => a.projectId.localeCompare(b.projectId))) {
-    if (project.status !== "active") continue;
+    // A2.2: a "provisioning" tenant is precisely the one worth showing — skipping it is how a
+    // half-born mint stayed invisible. Only a deliberately disabled tenant drops out.
+    if (project.status === "disabled") continue;
     const missing = [
       ...(project.connection.endpointConfigured ? [] : [project.connection.mcpEndpointEnvVar]),
       ...(project.connection.tokenEnvVar && !project.connection.tokenConfigured ? [project.connection.tokenEnvVar] : [])
