@@ -131,9 +131,33 @@ export type RunSummaryRecord = {
   budgetBlock?: WorkflowExecutionRecord["budgetBlock"];
   operatorPublishDecision?: WorkflowExecutionRecord["operatorPublishDecision"];
   operatorDecisionSource?: string;
+  // W5 — THE PER-NODE FAILURE CHIPS, ON THE INDEX ROW.
+  //
+  // The Workbench rail draws a chip per node from the last few runs. To get them it was asking
+  // workflow_list_runs for `detail: "full"` — five whole run records, up to 1.2 MB each, twice per
+  // paint (a second identical call fired from Dock/Drive at the same instant), for what is a single
+  // letter per node. Under that load `workspace_get_node` measured 19-25 s and `project_list` 11.7 s.
+  //
+  // One letter per node, in the run index the listing already reads, so the chips cost ZERO blob
+  // reads: c=completed, f=failed, b=blocked, s=skipped, q=queued, r=running, x=cancelled. Single
+  // characters rather than the full status words because this rides on EVERY row of every listing and
+  // a 25-node run is then ~200 bytes, not ~700 — the same reasoning that made the rest of this
+  // projection counts instead of arrays. `failedNodeIds` is the one list worth spelling out in full:
+  // it is what the rail actually links to, it is empty on a healthy run, and deriving it client-side
+  // from nodeStatuses would make every consumer re-implement the letter mapping.
+  nodeStatuses?: Record<string, RunIndexNodeStatus>;
+  failedNodeIds?: string[];
   /** Only on a "running" row — the projection assessRunStallFrom needs. */
   stallFacts?: RunStallFacts;
 };
+
+// The single-letter status codes carried on an index row (see RunSummaryRecord.nodeStatuses). Exported
+// so the Workbench decodes them from the server's own definition rather than a hand-copied map that
+// can silently drift when a status is added.
+export const RUN_INDEX_NODE_STATUS_CODES = { completed: "c", failed: "f", blocked: "b", skipped: "s", queued: "q", running: "r", cancelled: "x" } as const;
+export type RunIndexNodeStatus = typeof RUN_INDEX_NODE_STATUS_CODES[keyof typeof RUN_INDEX_NODE_STATUS_CODES];
+const nodeStatusCode = (status: ExecutionStatus): RunIndexNodeStatus | undefined =>
+  (RUN_INDEX_NODE_STATUS_CODES as Record<string, RunIndexNodeStatus | undefined>)[status];
 
 // Bound by CODE POINT, not UTF-16 unit — same discipline as executor.ts's boundText: slicing
 // between the halves of a surrogate pair emits a lone surrogate, which is not valid UTF-8 and is
@@ -179,6 +203,12 @@ export const runSummaryOf = (run: WorkflowExecutionRecord): RunSummaryRecord => 
   ...(run.operatorPublishDecision
     ? { operatorPublishDecision: run.operatorPublishDecision, operatorDecisionSource: run.operatorDecisionSource ?? "explicit" }
     : {}),
+  // W5 — omitted entirely on a run with no nodes rather than written as `{}`, so an empty-node record
+  // (and every row written before this field existed) reads identically either way. An unrecognised
+  // status is left out rather than mapped to a wrong letter: a missing chip is honest, a wrong one is
+  // not.
+  ...(nodes.length ? { nodeStatuses: Object.fromEntries(nodes.flatMap((node) => { const code = nodeStatusCode(node.status); return code ? [[node.nodeId, code] as const] : []; })) } : {}),
+  ...(nodes.some((node) => node.status === "failed") ? { failedNodeIds: nodes.filter((node) => node.status === "failed").map((node) => node.nodeId) } : {}),
   // Stall is only ever assessed on a running run, so only a running row has to carry the
   // facts for it. Everything else would be dead weight on every row in the fleet.
   ...(run.status === "running" ? { stallFacts: runStallFacts(run) } : {})
