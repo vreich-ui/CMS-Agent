@@ -35,7 +35,7 @@ import type { WorkspaceNode } from "../workspace/nodeTypes.js";
 import type { ToolExecutionContext } from "../tools/toolTypes.js";
 
 export type DispatchAuthorizationInput = {
-  run: Pick<WorkflowExecutionRecord, "runId" | "workflowId" | "projectId" | "dryRun" | "authorizedTools" | "platformAllowedTools">;
+  run: Pick<WorkflowExecutionRecord, "runId" | "workflowId" | "projectId" | "dryRun" | "authorizedTools" | "platformAllowedTools" | "defaultedNodeIds">;
   node: Pick<WorkspaceNode, "id" | "riskLevel">;
   // The tool ids an operator has approved for this dispatch. Threaded from the runner context, which
   // is where the diagnostic path already supplies it.
@@ -53,6 +53,9 @@ export function dispatchToolContext({ run, node, approvedToolIds }: DispatchAuth
     workflowId: run.workflowId,
     projectId: run.projectId,
     dryRun: run.dryRun,
+    // W2 — so a node that DOES run can still tell that something upstream of it did not. Only
+    // learning.record_observation reads it (see toolRegistry.ts).
+    ...((run.defaultedNodeIds ?? []).length ? { defaultedNodeIds: [...run.defaultedNodeIds!] } : {}),
     ...(approvedToolIds ? { approvedToolIds } : {}),
     // Stated rather than left to toolPolicy's fallback. The value is the same one the fallback
     // produced (the node's own riskLevel), and saying it here is what lets a run-level or platform-level
