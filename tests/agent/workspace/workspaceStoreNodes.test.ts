@@ -158,7 +158,7 @@ describe("workspace.* MCP tools see capture/clone nodes (#195 acceptance)", () =
     const res = await call("workspace.get_graph");
     const data = structured(res).data;
     expect(data.nodes).toHaveLength(51);
-    expect(data.registeredWorkflowIds).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio"]);
+    expect(data.registeredWorkflowIds).toEqual(["publishing_conductor", "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio"]);
     // capture_report's own dependency on the shared tail is visible even in the flat merged view.
     expect(data.edges).toEqual(expect.arrayContaining([{ from: "publish_executor", to: "capture_report" }]));
   });

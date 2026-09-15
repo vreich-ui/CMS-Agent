@@ -19,6 +19,7 @@ import "./visualIdentityWorkflow.js";
 import "./pdfTemplateStudioWorkflow.js";
 // A9 (Stage A task list) — image_template_revision_studio, for the identical reason.
 import "./imageTemplateRevisionWorkflow.js";
+import "./documentRenderWorkflow.js";
 
 // T12.15 — single-node resolution for EXECUTION, as opposed to resolveConductorNodes (executor.ts),
 // which resolves a whole run's node array.

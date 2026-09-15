@@ -52,6 +52,7 @@ import "./pdfTemplateStudioWorkflow.js";
 // A9 (Stage A task list) — same side-effect registration for image_template_revision_studio (the
 // image-on-every-page batch operation). See imageTemplateRevisionWorkflow.ts's own header.
 import "./imageTemplateRevisionWorkflow.js";
+import "./documentRenderWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";

@@ -286,5 +286,20 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
     },
     required: ["requestId", "sha256"],
     type: "object"
+  },
+  document_render: {
+    additionalProperties: false,
+    properties: {
+      attach: { default: true, type: "boolean" },
+      document_kind: { minLength: 1, type: "string" },
+      filename: { minLength: 1, type: "string" },
+      idempotency_key: { minLength: 1, type: "string" },
+      owner_object_id: { minLength: 1, type: "string" },
+      owner_object_type: { minLength: 1, type: "string" },
+      site_id: { minLength: 1, type: "string" },
+      template_id: { minLength: 1, type: "string" }
+    },
+    required: ["site_id", "owner_object_type", "owner_object_id"],
+    type: "object"
   }
 };

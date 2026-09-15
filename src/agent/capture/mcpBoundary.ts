@@ -238,6 +238,20 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
       { engine: "sha256", wire: "sha256" }
     ],
     required: ["requestId", "sha256"]
+  },
+  // A8 (runner 3b) — the one verb document_render_studio speaks.
+  document_render: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "ownerObjectType", wire: "owner_object_type" },
+      { engine: "ownerObjectId", wire: "owner_object_id" },
+      { engine: "documentKind", wire: "document_kind" },
+      { engine: "templateId", wire: "template_id" },
+      { engine: "filename", wire: "filename" },
+      { engine: "attach", wire: "attach" },
+      { engine: "idempotencyKey", wire: "idempotency_key" }
+    ],
+    required: ["site_id", "owner_object_type", "owner_object_id"]
   }
 };
 

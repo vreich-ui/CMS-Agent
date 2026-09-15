@@ -141,6 +141,10 @@ describe("mcpBoundary conformance — toWireArguments output validates against t
 
   it("get_artifact_metadata", () => assertConforms("get_artifact_metadata", toWireArguments("get_artifact_metadata", { requestId: "req_1", sha256: "a".repeat(64) })));
 
+  // A8 (3b) — document_render_studio's one verb.
+  it("document_render", () =>
+    assertConforms("document_render", toWireArguments("document_render", { siteId: "site_x", ownerObjectType: "content_item", ownerObjectId: "ci_1", templateId: "tpl_x" })));
+
   it('object_create — a fully-formed mint call (the "site" the spec\'s defect table names) conforms', () =>
     assertConforms(
       "object_create",

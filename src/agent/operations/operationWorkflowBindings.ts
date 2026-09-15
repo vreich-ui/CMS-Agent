@@ -63,6 +63,7 @@ import { listRegisteredWorkflowIds, getWorkflowDefinition } from "../workspace/w
 import { VISUAL_IDENTITY_WORKFLOW_ID } from "../workspace/visualIdentityWorkflow.js";
 import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../workspace/pdfTemplateStudioWorkflow.js";
 import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../workspace/imageTemplateRevisionWorkflow.js";
+import { DOCUMENT_RENDER_WORKFLOW_ID } from "../workspace/documentRenderWorkflow.js";
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
@@ -184,6 +185,29 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     // against this operation's own required fields — to deliver exactly that.
     inputMapping: {},
     initialInputBuilder: declaredBuilderFor(IMAGE_TEMPLATE_REVISION_WORKFLOW_ID)
+  },
+  {
+    // A8 (Milestone A remainder, runner 3b) — document_render -> document_render_studio — BOUND.
+    // documentRenderWorkflow.ts registers the two-node graph (documentRenderNodes.ts) this
+    // operation's own declared `effects` describe: render_document_pdf, riskLevel "write"
+    // (document_render_execute), plus its terminal report. The evidence this binding rests on is
+    // the same kind every row above rests on, never naming similarity:
+    //   * the operation's one effect is "renders an existing article or structured document into a
+    //     PDF artifact via a published template" — document_render_execute calls exactly the tenant
+    //     verb that does that (`document_render`), and nothing else;
+    //   * the operation's one requiredCapability is pdf_render, which capabilityReadiness.ts derives
+    //     from that same verb since the Milestone A remainder (it used to gate on the article-only
+    //     shortcut render_article_pdf);
+    //   * the operation's one completion criterion, pdf_content_verified, is READ from that verb's
+    //     own receipt quality gate by document_render_report — never asserted by the workflow.
+    // inputMapping is EMPTY BY CONSTRUCTION, same reasoning as the three rows above: the operation's
+    // fields are CONSTRUCTED into initialInput.documentRenderBrief by `initialInputBuilder`
+    // (documentRenderBriefBuilder.ts, applied in startDryRun), and document_render_execute's own
+    // inputSchema NAMES documentRenderBrief so the contract check has a real requirement to evaluate.
+    operationId: "document_render",
+    workflowId: DOCUMENT_RENDER_WORKFLOW_ID,
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(DOCUMENT_RENDER_WORKFLOW_ID)
   }
 ];
 
@@ -195,8 +219,10 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // operation whose implementing task shipped an EXECUTOR instead (operationExecutorBindings.ts) is
 // also removed from here — site_inventory (A4) is the one example; see this module's header.
 export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
-  asset_lookup_adopt: "A5",
-  document_render: "A8"
+  asset_lookup_adopt: "A5"
+  // document_render (A8) MOVED OUT on the Milestone A remainder: documentRenderWorkflow.ts registers
+  // document_render_studio and the BINDINGS row above binds it, which is exactly what this map's own
+  // header says to do when a task ships a real implementing workflow.
 };
 
 function assertBindingIsSound(binding: OperationWorkflowBinding): void {

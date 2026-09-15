@@ -54,6 +54,9 @@ import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan } 
 // into this stage's own output.
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
+// A8 (runner 3b) — document_render_studio's own two deterministic stages, dispatched through the
+// same metadata-keyed route as A7's and A9's.
+import { buildDocumentRenderReportStep, documentRenderExecuteStep, DOCUMENT_RENDER_ARTIFACTS, type DocumentRenderBrief, type DocumentRenderExecuteEnvelope } from "../capture/documentRenderEngine.js";
 import type { TenantCallContext } from "../tools/tenantInvoke.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
@@ -133,7 +136,9 @@ export const CLONE_STAGES = [
   "image_revision_intake",
   "image_revision_compile_preview",
   "image_revision_apply",
-  "image_revision_report"
+  "image_revision_report",
+  "document_render_execute",
+  "document_render_report"
 ] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
@@ -597,6 +602,36 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
           compiled: compiled?.artifact === IMAGE_REVISION_ARTIFACTS.compilePreview ? (compiled as unknown as ImageRevisionCompilePreviewEnvelope) : undefined,
           applied: applied?.artifact === IMAGE_REVISION_ARTIFACTS.apply ? (applied as unknown as ImageRevisionApplyEnvelope) : undefined
         });
+        return { kind: "completed", output: report as unknown as Record<string, unknown> };
+      }
+      // A8 (runner 3b) — document_render_studio's two stages. ONE tenant call, then a terminal
+      // report that reads the receipt rather than asserting anything about it.
+      case "document_render_execute": {
+        // Same dispatch-boundary refusal A7's pdf_family_plan and A9's image_revision_intake hold:
+        // a run whose initialInput carries no brief is refused BY NAME here, never completed on an
+        // empty envelope.
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.documentRenderBrief)) {
+          return refused(
+            "document_render_brief_missing",
+            "The run's initialInput carries no documentRenderBrief; document_render_execute needs one to name the document to render. A binding that dispatches this workflow without constructing a documentRenderBrief cannot run it — see operationWorkflowBindings.ts's document_render entry."
+          );
+        }
+        const { config: renderConfig } = await resolveCloneAuthority(targetProjectId);
+        // document_render is a pdf-tool-scoped verb like every other one in this module: scoped by
+        // the tenant's Platform site object id, refused by name when the record has none.
+        const renderScope = resolvePdfToolSiteId(renderConfig);
+        if (!renderScope.ok) return refused(renderScope.code, renderScope.reason);
+        const envelope = await documentRenderExecuteStep(
+          { targetProjectId, siteId: renderScope.siteId, brief: initial.documentRenderBrief as unknown as DocumentRenderBrief },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "document_render_report": {
+        const execute = envelopeOf(run, "document_render_execute", DOCUMENT_RENDER_ARTIFACTS.execute);
+        if (isOutcome(execute)) return execute;
+        const report = buildDocumentRenderReportStep({ execute: execute as unknown as DocumentRenderExecuteEnvelope });
         return { kind: "completed", output: report as unknown as Record<string, unknown> };
       }
       // T15.10 (ADR-2026-08-25-publish-autonomy §6.2, §9) — clone_conductor's segment of the SHARED

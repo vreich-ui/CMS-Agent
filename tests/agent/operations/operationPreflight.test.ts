@@ -353,12 +353,23 @@ describe("preflightOperation", () => {
       // BOUND (to pdf_template_studio / image_template_revision_studio respectively) and, since the
       // Milestone A remainder, both builder-backed and satisfied, like visual_identity_review_change
       // above — not like the genuinely still-unbound ids this loop covers.
-      const unboundIds = ["document_render", "asset_lookup_adopt"];
+      // A8 (Milestone A remainder) — document_render left this loop: it is bound to
+      // document_render_studio and builder-backed, so it has no workflow_binding gap at all. Its own
+      // current behaviour is asserted immediately after this loop, beside pdf_template_family's.
+      const unboundIds = ["asset_lookup_adopt"];
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);
         expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
       }
+
+      // A8 — document_render is BOUND and builder-backed: no workflow_binding gap. Still not
+      // executable on a bare {tenantId} dispatch, for the same input_schema reason as
+      // pdf_template_family right below — here the missing required field is `documentRef`.
+      const documentRender = preflightOperation({ operationId: "document_render", tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
+      expect(documentRender.executable).toBe(false);
+      expect(documentRender.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(documentRender.blockers.some((blocker) => blocker.code === "input_schema_invalid")).toBe(true);
 
       // Milestone A remainder — pdf_template_family is BOUND (A7) and now builder-backed
       // (pdfTemplateFamilyBriefBuilder.ts); its entry node names the brief it requires, so R1c's
