@@ -555,7 +555,8 @@ describe("promoteStrategySignals", () => {
 
   it("is a no-op with nothing stable and nothing contradicted", async () => {
     const outcome = await promoteStrategySignals([], { improvementRepository: improvementRepository });
-    expect(outcome).toEqual({ promoted: [], reinforced: [], countered: [], errors: [] });
+    // C2 (part 2) — the outcome now names the scope it wrote to; an unscoped pass is the fleet's.
+    expect(outcome).toEqual({ scopeKey: "fleet", promoted: [], reinforced: [], countered: [], errors: [] });
   });
 
   it("records, never throws, when a repository refuses one node's playbook", async () => {

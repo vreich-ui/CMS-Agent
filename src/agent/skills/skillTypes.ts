@@ -1,5 +1,6 @@
 import type { WorkspaceRiskLevel } from "../workspace/nodeTypes.js";
 import type { WorkspaceMutationMeta } from "../mcp/workspace/store.js";
+import type { PolicyScope } from "../scope/policyScope.js";
 
 export const skillStatuses = ["draft", "active", "deprecated"] as const;
 export type SkillStatus = typeof skillStatuses[number];
@@ -27,6 +28,25 @@ export type SkillDefinition = {
   memoryPolicy: SkillMemoryPolicy;
   toolPolicy: SkillToolPolicy;
   riskLevel: WorkspaceRiskLevel;
+  /**
+   * C2 (part 2) — WHAT THIS SKILL APPLIES TO. Absent means the fleet: it applies wherever it is
+   * assigned, which is every skill's behaviour before this field existed and therefore the only
+   * default that changes nothing.
+   *
+   * A scope NARROWS an assignment; it never creates one. A node still has to assign the skill
+   * (`skill_assign`) — scope decides whether that assignment survives at dispatch, on this run, on
+   * this site. So a skill scoped to a site nobody assigned it on is inert, not implicit.
+   */
+  scope?: PolicyScope;
+  /**
+   * C2 (part 2) — MUTUAL EXCLUSION. Two skills in the same family are two versions of one job (the
+   * DTC and foundation cuts of `organization_narrative`, say), and exactly one of them may reach a
+   * dispatch. Of the family members that apply, the narrowest wins; an equal-specificity tie is a
+   * configuration error that is named rather than resolved by sort order.
+   *
+   * Absent means the skill belongs to no family and never displaces, or is displaced by, anything.
+   */
+  family?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

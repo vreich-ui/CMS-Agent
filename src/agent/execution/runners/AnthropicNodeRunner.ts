@@ -15,7 +15,7 @@
 // tool loop for tool-using conductor nodes is a tracked follow-up; such a node runs here without tool
 // access, so keep tool-using nodes on the OpenAI runner until that lands.
 import { estimatePricedCost, recordModelUsage, summarizeModelUsage } from "../../observability/modelUsage.js";
-import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
+import { composePlaybookForDispatch } from "../../improvement/playbookRetrieval.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
@@ -168,8 +168,10 @@ export class AnthropicNodeRunner implements NodeRunner {
     const baseURL = (process.env.ANTHROPIC_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     const apiKey = process.env[apiKeyEnv(node)]!;
 
-    const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
-    const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
+    // C2 part 2 — the node's lessons FOR THIS TENANT, composed with the fleet's: site first, then
+    // fleet, deduplicated, under one budget (composePlaybookForDispatch). A tenant with no lessons of
+    // its own reads exactly what it read before scope existed.
+    const playbookText = (await composePlaybookForDispatch(node.id, { site: context.run.projectId }, repositoryManager.getImprovementRepository())).text;
     // C4 — node runner image support (BRIEF 3.9). imageRefs never enter the JSON text: they are
     // resolved (fetched/validated/bounded — see imageRefs.ts) into their own leading content blocks,
     // and stripped out of `input` before it is serialized below. A node with no imageRefs resolves to

@@ -3,7 +3,15 @@ import { sortNewestFirst } from "../newestFirst.js";
 import type { ImprovementRepository } from "../interfaces/ImprovementRepository.js";
 import type { EvalDataset, ImprovementProposal, NodePlaybook, ProposalStatus, TrialRecord } from "../../improvement/improvementTypes.js";
 import { playbookSeeds } from "../../improvement/playbookSeeds.js";
-import { applyPlaybookDelta } from "../../improvement/playbook.js";
+import { applyPlaybookDelta, assertPlaybookScope } from "../../improvement/playbook.js";
+import { isFleetScope, scopeKey, type PolicyScope } from "../../scope/policyScope.js";
+
+// C2 (part 2) — the in-memory analogue of the blob key: scope first so one node's fleet and per-site
+// playbooks are distinct entries rather than one entry the last writer wins.
+const playbookMapKey = (nodeId: string, scope?: PolicyScope): string => {
+  assertPlaybookScope(scope);
+  return `${scopeKey(scope)}::${nodeId}`;
+};
 
 const clone = <T>(value: T): T => structuredClone(value);
 const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records).map(clone);
@@ -37,16 +45,18 @@ export class MemoryImprovementRepository implements ImprovementRepository {
   }
 
   // T15.17 — lazy-seed judgment-node playbooks from seeds on first access.
-  async getPlaybook(nodeId: string) {
-    let playbook = this.state().playbooks.get(nodeId);
-    if (!playbook && playbookSeeds.has(nodeId)) {
+  async getPlaybook(nodeId: string, scope?: PolicyScope) {
+    const key = playbookMapKey(nodeId, scope);
+    let playbook = this.state().playbooks.get(key);
+    // Fleet-only seeding, for the reason given in BlobImprovementRepository.
+    if (!playbook && isFleetScope(scope) && playbookSeeds.has(nodeId)) {
       // Seed from T15.17 playbook seeds (capture and clone conductor judgment nodes).
       const seed = playbookSeeds.get(nodeId)!;
       const now = new Date().toISOString();
       playbook = applyPlaybookDelta(undefined, nodeId, seed, now);
-      this.state().playbooks.set(nodeId, playbook);
+      this.state().playbooks.set(key, playbook);
     }
     return playbook ? clone(playbook) : undefined;
   }
-  async savePlaybook(playbook: NodePlaybook) { this.state().playbooks.set(playbook.nodeId, clone(playbook)); return clone(playbook); }
+  async savePlaybook(playbook: NodePlaybook) { this.state().playbooks.set(playbookMapKey(playbook.nodeId, playbook.scope), clone(playbook)); return clone(playbook); }
 }

@@ -1,6 +1,7 @@
 import { evaluateToolsForNode } from "../tools/toolResolver.js";
 import type { WorkspaceNode, WorkspaceRiskLevel } from "../workspace/nodeTypes.js";
 import type { SkillRepository } from "../repository/interfaces/SkillRepository.js";
+import { scopeLabel } from "../scope/policyScope.js";
 import { checkSchemaCompatibility } from "./schemaCompatibility.js";
 import { seededSkillDefinitions } from "./seededSkills.js";
 import type { SkillConflict, SkillDefinition, SkillResolvedPolicy } from "./skillTypes.js";
@@ -64,6 +65,25 @@ export async function resolveSkillsForNode(node: WorkspaceNode, repository: Skil
       }
     }
   }
+  // C2 part 2 — TWO MEMBERS OF ONE FAMILY REACHED THIS DISPATCH, which the vocabulary says cannot be
+  // a valid answer: a family is a mutual-exclusion group, and `selectScopedSkills` resolves one by
+  // specificity wherever specificity can decide it. Arriving here means it could not — two skills
+  // equally scoped, both applying — and the remedy is an operator decision (scope one of them
+  // narrower, or unassign it), not a tie-break this resolver invents. A BLOCKER rather than a
+  // warning because the alternative is a dispatch whose instructions contain two competing versions
+  // of the same job and no record of which the node was supposed to follow.
+  //
+  // It is checked HERE, on the resolved set, rather than only in the selector: an inspection
+  // resolving a node's live assignment never goes through the selector at all, and a contradictory
+  // assignment should be visible before a run is started, not only once one dispatches.
+  const byFamily = new Map<string, SkillDefinition[]>();
+  for (const skill of skills) if (skill.family) byFamily.set(skill.family, [...(byFamily.get(skill.family) ?? []), skill]);
+  for (const [family, members] of byFamily) {
+    if (members.length < 2) continue;
+    const named = members.map((skill) => `${skill.skillId} (${scopeLabel(skill.scope)})`).join(", ");
+    conflicts.push({ severity: "blocker", source: family, message: `Skill family "${family}" has ${members.length} members applying to this node at once: ${named}. A family admits exactly one. Scope one of them narrower (skill_update) or unassign it from this node (skill_unassign).` });
+  }
+
   // R-2: a real structural check (see schemaCompatibility.ts), not JSON.stringify equality. Only a
   // genuine contradiction — one no output could satisfy — is a blocker, and the conflict now names
   // which field contradicts instead of asserting that two schemas are not byte-identical.

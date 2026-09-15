@@ -3,6 +3,7 @@
 // trials, and per-node ACE playbooks. Plain types with zod schemas at the tool boundary, matching
 // the skill/change type conventions. These fill the gap register's §4b "Evaluation" hole.
 import { z } from "zod";
+import type { PolicyScope } from "../scope/policyScope.js";
 
 // Ids are read as an ordering signal, not only as a name: the repositories tie-break equal
 // `createdAt` stamps on the id (src/agent/repository/newestFirst.ts). `Date.now()` + a random tail
@@ -281,7 +282,23 @@ export type PlaybookItem = {
   createdAt: string;
   updatedAt: string;
 };
-export type NodePlaybook = { nodeId: string; items: PlaybookItem[]; budget: { maxItems: number; maxChars: number }; version: number; updatedAt: string };
+export type NodePlaybook = {
+  nodeId: string;
+  items: PlaybookItem[];
+  budget: { maxItems: number; maxChars: number };
+  version: number;
+  updatedAt: string;
+  /**
+   * C2 (part 2) — WHOSE LESSONS THESE ARE. Absent means the fleet's, which is what every playbook
+   * written before this field existed is, and what they stay: the fleet scope keeps its existing
+   * storage key exactly, so nothing was moved, rewritten or re-attributed to introduce this.
+   *
+   * A playbook scope NEVER names `task`: the record is already addressed by `nodeId`, and naming the
+   * same thing twice is how two spellings of one fact start disagreeing. Today the only dimension a
+   * playbook narrows by is `site` — see playbookScopeChain for why retrieval stops there.
+   */
+  scope?: PolicyScope;
+};
 export type PlaybookDelta = {
   add?: Array<{ text: string; kind: PlaybookItemKind; provenance?: PlaybookItem["provenance"] }>;
   markHelpful?: string[];

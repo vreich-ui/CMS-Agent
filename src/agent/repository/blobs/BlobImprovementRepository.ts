@@ -4,12 +4,19 @@ import type { ImprovementRepository } from "../interfaces/ImprovementRepository.
 import type { EvalDataset, ImprovementProposal, NodePlaybook, ProposalStatus, TrialRecord } from "../../improvement/improvementTypes.js";
 import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 import { playbookSeeds } from "../../improvement/playbookSeeds.js";
-import { applyPlaybookDelta } from "../../improvement/playbook.js";
+import { applyPlaybookDelta, assertPlaybookScope } from "../../improvement/playbook.js";
+import { isFleetScope, scopeStorageSegments, type PolicyScope } from "../../scope/policyScope.js";
 
 const proposalKey = (proposalId: string) => `improvement/proposals/${proposalId}.json`;
 const trialKey = (trialId: string) => `improvement/trials/${trialId}.json`;
 const datasetKey = (datasetId: string) => `improvement/datasets/${datasetId}.json`;
-const playbookKey = (nodeId: string) => `improvement/playbooks/${nodeId}.json`;
+// C2 (part 2) — the FLEET scope produces no segments, so its key is byte-identical to the one every
+// existing playbook already occupies: `improvement/playbooks/{nodeId}.json`. A narrower scope writes
+// a NEW key beside it (`improvement/playbooks/by-site/{projectId}/{nodeId}.json`). Nothing moves.
+const playbookKey = (nodeId: string, scope?: PolicyScope) => {
+  assertPlaybookScope(scope);
+  return `improvement/playbooks/${[...scopeStorageSegments(scope), `${nodeId}.json`].join("/")}`;
+};
 
 const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records);
 
@@ -45,9 +52,12 @@ export class BlobImprovementRepository implements ImprovementRepository {
   }
 
   // T15.17 — lazy-seed judgment-node playbooks from seeds on first access.
-  async getPlaybook(nodeId: string) {
-    let playbook = await getBlobJson<NodePlaybook>(this.store, playbookKey(nodeId));
-    if (!playbook && playbookSeeds.has(nodeId)) {
+  async getPlaybook(nodeId: string, scope?: PolicyScope) {
+    let playbook = await getBlobJson<NodePlaybook>(this.store, playbookKey(nodeId, scope));
+    // T15.17 seeds are FLEET lessons — they are the shipped judgment-node craft, not any tenant's —
+    // so a site-scoped read never materializes one. Seeding a per-tenant copy would hand every new
+    // tenant an editable duplicate of shared craft and quietly fork it.
+    if (!playbook && isFleetScope(scope) && playbookSeeds.has(nodeId)) {
       // Seed from T15.17 playbook seeds (capture and clone conductor judgment nodes).
       const seed = playbookSeeds.get(nodeId)!;
       const now = new Date().toISOString();
@@ -56,5 +66,5 @@ export class BlobImprovementRepository implements ImprovementRepository {
     }
     return playbook ?? undefined;
   }
-  async savePlaybook(playbook: NodePlaybook) { await this.store.setJSON(playbookKey(playbook.nodeId), playbook); return playbook; }
+  async savePlaybook(playbook: NodePlaybook) { await this.store.setJSON(playbookKey(playbook.nodeId, playbook.scope), playbook); return playbook; }
 }

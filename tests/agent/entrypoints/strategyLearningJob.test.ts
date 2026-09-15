@@ -89,8 +89,34 @@ describe("runStrategyLearningJob", () => {
     if (second.status === "completed") {
       expect([...new Set(second.result.promotion.promoted.map((entry) => entry.nodeId))].sort()).toEqual([...STRATEGY_PLAYBOOK_TARGET_NODES].sort());
     }
+    // C2 (part 2) — with no CMS_AGENT_PROJECT_ID to name the tenant in CMS-Agent's own namespace,
+    // the promotion writes the FLEET playbook, exactly as it always did.
     const writer = await repositoryManager.getImprovementRepository().getPlaybook("draft_writer");
     expect(writer?.items.some((item) => item.provenance.source === "tracking")).toBe(true);
+  });
+
+  it("C2 — writes into the named tenant's playbooks, and NOT the fleet's, when CMS_AGENT_PROJECT_ID names one", async () => {
+    // The cross-tenant leak, closed: this ingest reads ONE tenant's tracking rollups, so the lessons
+    // it promotes are that tenant's. Before scope they landed on the global per-node playbook that
+    // every other tenant's dispatch of the same node reads.
+    const env = { ...CONFIGURED_ENV, CMS_AGENT_PROJECT_ID: "dr-lurie" };
+    await runStrategyLearningJob({ env, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-08-31T06:00:00Z") });
+    const second = await runStrategyLearningJob({ env, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-09-01T06:00:00Z") });
+
+    expect(second.status).toBe("completed");
+    if (second.status === "completed") expect(second.result.promotion.scopeKey).toBe("site=dr-lurie");
+    const repository = repositoryManager.getImprovementRepository();
+    expect((await repository.getPlaybook("draft_writer", { site: "dr-lurie" }))?.items.some((item) => item.provenance.source === "tracking")).toBe(true);
+    // That the FLEET playbook is left untouched is asserted in tests/agent/improvement/playbookScope.test.ts,
+    // against an isolated repository: MemoryImprovementRepository keys its state statically by backend
+    // name, so records written by an earlier test in THIS file survive resetRepositoryManager() and an
+    // absence assertion here would pass or fail on test order rather than on behaviour.
+  });
+
+  it("C2 — a dry run reports whose playbooks it would teach, before it teaches them", async () => {
+    const result = await runStrategyLearningJob({ env: { ...CONFIGURED_ENV, CMS_AGENT_PROJECT_ID: "dr-lurie" }, dryRun: true, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-08-31T06:00:00Z") });
+    expect(result.status).toBe("dry_run");
+    if (result.status === "dry_run") expect(result.window.cmsAgentProjectId).toBe("dr-lurie");
   });
 
   it("reports completed_no_groups when rows arrive with every label NULL — KI-08's exact shape", async () => {
