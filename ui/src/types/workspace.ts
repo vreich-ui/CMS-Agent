@@ -300,7 +300,9 @@ export type ProjectSummary = {
     };
   };
   publishingPolicy: { publishEnabled: boolean; requiresExplicitPublish: boolean; description: string };
-  status: "active" | "disabled";
+  // A2.2: "provisioning" is a genesis-owned, transient third state — a tenant whose mint has not
+  // finished. Not a kind of "off": every disabled-guard in the engine still lets it through.
+  status: "active" | "disabled" | "provisioning";
   connection: ProjectConnectionState;
 };
 

@@ -191,6 +191,8 @@ export class ConversationalRunner {
     try {
       const project = await this.deps.projectRepository.get(input.project_id);
       if (!project) throw new ConverseError("unknown_project", `No registered project matches ${JSON.stringify(input.project_id)}.`);
+      // A2.2: "provisioning" is not "disabled" — saying so sent an operator looking for a switch.
+      if (project.status === "provisioning") throw new ConverseError("project_provisioning", `Project ${JSON.stringify(input.project_id)} is still provisioning: its genesis did not complete. Re-run site.duplicate to finish the mint.`);
       if (project.status !== "active") throw new ConverseError("project_disabled", `Project ${JSON.stringify(input.project_id)} is disabled.`);
       const agent = await resolveAgent(input, this.deps.workspaceRepository);
       const maxTokens = Math.min(input.constraints.max_tokens, agent.modelConfig.maxOutputTokens);

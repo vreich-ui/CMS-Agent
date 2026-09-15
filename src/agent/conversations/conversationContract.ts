@@ -53,7 +53,10 @@ export const converseErrorCodes = [
   // conversation that has to be restarted, instead of an opaque model_error the caller can only
   // retry into the same wall. Raised only after the send-time sanitiser has already tried to repair
   // the transcript and the provider rejected the repaired shape as well.
-  "conversation_needs_reset"
+  "conversation_needs_reset",
+  // A2.2 (2026-09-15): a tenant whose genesis has not finished is NOT a disabled tenant. Reporting it
+  // as project_disabled sent an operator looking for a switch to flip; the fix is to re-run the mint.
+  "project_provisioning"
 ] as const;
 export type ConverseErrorCode = typeof converseErrorCodes[number];
 

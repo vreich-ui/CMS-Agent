@@ -769,6 +769,9 @@ export async function runArtifactMaterialization(
   const config = await projects.get(run.projectId);
   if (!config) return refused("unknown_project", `Unknown projectId: ${run.projectId}. The artifact bridge is reached through the run's registered client, never guessed.`);
   if (config.status === "disabled") return refused("project_disabled", `Project ${run.projectId} is disabled; no artifact may be materialized against it.`);
+  // A2.2: an unfinished mint is not a publishable tenant — see templateInstantiate for why this is
+  // its own code rather than "disabled".
+  if (config.status === "provisioning") return refused("project_provisioning", `Project ${run.projectId} is still provisioning (its genesis has not completed); no artifact may be materialized against it until the mint finishes.`);
 
   const siteId = trimmed(config.objectDialect?.siteObjectId);
   if (!siteId) {

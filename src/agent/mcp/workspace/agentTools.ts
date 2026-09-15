@@ -78,7 +78,7 @@ const resolveAgentJsonSchema = objectSchema({
 }, ["role", "project_id"]);
 
 export class AgentResolveError extends Error {
-  constructor(public readonly code: "unknown_project" | "project_disabled" | "agent_unresolved", message: string) {
+  constructor(public readonly code: "unknown_project" | "project_disabled" | "project_provisioning" | "agent_unresolved", message: string) {
     super(`${code}: ${message}`);
   }
 }
@@ -115,6 +115,8 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
         const data = resolveAgentInput.parse(input);
         const project = await projectRepository.get(data.project_id);
         if (!project) throw new AgentResolveError("unknown_project", `No registered project matches "${data.project_id}".`);
+        // A2.2: distinguish an unfinished mint from a switched-off tenant.
+        if (project.status === "provisioning") throw new AgentResolveError("project_provisioning", `Project "${data.project_id}" is still provisioning: its genesis did not complete. Re-run site.duplicate to finish the mint.`);
         if (project.status !== "active") throw new AgentResolveError("project_disabled", `Project "${data.project_id}" is disabled.`);
 
         await workspaceRepository.ensureConversationalAgentSeeds();

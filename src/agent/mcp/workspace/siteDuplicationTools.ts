@@ -153,7 +153,7 @@ const duplicateJsonSchema = objectSchema({
   targetProjectId: { type: "string", minLength: 1, description: "Existing registered project to land the duplication in. Verified reachable (MCP initialize) and capture-authorized (registry capturePolicy; the deny-all default refuses). Mutually exclusive with newSite." },
   newSite: objectSchema({
     name: { type: "string", minLength: 2, description: "Lowercase kebab-case slug for the new tenant (repo tree sites/<name>/, registry projectId, <NAME>_MCP_* env var names)." },
-    netlifySiteName: { type: "string", minLength: 2, description: "Optional Netlify site name (the <name> in <name>.netlify.app) when it must differ from the slug." },
+    netlifySiteName: { type: "string", minLength: 2, description: "Optional OVERRIDE of the Netlify site name (the <name> in <name>.netlify.app). Default is the fleet convention kugel-<slug>; supply this only when that name is taken or the tenant must be named otherwise." },
     mcpEndpoint: { type: "string", format: "uri", maxLength: 512, description: "Optional override for the new tenant's MCP endpoint, stored on its registry record (https, no credentials/query/fragment — an endpoint is not a secret, the token still is). OMIT IT normally: genesis derives the endpoint from the Netlify site it just creates, so no endpoint has to be set by hand anywhere. Use it only when the tenant serves /mcp from a custom domain from day one." },
     niche: { type: "string", minLength: 2, maxLength: 200, description: "What this tenant publishes about, in the operator's own words (e.g. \"independent film preservation\"). Genesis never invents one. Supplying it is what lets the visual_identity house standard be written with a real brief instead of asking a human for one, and what lets a provisional editorial voice be filed on the record so the tenant's first runs are not voice-less." },
     audience: { type: "string", minLength: 2, maxLength: 200, description: "Who this tenant writes for (e.g. \"archivists and festival programmers\"). Pairs with niche: both are needed for the house-standard brief, and either one alone is enough for the provisional editorial voice." },
@@ -234,6 +234,11 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
     if (config.status === "disabled") {
       throw new SiteDuplicationRefusal("duplicate_target_unreachable", `Target project "${projectId}" is disabled; re-enable it (project.update status:"active") before duplicating into it.`);
     }
+    // A2.2 (2026-09-15): a half-born tenant is a visible record, not a usable target. Duplicating
+    // into one would emit drafts against a site with no deploy and, quite possibly, no PUBLISH_SECRET.
+    if (config.status === "provisioning") {
+      throw new SiteDuplicationRefusal("duplicate_target_unreachable", `Target project "${projectId}" is still provisioning — its genesis did not complete. Re-run site.duplicate with its newSite arguments to finish the mint (every step adopts what exists), then duplicate into it.`);
+    }
     const connection = await new ProjectMcpAdapter(config).testConnection();
     if (!connection.ok) {
       throw new SiteDuplicationRefusal("duplicate_target_unreachable", `Target project "${projectId}" is not reachable: ${connection.error ?? "MCP initialize failed"}. (Endpoint/token are read from ${config.mcpEndpointEnvVar}${config.tokenEnvVar ? ` / ${config.tokenEnvVar}` : ""} — values never transit MCP.)`);
@@ -299,7 +304,15 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
               projectId: genesis.projectId,
               mcpEndpoint: genesis.mcpEndpoint,
               humanChecklist,
-              note: "Genesis only: the tenant is registered and provisioned, and NO run was started (no sourceUrl was supplied). Its capturePolicy is deny-all — name an allowed origin with project.update before any later site.duplicate into it. To publish, start a run against this projectId with workflow.start_dry_run.",
+              // A2.2 — the mint's OWN verdict on itself. `status: "provisioning"` with a non-empty
+              // `blockages` is a half-born tenant that says so, instead of a thrown 422 that named
+              // nothing and left an orphan Netlify site (genesis-lab-3, 2026-09-15).
+              status: genesis.status,
+              blockages: genesis.blockages,
+              resumable: genesis.resumable,
+              note: genesis.blockages.length > 0
+                ? `Genesis is INCOMPLETE: ${genesis.blockages.length} step(s) blocked and the record stays status "provisioning". Each blockage names its step, its env var and its remedy in \`blockages\` and on the human checklist. Re-running this identical site.duplicate call adopts the Netlify site, build hook, env vars, secrets and record that already exist and completes only what is missing — no resource is duplicated and no credential is rotated.`
+                : "Genesis only: the tenant is registered and provisioned, and NO run was started (no sourceUrl was supplied). Its capturePolicy is deny-all — name an allowed origin with project.update before any later site.duplicate into it. To publish, start a run against this projectId with workflow.start_dry_run.",
               genesis: {
                 projectId: genesis.projectId,
                 netlifyMode: genesis.netlifyMode,

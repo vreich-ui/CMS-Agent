@@ -140,6 +140,8 @@ export async function resolveCloneAuthority(targetProjectId: string, deps: Clone
   const config = await projectsOf(deps).get(trimmed);
   if (!config) throw new CloneRefusal("unknown_project", `Unknown projectId: ${trimmed}. Register the target via project.create before any clone step.`);
   if (config.status === "disabled") throw new CloneRefusal("project_disabled", `Project ${trimmed} is disabled; no clone step may run against it.`);
+  // A2.2: an unfinished mint is not a clone target.
+  if (config.status === "provisioning") throw new CloneRefusal("project_provisioning", `Project ${trimmed} is still provisioning (its genesis has not completed); finish the mint before any clone step runs against it.`);
   return { projectId: trimmed, config };
 }
 

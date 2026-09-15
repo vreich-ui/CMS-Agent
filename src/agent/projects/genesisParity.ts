@@ -29,6 +29,7 @@
 import { ROUTE_MANIFESTS } from "../workspace/routeRegistry.js";
 import { drLurieProjectConfig } from "./drLurie/definition.js";
 import { GENESIS_TENANT_DEFINITION_VERSION, GENESIS_WITHHELD_ROUTE_VERBS, isGenesisMintedProject } from "./genesisTenantProfile.js";
+import { genesisNetlifySiteName } from "./genesisSiteName.js";
 import { platformScaffoldObjectIds } from "./platformScaffoldIds.js";
 import { effectiveToolPermission, type ProjectConnectionConfig, type ProjectObjectDialect } from "./projectTypes.js";
 
@@ -179,6 +180,28 @@ export function genesisParityDivergences(config: ProjectConnectionConfig, option
       consequence: "the fleet credential reconciler silently OMITS this tenant from every plan — it reads as nothing-to-do right up until its chat bearer 401s",
       reconcilable: false
     });
+  } else if (isGenesisMintedProject(config) && config.clientSiteBinding.netlifySiteNameSource !== "override") {
+    // A2.3 — THE SITE-NAME CONVENTION, checked rather than remembered.
+    //
+    // genesis-lab-2 is `kugel-genesis-lab-2` and genesis-lab-3 was born `genesis-lab-3`, because the
+    // `kugel-` prefix lived in an operator's habit rather than in either repo. Scoped deliberately:
+    //   - GENESIS-MINTED records only. dr-lurie is `drluriescience` and zilberman is
+    //     `zilbermanfilmfoundation`; both are correct and neither was minted by this path.
+    //   - `netlifySiteNameSource: "override"` silences it. A convention that cannot be overridden is
+    //     a rule against reality — `*.netlify.app` is a global namespace and names get taken.
+    // NOT reconcilable: a Netlify site cannot be renamed from a registry write, and renaming a live
+    // tenant's site changes its serving URL, its derived /mcp endpoint and its self-capture origin.
+    // So this REPORTS, and the operator decides between renaming the site and recording an override.
+    const expected = genesisNetlifySiteName(config.projectId);
+    if (config.clientSiteBinding.netlifySiteName !== expected) {
+      divergences.push({
+        field: "clientSiteBinding.netlifySiteName",
+        expected,
+        actual: config.clientSiteBinding.netlifySiteName,
+        consequence: "this minted tenant is named off-convention, so its serving URL, its derived /mcp endpoint and its self-capture origin all differ from every other tenant in the fleet — the class of drift that produced two genesis paths naming one tenant two ways",
+        reconcilable: false
+      });
+    }
   }
   if (!config.tokenSecretRef && !config.tokenEnvVar) {
     divergences.push({

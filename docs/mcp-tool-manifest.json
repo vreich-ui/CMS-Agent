@@ -457,7 +457,7 @@
     {
       "name": "site_duplicate",
       "description": "MINT a tenant, and OPTIONALLY duplicate a source site into it. With newSite and NO sourceUrl: genesis only — the tenant is provisioned and registered, no run is created, and the result is {projectId, mcpEndpoint, humanChecklist}. With a sourceUrl it also duplicates that site into a landing tenant with the capture_conductor workflow (crawl → map → theme → emit never-released drafts → score → report). With targetProjectId: verifies the existing project is reachable and capture-authorized (registry capturePolicy — the deny-all default refuses). With newSite: runs genesis first: create-site scaffold via the platform seam; Netlify site, build hook and deterministic env under NETLIFY_API_TOKEN; project.create with the tenant MCP endpoint derived from the site; and the Platform-site → Client Manager credential minted internally, persisted only as a digest/policy, installed as secret/function-only Netlify env, verified, and discarded without a human ever handling its value. Remaining account-authority steps are surfaced in the human checklist, never silently skipped. On the duplicating path it starts the run AND kicks the long-run plane in the same call, returning {runId, statusTool, humanChecklist}. Publish/release stay unreachable from every capture node; no secret VALUE ever transits this tool.",
-      "inputSchemaHash": "1a9624a3b24b190b"
+      "inputSchemaHash": "a65b7d4e140e1c48"
     },
     {
       "name": "site_duplicate_status",

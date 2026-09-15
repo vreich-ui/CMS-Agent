@@ -130,6 +130,8 @@ export async function resolveCaptureAuthority(targetProjectId: string, deps: Cap
   const config = await projectsOf(deps).get(trimmed);
   if (!config) throw new CaptureRefusal("unknown_project", `Unknown projectId: ${trimmed}. Register the target via project.create (with an explicit capturePolicy) before any capture step.`);
   if (config.status === "disabled") throw new CaptureRefusal("project_disabled", `Project ${trimmed} is disabled; no capture step may run against it.`);
+  // A2.2: an unfinished mint is not a capture target.
+  if (config.status === "provisioning") throw new CaptureRefusal("project_provisioning", `Project ${trimmed} is still provisioning (its genesis has not completed); finish the mint before any capture step runs against it.`);
   const declared = resolveProjectCapturePolicy(config);
   let policy: ValidatedCapturePolicy;
   try {

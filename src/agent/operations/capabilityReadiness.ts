@@ -42,7 +42,7 @@ export type TenantCapabilityFacts = {
   // project makes every capability unavailable with reason "unavailable" — configured, but the
   // tenant is currently switched off — rather than "not_configured", because re-enabling it (not
   // reconfiguring anything) is what would close the gap.
-  projectStatus: "active" | "disabled";
+  projectStatus: "active" | "disabled" | "provisioning";
   // Whether the project record carries an `objectDialect` (ProjectObjectDialect, projectTypes.ts) —
   // i.e. whether this tenant's object substrate has an addressable home for governed objects at all.
   // Required by any capability that reads or writes a governed object (visual_identity_read/propose).
@@ -153,6 +153,8 @@ function deriveOne(capabilityId: string, requirement: CapabilityRequirement, fac
   if (requirement.kind === "unsupported") {
     return { available: false, reason: "not_supported", evidence: { capability: capabilityId, note: requirement.note } };
   }
+  // A2.2: both non-active states make capabilities unavailable, but for different reasons — the
+  // `reason` below stays "unavailable" either way, and the evidence names which state it is.
   if (facts.projectStatus !== "active") {
     return {
       available: false,
