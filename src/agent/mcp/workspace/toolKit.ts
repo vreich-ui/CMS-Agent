@@ -52,6 +52,12 @@ const codedError = (error: unknown): { code: string; message: string } & Record<
     operatorAction?: unknown;
     missing?: unknown;
     waysOut?: unknown;
+    step?: unknown;
+    key?: unknown;
+    netlifyStatus?: unknown;
+    netlifyMessage?: unknown;
+    remedy?: unknown;
+    resumable?: unknown;
   };
   const strings = (value: unknown): string[] | null =>
     Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : null;
@@ -66,7 +72,17 @@ const codedError = (error: unknown): { code: string; message: string } & Record<
     // three above are — this module stays uncoupled from the layers that raise them. Today the only
     // raiser is SiteGenesisRefusal("genesis_artifact_required").
     ...(strings(extra.missing) ? { missing: strings(extra.missing) } : {}),
-    ...(strings(extra.waysOut) ? { waysOut: strings(extra.waysOut) } : {})
+    ...(strings(extra.waysOut) ? { waysOut: strings(extra.waysOut) } : {}),
+    // A2.4 (2026-09-15): the genesis refusal fields. `netlify_api_failed: … HTTP 422` told an
+    // operator nothing — not which key, not why, not whether re-running was safe. Lifted here for
+    // the same reason and by the same duck-typing as the five above: the throw site knows all of
+    // this, and a blockage that stops at the throw site is not actionable.
+    ...(typeof extra.step === "string" ? { step: extra.step } : {}),
+    ...(typeof extra.key === "string" ? { key: extra.key } : {}),
+    ...(typeof extra.netlifyStatus === "number" ? { netlifyStatus: extra.netlifyStatus } : {}),
+    ...(typeof extra.netlifyMessage === "string" ? { netlifyMessage: extra.netlifyMessage } : {}),
+    ...(typeof extra.remedy === "string" ? { remedy: extra.remedy } : {}),
+    ...(typeof extra.resumable === "boolean" ? { resumable: extra.resumable } : {})
   };
 };
 

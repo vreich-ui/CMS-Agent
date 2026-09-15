@@ -104,8 +104,14 @@ describe("T21.8 — tracking provisioning is part of genesis", () => {
       expect(sets.get(key), `${key} was not provisioned`).toBeDefined();
       expect(sets.get(key)!.scopes, `${key} must be readable at build time`).toContain("builds");
       expect(sets.get(key)!.scopes).toContain("functions");
-      expect(sets.get(key)!.scopes).toEqual([...NETLIFY_DEFAULT_ENV_SCOPES]);
     }
+    // The non-secret keeps the full default set.
+    expect(sets.get("TRACKING_PROJECT_ID")!.scopes).toEqual([...NETLIFY_DEFAULT_ENV_SCOPES]);
+    // A2.1 (2026-09-15): the SECRET one gets the default set MINUS post_processing, which Netlify
+    // forbids on a secret value and answered 422 for on the live genesis-lab-3 mint. `builds` — the
+    // scope T21.8 exists to protect — is untouched, which is the whole point of dropping one member
+    // rather than falling back to functions-only.
+    expect(sets.get(NETLIFY_AUTH_TOKEN_ENV)!.scopes).toEqual(["builds", "functions", "runtime"]);
   });
 
   // C-11. The sink pair is an ACCOUNT-level variable every site in the team already reads. A

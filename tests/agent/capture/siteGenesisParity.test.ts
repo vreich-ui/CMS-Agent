@@ -137,15 +137,22 @@ describe("re-running genesis against an established tenant", () => {
     const netlifyFetch = vi.fn(async (url: string) => {
       throw new Error(`dry-run genesis must never call the Netlify API: ${url}`);
     });
-    await expect(
-      runSiteGenesis(
-        { name: "acme", netlifySiteName: "acme-site", sourceUrl: SOURCE_URL } as never,
-        { projectRepository: repository, env: baseEnv(), netlifyFetch: netlifyFetch as never } as never
-      )
-    ).rejects.toThrow(/already registered/i);
+    // A2.2 (2026-09-15): this used to REFUSE `project_exists`. That refusal was the whole problem —
+    // a mint interrupted part-way could never be finished, because its own half-written record made
+    // the re-run fail before it could repair anything. A re-run now ADOPTS and completes.
+    const result = await runSiteGenesis(
+      { name: "acme", netlifySiteName: "acme-site", sourceUrl: SOURCE_URL } as never,
+      { projectRepository: repository, env: baseEnv(), netlifyFetch: netlifyFetch as never } as never
+    );
+    expect(result.blockages).toEqual([]);
+    expect(result.resumable).toBe(true);
 
-    // The pre-existing custody is untouched — the refusal must not cost the tenant its bearer.
+    // The pre-existing custody is untouched — a re-run must never cost the tenant its bearer.
     expect((await repository.get("acme"))!.tokenSecretRef).toBe("projects/cms-agent-503015/secrets/acme-mcp-token/versions/latest");
+    const custody = step(result.ledger, "tenant_mcp_token_custody")!;
+    expect(custody.data?.rotated).toBe(false);
+    // An adopted tenant that was already "active" is never demoted to "provisioning".
+    expect((await repository.get("acme"))!.status).toBe("active");
   });
 
   it("supplies ADMIN_EMAILS and the ingest hosts as birth DEFAULTS, never overwriting curated values", async () => {

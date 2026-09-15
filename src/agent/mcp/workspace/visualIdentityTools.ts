@@ -290,6 +290,8 @@ export function createVisualIdentityTools({ workspaceRepository, executionReposi
         // caller, and gives the same named codes agent.resolve uses so platform can tell them apart.
         const project = await projectRepository.get(data.project_id);
         if (!project) throw new WorkspaceToolError("unknown_project", `No registered project matches "${data.project_id}".`, { projectId: data.project_id });
+        // A2.2: distinguish an unfinished mint from a switched-off tenant.
+        if (project.status === "provisioning") throw new WorkspaceToolError("project_provisioning", `Project "${data.project_id}" is still provisioning: its genesis did not complete. Re-run site.duplicate to finish the mint.`, { projectId: data.project_id });
         if (project.status !== "active") throw new WorkspaceToolError("project_disabled", `Project "${data.project_id}" is disabled.`, { projectId: data.project_id });
 
         // The writer's own schema states it as an anyOf; refusing here names WHICH precondition

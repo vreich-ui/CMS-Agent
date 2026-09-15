@@ -5,6 +5,7 @@ import { GENESIS_DEFAULT_OBJECT_TYPE, GENESIS_REQUEST_ID_PATTERN } from "../../.
 import { genesisTenantProfile } from "../../../src/agent/projects/genesisTenantProfile.js";
 import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 import { platformScaffoldObjectIds } from "../../../src/agent/projects/platformScaffoldIds.js";
+import { genesisNetlifySiteName } from "../../../src/agent/projects/genesisSiteName.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 import type { ProjectRepository } from "../../../src/agent/repository/interfaces/ProjectRepository.js";
 
@@ -16,7 +17,9 @@ const mintedTenant = (overrides: Partial<ProjectConnectionConfig> = {}): Project
   const ids = platformScaffoldObjectIds("genesis-lab-3");
   return {
     projectId: "genesis-lab-3",
-    clientSiteBinding: { netlifySiteName: "genesis-lab-3", netlifySiteId: "site-123" },
+    // A2.3: the fleet convention is `kugel-<slug>` — the live mint named this site `genesis-lab-3`
+    // and that IS the divergence the check now reports (see the site-name table below).
+    clientSiteBinding: { netlifySiteName: "kugel-genesis-lab-3", netlifySiteId: "site-123", netlifySiteNameSource: "derived" as const },
     name: "genesis-lab-3",
     mcpEndpointEnvVar: "GENESIS_LAB_3_MCP_ENDPOINT",
     mcpEndpoint: "https://genesis-lab-3.netlify.app/mcp",
@@ -219,5 +222,47 @@ describe("G2 — genesis:reconcile repairs a tenant born before the birth path w
     expect(deferredFields).toContain("publishingPolicy.publishEnabled");
     expect(deferredFields).toContain("clientSiteBinding.netlifySiteName");
     expect(deferredFields).toContain("tokenSecretRef");
+  });
+});
+
+// A2.3 (2026-09-15) — THE SITE-NAME CONVENTION, as a table.
+//
+// `genesis-lab-2` is `kugel-genesis-lab-2`; the live mint of `genesis-lab-3` produced `genesis-lab-3`.
+// Both genesis paths defaulted to the bare slug and the prefix lived in an operator's habit, so the
+// first unattended mint broke the convention with nothing to catch it.
+describe("A2.3 — one Netlify site-name derivation, and a parity check that flags divergence", () => {
+  it("derives kugel-<slug>, idempotently on the prefix", () => {
+    const table: Array<[string, string]> = [
+      ["genesis-lab-3", "kugel-genesis-lab-3"],
+      ["seniorpets", "kugel-seniorpets"],
+      ["fernwell", "kugel-fernwell"],
+      // Idempotent: a re-run feeds whatever is already on the record back through here.
+      ["kugel-platform", "kugel-platform"],
+      ["kugel-genesis-lab-2", "kugel-genesis-lab-2"]
+    ];
+    for (const [slug, expected] of table) expect(genesisNetlifySiteName(slug)).toBe(expected);
+  });
+
+  it("flags a minted tenant whose site name is off-convention", () => {
+    const divergences = genesisParityDivergences(
+      mintedTenant({ clientSiteBinding: { netlifySiteName: "genesis-lab-3", netlifySiteId: "site-123", netlifySiteNameSource: "derived" } }),
+      options
+    );
+    expect(divergences.map((divergence) => divergence.field)).toEqual(["clientSiteBinding.netlifySiteName"]);
+    expect(divergences[0]).toMatchObject({ expected: "kugel-genesis-lab-3", actual: "genesis-lab-3", reconcilable: false });
+  });
+
+  it("stays silent for a recorded override, and for tenants that predate the convention", () => {
+    // An operator who signed off on an off-convention name is not nagged about it forever.
+    expect(
+      genesisParityDivergences(mintedTenant({ clientSiteBinding: { netlifySiteName: "genesis-lab-3", netlifySiteId: "site-123", netlifySiteNameSource: "override" } }), options)
+        .map((divergence) => divergence.field)
+    ).toEqual([]);
+    // No source recorded at all (every record written before this field existed) is not an override,
+    // but it is also not a claim — so a name that already matches the convention is clean.
+    expect(
+      genesisParityDivergences(mintedTenant({ clientSiteBinding: { netlifySiteName: "kugel-genesis-lab-3", netlifySiteId: "site-123" } }), options)
+        .map((divergence) => divergence.field)
+    ).toEqual([]);
   });
 });

@@ -163,6 +163,8 @@ export class ProjectMcpAdapter {
 
   private async requireConnection(): Promise<ResolvedConnection | { error: string }> {
     if (this.config.status === "disabled") return { error: "Project connection is disabled." };
+    // A2.2: NOT refused — project.test_connection against a provisioning tenant is exactly how an
+    // operator learns whether the mint's remaining steps landed. The status is reported, not enforced.
     const resolved = await resolveProjectConnectionWithSecrets(this.config, this.env, this.secrets);
     if (!resolved.endpoint) return { error: `Project MCP endpoint is not configured: neither the ${this.config.mcpEndpointEnvVar} env var on this deployment nor an mcpEndpoint on the project record resolves one (set either — project.update {mcpEndpoint} needs no deploy change).` };
     // A record that NAMES a secret but cannot produce one is a misconfiguration, and saying so here

@@ -161,7 +161,9 @@ export async function reconcileSiteClientManagerCredentials(input: { apply: bool
       await verifyCmsAgentScopedCredential(publicEndpoint, minted.token, deps.credentialFetch);
       await netlify.rebuildAndWaitForPublishedDeploy(site.siteId);
       if (project.clientSiteBinding?.netlifySiteName !== siteName || project.clientSiteBinding?.netlifySiteId !== site.siteId) {
-        await deps.projectRepository.save({ ...project, clientSiteBinding: { netlifySiteName: siteName, netlifySiteId: site.siteId } });
+        // A2.3: the name's PROVENANCE is preserved. Dropping it here would re-arm the parity check
+        // against a tenant whose off-convention name an operator already signed off on.
+        await deps.projectRepository.save({ ...project, clientSiteBinding: { netlifySiteName: siteName, netlifySiteId: site.siteId, ...(project.clientSiteBinding?.netlifySiteNameSource ? { netlifySiteNameSource: project.clientSiteBinding.netlifySiteNameSource } : {}) } });
       }
       await credentials.activateAndRetireOtherProjectCredentials(project.projectId, minted.digest);
       results.push({ projectId: project.projectId, netlifySiteName: siteName, status: "rotated" });

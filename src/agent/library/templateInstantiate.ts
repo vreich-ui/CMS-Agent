@@ -99,6 +99,11 @@ export async function instantiateLibraryTemplate(
   const config: ProjectConnectionConfig | undefined = await projectsOf(deps).get(targetProjectId);
   if (!config) return { ok: false, refusal: { code: "unknown_project", reason: `Unknown projectId: ${targetProjectId}.` } };
   if (config.status === "disabled") return { ok: false, refusal: { code: "project_disabled", reason: `Project ${targetProjectId} is disabled; no instantiation may run against it.` } };
+  // A2.2 (2026-09-15) — a tenant whose mint has not finished is not a target. Its record exists (so
+  // it is visible and resumable) and carries the fleet's autonomous publish posture, but its site may
+  // have no deploy, no PUBLISH_SECRET and no bearer. Distinct code: "disabled" would be a lie, and
+  // the fix is to finish the mint, not to flip a switch.
+  if (config.status === "provisioning") return { ok: false, refusal: { code: "project_provisioning", reason: `Project ${targetProjectId} is still provisioning (its genesis has not completed); finish the mint — re-run site.duplicate — before instantiating into it.` } };
 
   const adapter = deps.adapter ?? tenantAdapterFor(config, { caller: "engine", ...deps.tenantContext });
   const registeredTypes = await readRegisteredSectionTypes(adapter);
