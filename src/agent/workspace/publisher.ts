@@ -29,6 +29,7 @@ import type { ProjectConnectionConfig } from "../projects/projectTypes.js";
 import type { CallToolResult } from "../projects/projectMcpAdapter.js";
 import { getProjectHooks, type PublishExecutionOutcome, type PublishObjectOrigin, type PublishProducerContext, type PublishReadinessInput, type PublishReadinessResult } from "../projects/projectHooks.js";
 import { articleBodyFingerprint, describeOperatorDecisionSource, findArticleBodyEnvelope, findPublicationDecision, isOperatorPublishWithheld, readPublicationDecision, resolvePublishAuthority } from "./publishDecision.js";
+import { DEFAULTED_UPSTREAM_GATE_ID, suppliedOutputNodeIds } from "./defaultOutput.js";
 import { ClientToolRefusalError } from "../projects/clientToolResult.js";
 import { findLockToken } from "../projects/toolResultSearch.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -266,6 +267,21 @@ export async function publishRun(input: PublishRunInput, deps: PublisherDeps = {
   // property of the RUN RECORD, so it is checked here, first, where nothing can rewrite it.
   if (run.executionMode === "mock") {
     return { published: false, mode: "error", gates, plan: null, steps: [], error: `mock_run_not_publishable: run ${input.runId} executed in mock mode, whose node outputs are placeholders and were never produced by a model or judged by the client. A publish test must run in "openai" mode against a seeded entrypoint (see docs/plan/PUBLISH-SMOKE.md); mock is a wiring check and is never publishable.` };
+  }
+
+  // node-default-output (2026-09-15) — "fixture content never publishes", made load-bearing on THIS
+  // path too. The executor's dispatch-time guardrail refuses the publishing tail of a run carrying a
+  // supplied output, but workflow.publish_run does not travel that path at all: it reads the run
+  // record directly. Without this check an operator could override a node's output on a live run
+  // (which the engine correctly refuses to publish) and then publish the very same run from here.
+  //
+  // Placed beside the mock refusal above, and for the identical reason: it is a property of the RUN
+  // RECORD, checked first, where no model-shaped output can rewrite it. Deliberately NOT one of
+  // PUBLISH_GATE_NAMES — that is a closed set of gates an operator can satisfy, and this is not
+  // satisfiable by any decision. The remedy is to produce the outputs for real.
+  const suppliedNodeIds = suppliedOutputNodeIds(run);
+  if (suppliedNodeIds.length) {
+    return { published: false, mode: "error", gates, plan: null, steps: [], error: `${DEFAULTED_UPSTREAM_GATE_ID}: run ${input.runId} carries ${suppliedNodeIds.length} node(s) whose output was SUPPLIED rather than produced (${suppliedNodeIds.join(", ")}). Content nobody produced never publishes. Retry those nodes for real (workflow.retry_node without useDefaultOutput), or start a fresh run in outputMode "live".` };
   }
 
   const emptyPlan: PublishPlan = { projectId, requestId: input.requestId, nodeCount: 0, publishedTime: input.publishedTime ?? null, toolSequence: [] };

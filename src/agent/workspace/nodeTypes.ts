@@ -28,6 +28,31 @@ export type WorkspaceNode = {
   metadata?: Record<string, unknown>;
   modelConfig?: Record<string, unknown>;
   executionConfig?: Record<string, unknown>;
+  // node-default-output (2026-09-15) — THE NODE'S STANDING OUTPUT, used in place of running it.
+  //
+  // STORE-OWNED, deliberately. It is not in executor.ts's CANONICAL_OWNED_FIELDS and must never join
+  // it: a default is an operator's fixture for one workspace, not a property of the composition, so it
+  // is authored through workspace.update_node_default_output, survives a re-seed, and is invisible to
+  // `npm run nodes:update` / the #348 drift gate for exactly the same reason prompt and outputSchema
+  // are. overlayStoreNode (executor.ts) carries it onto the dispatched node so a run can read it.
+  //
+  // `value` is the output itself, in the shape the node's own outputSchema declares. `schemaValidAt`
+  // is the timestamp the value last validated against that schema, or NULL when it was saved over a
+  // schema failure with `force: true` — the operator is the authority and a schema can be wrong, but
+  // the record says which of the two happened. Absent (undefined) never means "valid": it means the
+  // field predates this stamp.
+  defaultOutput?: NodeDefaultOutput;
+};
+
+export type NodeDefaultOutputAuthor = "human" | "agent" | "system";
+
+export type NodeDefaultOutput = {
+  value: unknown;
+  note?: string;
+  updatedAt: string;
+  updatedBy: NodeDefaultOutputAuthor;
+  /** ISO timestamp of the last successful validation against the node's outputSchema; null when saved with `force`. */
+  schemaValidAt?: string | null;
 };
 
 export type WorkspaceEvent = { id: string; type: string; nodeId?: string; actor?: string; summary?: string; workspaceVersion: number; beforeHash?: string; afterHash?: string; createdAt: string };

@@ -10,6 +10,7 @@ import { DriveCenter } from '../../components/drive/DriveCenter';
 import { useStore } from '../../store';
 import type { NodeTab } from '../../types';
 import { nodeStatusFromRun, runCurrentNodeCopy } from './helpers';
+import { DefaultOutputTab } from './tabs/DefaultOutputTab';
 import { DepsTab } from './tabs/DepsTab';
 import { HistoryTab } from './tabs/HistoryTab';
 import { LearningTab } from './tabs/LearningTab';
@@ -26,6 +27,7 @@ const TABDEFS: Array<[NodeTab, string]> = [
   ['tools', 'Tools'],
   ['skills', 'Skills'],
   ['schemas', 'Schemas'],
+  ['defaultoutput', 'Default output'],
   ['model', 'Model & limits'],
   ['deps', 'Dependencies'],
   ['history', 'History'],
@@ -164,6 +166,7 @@ export function Center() {
       {tab === 'tools' && <ToolsTab node={node} />}
       {tab === 'skills' && <SkillsTab node={node} nodeId={nodeId} />}
       {tab === 'schemas' && <SchemasTab nodeId={nodeId} />}
+      {tab === 'defaultoutput' && <DefaultOutputTab node={node} nodeId={nodeId} />}
       {tab === 'model' && <ModelTab node={node} />}
       {tab === 'deps' && <DepsTab node={node} />}
       {tab === 'history' && <HistoryTab nodeId={nodeId} />}

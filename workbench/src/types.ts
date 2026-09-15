@@ -28,6 +28,7 @@ export type NodeTab =
   | 'tools'
   | 'skills'
   | 'schemas'
+  | 'defaultoutput'
   | 'model'
   | 'deps'
   | 'history'
@@ -51,6 +52,35 @@ export interface Workflow {
   phases: Array<[string, string[]]>;
   planned?: boolean;
 }
+
+// node-default-output (W4) — a node's standing output: a value written into
+// a run as though the node produced it, with no model turn and no cost.
+// Mirrors src/agent/workspace/nodeTypes.ts's NodeDefaultOutput exactly (the
+// server owns the shape; this is a straight passthrough, never adapted).
+// `schemaValidAt` is the timestamp the value last validated against the
+// node's declared outputSchema, `null` when it was saved over a schema
+// failure with `force: true` (the operator is the authority, but the record
+// says which of the two happened), and simply ABSENT on a record that
+// predates the stamp — that absence must never be read as "valid".
+export type NodeDefaultOutputAuthor = 'human' | 'agent' | 'system';
+
+export interface NodeDefaultOutput {
+  value: unknown;
+  note?: string;
+  updatedAt: string;
+  updatedBy: NodeDefaultOutputAuthor;
+  schemaValidAt?: string | null;
+}
+
+/** A run's output mode — how much of the graph, if any, is allowed to run
+ * on standing defaults instead of a real model turn. `live` (the default)
+ * never substitutes anything; `defaults_where_set` substitutes only nodes
+ * that carry a default and runs everything else for real;
+ * `defaults_only` requires EVERY node to carry a default (a node without
+ * one refuses the run outright), proving a whole conductor's topology and
+ * contracts for $0. A run carrying any supplied output can never publish
+ * live — see defaultedNodeIds on Run below. */
+export type RunOutputMode = 'live' | 'defaults_where_set' | 'defaults_only';
 
 export interface ModelConfig {
   maxTurns: number;
@@ -80,6 +110,9 @@ export interface WorkflowNode {
   requiredInputs?: string[];
   status?: string;
   updatedAt?: string;
+  /** node-default-output (W4) — the node's standing default, when one is
+   * set. Absent means no default has ever been saved for this node. */
+  defaultOutput?: NodeDefaultOutput;
 }
 
 export interface ToolPolicyCounts {
@@ -121,6 +154,20 @@ export interface RunNode {
   durationMs?: number | null;
   warnings?: string[];
   produces?: string[];
+  /** node-default-output (W4) — present ONLY on a node whose recorded
+   * output in this run was SUPPLIED rather than produced: pushed through
+   * from the node's standing default, or pasted in as a one-run operator
+   * override. Absent for an ordinary produced output. A defaulted node
+   * also carries the `output_source:default_output` warning string above
+   * and completes with `durationMs: 0`. */
+  outputProvenance?: { source: 'default_output' | 'operator_override'; updatedAt: string; note?: string };
+  /** Adversarial-review fix (post-W4) — set true by a plain
+   * `workflow.retry_node` (no `useDefaultOutput`) on a
+   * `defaults_where_set`/`defaults_only` run: a durable "this node runs
+   * live on its next dispatch, don't re-apply its default" flag. No
+   * surface here reads it yet — reflected for data fidelity with the
+   * server contract, not for any current UI behavior. */
+  defaultOutputOverride?: boolean;
 }
 
 export interface Run {
@@ -150,6 +197,14 @@ export interface Run {
   // --- Additive (workbench-verb-fixes). requestId is the caller-supplied
   // id a run was started with — live-carried, no prior fixture equivalent.
   requestId?: string;
+  /** node-default-output (W4) — the output mode this run was started
+   * with. Absent reads the same as 'live' (every run before this feature
+   * behaved this way and still does). */
+  outputMode?: RunOutputMode;
+  /** node-default-output (W4) — every node id on this run whose output
+   * was supplied (defaulted or overridden) rather than produced. Drives
+   * the "this run can never publish live" gate at the publish tail. */
+  defaultedNodeIds?: string[];
 }
 
 export interface ToolDef {

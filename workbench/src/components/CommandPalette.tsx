@@ -17,8 +17,10 @@
 // tests/palette.spec.ts asserts three concrete cases.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNodes, useProjects, useRun, useRuns, useWorkflows } from '../api/hooks';
-import { changesList } from '../api/verbs';
+import { ActionCancelledError } from '../api/confirmAction';
+import { invalidateRunLists, useNodes, useProjects, useRun, useRuns, useWorkflows } from '../api/hooks';
+import { changesList, workflowRunNode } from '../api/verbs';
+import { isLiveRun, isPublishTailNode } from './drive/overrideStatus';
 import { performLogout } from './LoginGate';
 import { toast } from './Toasts';
 import { useQueryClient } from '@tanstack/react-query';
@@ -285,6 +287,26 @@ export function CommandPalette() {
     }
   }
 
+  // node-default-output (W4) — ⌘K's "push through <node> with default"
+  // shortcuts straight to workflow_run_node's useDefaultOutput path (the
+  // same verb & confirm text DriveCenter's own button uses — see
+  // verbs.ts's workflowRunNode) rather than routing through the drive-mode
+  // step panel, so the operator never has to switch modes just to clear one
+  // blocked/expensive node. Only ever offered when the bound run and the
+  // selected node both exist AND that node actually carries a default (see
+  // the entries useMemo below) — never a dead row that can only refuse.
+  async function pushThroughWithDefault(nodeId: string, targetRunId: string) {
+    try {
+      const run = await workflowRunNode({ runId: targetRunId, nodeId, useDefaultOutput: true });
+      invalidateRunLists(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['run', targetRunId] });
+      if (run) toast('Pushed through', `${nodeId} completed on its standing default — no model turn, no cost.`);
+    } catch (err) {
+      if (err instanceof ActionCancelledError) return;
+      toast('Push-through failed', err instanceof Error ? err.message : 'Something went wrong.');
+    }
+  }
+
   function navigateToWorkflow(workflowId: string) {
     const s = useStore.getState();
     const target = workflows.find((w) => w.id === workflowId);
@@ -328,6 +350,15 @@ export function CommandPalette() {
       out.push({ kind: 'screen', label: s.label, go: () => s.go(useStore.getState()) });
     }
     out.push({ kind: 'action', label: 'Start run…', go: () => useStore.getState().openStartModal() });
+    // node-default-output (W4) — seeds StartRunModal's output-mode control
+    // via store.ts's openStartModal(outputMode) rather than duplicating the
+    // start flow here; the modal still asks for workflow/project/brief
+    // exactly as any other start.
+    out.push({
+      kind: 'action',
+      label: 'start defaults-only run',
+      go: () => useStore.getState().openStartModal('defaults_only'),
+    });
     out.push({ kind: 'action', label: 'Toggle theme', go: () => useStore.getState().cycleTheme() });
     out.push({
       kind: 'action',
@@ -354,6 +385,21 @@ export function CommandPalette() {
           void compareLastTwoRevisions(node);
         },
       });
+      const currentNodeData = nodesQ.data?.find((n) => n.id === node);
+      // Adversarial-review fix (post-W4, server-contract follow-up) — never
+      // offer an action that's known in advance to be refused
+      // (defaulted_publish_node_refused: a live run can't supply the
+      // output of a node that writes to a live client).
+      const wouldBeRefused = isLiveRun(boundRun) && isPublishTailNode(currentNodeData);
+      if (runId && currentNodeData?.defaultOutput && !wouldBeRefused) {
+        out.push({
+          kind: 'action',
+          label: `push through ${node} with default`,
+          go: () => {
+            void pushThroughWithDefault(node, runId);
+          },
+        });
+      }
     }
     const latestFailed = [...(runsQ.data ?? [])]
       .filter((r) => r.status === 'failed')

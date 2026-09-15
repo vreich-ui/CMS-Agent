@@ -20,7 +20,7 @@ import { IS_READ_ONLY } from '../api/client';
 import { setNextConfirmTrigger } from './ConfirmDialog';
 import { nodeGetInputSchema, nodeValidateInput } from '../api/verbs';
 import { useStore } from '../store';
-import type { Project, Workflow } from '../types';
+import type { Project, RunOutputMode, Workflow } from '../types';
 import { toast } from './Toasts';
 import { Btn } from './primitives';
 
@@ -57,6 +57,7 @@ export function StartRunModal() {
   const [projId, setProjId] = useState<string>('');
   const [execMode, setExecMode] = useState<'mock' | 'openai'>('mock');
   const [dry, setDry] = useState(true);
+  const [outputMode, setOutputMode] = useState<RunOutputMode>('live');
   const [budget, setBudget] = useState('10');
   const [requestId, setRequestId] = useState(genRequestId);
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -80,6 +81,12 @@ export function StartRunModal() {
     setWfId(useStore.getState().wf);
     setExecMode('mock');
     setDry(true);
+    // node-default-output (W4) — ⌘K's "start defaults-only run" seeds this
+    // one field via the store (store.ts's openStartModal(outputMode));
+    // every other field resets to its own default exactly as before. A
+    // plain open (dock's "Start run…", no argument) already set the store
+    // field back to null, so this reads 'live' on every ordinary open.
+    setOutputMode(useStore.getState().startModalOutputMode ?? 'live');
     setBudget('10');
     setRequestId(genRequestId());
     setBrief(DEFAULT_BRIEF);
@@ -182,6 +189,7 @@ export function StartRunModal() {
         budgetUsd: budget.trim() ? Number(budget) : undefined,
         dry,
         executionMode: execMode,
+        outputMode,
         requestId,
       });
       if (run) {
@@ -280,6 +288,63 @@ export function StartRunModal() {
               <strong>{project?.name ?? 'the selected project'}</strong> — a theme write, a publish, or a draft
               emission, depending on where it stops. It stays a dry run until you choose live yourself; nothing
               defaults you here.
+            </p>
+          </div>
+        )}
+
+        {/* node-default-output (W4) — how much of the graph, if any, is
+            allowed to run on standing defaults instead of a real model
+            turn. Three short lines, one per mode, so the choice is never
+            made blind. */}
+        <div className="field">
+          <span className="lbl">output mode</span>
+          <div className="seg">
+            <button
+              type="button"
+              aria-pressed={outputMode === 'live'}
+              className={outputMode === 'live' ? 'on' : ''}
+              onClick={() => setOutputMode('live')}
+            >
+              live
+            </button>
+            <button
+              type="button"
+              aria-pressed={outputMode === 'defaults_where_set'}
+              className={outputMode === 'defaults_where_set' ? 'on' : ''}
+              onClick={() => setOutputMode('defaults_where_set')}
+            >
+              defaults where set
+            </button>
+            <button
+              type="button"
+              aria-pressed={outputMode === 'defaults_only'}
+              className={outputMode === 'defaults_only' ? 'on' : ''}
+              onClick={() => setOutputMode('defaults_only')}
+            >
+              defaults only
+            </button>
+          </div>
+          <p className="note" style={{ margin: '6px 0 0' }}>
+            <b>live</b> — every node runs for real, exactly as today.
+          </p>
+          <p className="note" style={{ margin: '2px 0 0' }}>
+            <b>defaults where set</b> — a node carrying a standing default is pushed through with it, no model turn;
+            every other node still runs live.
+          </p>
+          <p className="note" style={{ margin: '2px 0 0' }}>
+            <b>defaults only</b> — every node must carry a default or the run refuses at it; proves the whole
+            topology for $0.
+          </p>
+        </div>
+
+        {outputMode !== 'live' && (
+          <div className="card" style={{ borderColor: 'var(--paused)', marginBottom: 13 }}>
+            <span className="lbl" style={{ color: 'var(--paused)' }}>
+              this run can never publish live
+            </span>
+            <p style={{ margin: 0, fontSize: 12.5 }}>
+              Any node this run passes through on its default is supplied, not produced. Good for proving the
+              pipeline and its contracts at zero cost — not for a real client deliverable.
             </p>
           </div>
         )}

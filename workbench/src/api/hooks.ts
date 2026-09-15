@@ -351,6 +351,18 @@ export function useRetryNode() {
   });
 }
 
+/** node-default-output (W4) — the drive-mode "push through with default"
+ * control, and ⌘K's matching action, both call this directly rather than
+ * useRunNextNode: pushing through is always a SPECIFIC node (`nodeId`), not
+ * "whatever the run's own cursor says is next". */
+export function useRunNode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: verbs.workflowRunNode,
+    onSuccess: (_data, vars) => invalidateRun(qc, vars.runId),
+  });
+}
+
 export function useRunNextNode() {
   const qc = useQueryClient();
   return useMutation({

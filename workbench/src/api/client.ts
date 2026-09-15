@@ -190,6 +190,8 @@ export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   'workspace_update_node_input_schema',
   'workspace_update_node_output_schema',
   'workspace_update_node_metadata',
+  'workspace_update_node_default_output',
+  'workspace_adopt_output_as_default',
   'changes_restore',
   'stage_save_output',
   'skill_update',

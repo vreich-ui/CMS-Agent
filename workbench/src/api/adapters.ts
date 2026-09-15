@@ -27,6 +27,7 @@ import type {
   Dataset,
   FinetuneReadiness,
   ModelConfig,
+  NodeDefaultOutput,
   Observation,
   Project,
   Risk,
@@ -118,6 +119,11 @@ export interface RawWorkflowNode {
    *  instead, which client.ts's mock now serves straight from these). */
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
+  /** node-default-output (W4) — same shape as ../types.ts's NodeDefaultOutput;
+   *  passed through verbatim, never adapted (see WorkspaceNode.defaultOutput's
+   *  own doc comment in src/agent/workspace/nodeTypes.ts — this is a straight
+   *  mirror of that store-owned field). */
+  defaultOutput?: NodeDefaultOutput;
 }
 
 export function toModelConfig(raw: RawModelConfig): ModelConfig {
@@ -159,6 +165,7 @@ export function toNode(raw: RawWorkflowNode): WorkflowNode {
     requiredInputs: raw.requiredInputs,
     status: raw.status,
     updatedAt: raw.updatedAt,
+    defaultOutput: raw.defaultOutput,
   };
 }
 
@@ -173,6 +180,11 @@ export interface RawRunNode {
   durationMs?: number;
   warnings?: string[];
   produces?: string[];
+  /** node-default-output (W4) — see RunNode.outputProvenance in ../types.ts. */
+  outputProvenance?: { source: 'default_output' | 'operator_override'; updatedAt: string; note?: string };
+  /** Adversarial-review fix (post-W4) — see RunNode.defaultOutputOverride
+   *  in ../types.ts. */
+  defaultOutputOverride?: boolean;
   [key: string]: unknown;
 }
 
@@ -207,6 +219,9 @@ export interface RawRun {
   failedCount?: number;
   errorCount?: number;
   artifactCount?: number;
+  /** node-default-output (W4) — see Run.outputMode / Run.defaultedNodeIds in ../types.ts. */
+  outputMode?: string;
+  defaultedNodeIds?: string[];
 }
 
 /** Cost/budget come from a separate verb (`workflow_get_run_cost`) — the
@@ -273,8 +288,12 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
       durationMs: typeof n.durationMs === 'number' ? n.durationMs : null,
       warnings: Array.isArray(n.warnings) ? n.warnings : undefined,
       produces: Array.isArray(n.produces) ? n.produces : undefined,
+      outputProvenance: n.outputProvenance,
+      defaultOutputOverride: n.defaultOutputOverride,
     })),
     requestId: raw.requestId,
+    outputMode: raw.outputMode as Run['outputMode'],
+    defaultedNodeIds: raw.defaultedNodeIds,
   };
 }
 

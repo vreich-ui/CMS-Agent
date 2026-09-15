@@ -1,0 +1,50 @@
+{
+  "verb": "stage_save_output",
+  "capturedAt": "2026-09-15T10:32:26Z",
+  "capturedAgainst": "Cloud Run CMS_Agent MCP workspace (live), from the operator's own MCP client",
+  "why": "W0 of node-default-output: establish, live rather than by reading the source, whether the Workbench's OverrideOutputModal payload reaches the server at all. It does not. The published input schema for this tool was { id?, stage, value } with additionalProperties:false, so the modal's { runId, nodeId, value, note } is rejected before the handler ever runs — and even the workspace form it WOULD have had to use writes to the workspace's own stageOutputs collection, which no workflow run reads (a run reads run.stageOutputs; the only consumer of the workspace collection is nodeRuntime.ts's standalone node_execute path). The override modal was fixture-only.",
+  "calls": [
+    {
+      "args": { "stage": "research", "value": { "probe": "w0-live-truth" } },
+      "ok": true,
+      "form": "workspace",
+      "sample": {
+        "ok": true,
+        "data": {
+          "output": {
+            "id": "stage_1789468346805_qif1u3",
+            "stage": "research",
+            "value": { "probe": "w0-live-truth" },
+            "createdAt": "2026-09-15T10:32:26.805Z"
+          },
+          "workspaceVersion": 1250
+        }
+      },
+      "notes": "The pre-W3 server accepted this and only this. Note what it returns: a row in the WORKSPACE stageOutputs collection with its own generated id. No runId, no nodeId, no node state change — nothing that a workflow run would ever read."
+    },
+    {
+      "args": { "runId": "run_probe_w0", "nodeId": "research", "value": { "probe": "w0-modal-payload" }, "note": "W0 live-truth probe" },
+      "ok": false,
+      "form": "run_scoped",
+      "error": "validation_error: input did not match the tool schema.",
+      "errorSource": "the tool's own published inputSchema, enforced before dispatch",
+      "serverSchemaAtCapture": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "value"],
+        "properties": { "id": { "minLength": 1, "type": "string" }, "stage": { "minLength": 1, "type": "string" }, "value": {} }
+      },
+      "notes": "EXACTLY the payload workbench/src/api/verbs.ts's stageSaveOutput sends (see OverrideOutputModal.tsx). Three unrecognised keys (runId, nodeId, note) and a missing required one (stage). Rejected client-side against the published schema, so the failure never even reached src/agent/mcp/workspace/tools.ts — which is why nothing about it appeared in any server log, and why the modal looked like it was doing something."
+    }
+  ],
+  "expectedAfterW3": {
+    "verb": "stage_save_output",
+    "forms": ["workspace", "run_scoped"],
+    "rule": "exactly one form per call: `stage`, or BOTH `runId` and `nodeId`",
+    "run_scoped": {
+      "args": { "runId": "<runId>", "nodeId": "<nodeId>", "value": "<the operator's value>", "note": "<optional>" },
+      "writes": "run.stageOutputs[nodeId] on that run; node completed, durationMs 0, outputProvenance { source: \"operator_override\", updatedAt, note? }, node warning output_source:operator_override, nodeId appended to run.defaultedNodeIds",
+      "consequence": "the run is refused at its publishing tail with gate.publishing.defaulted_upstream unless it is a mock run — content nobody produced never publishes. workflow.retry_node WITHOUT useDefaultOutput undoes the override and makes the run publishable again."
+    }
+  }
+}
