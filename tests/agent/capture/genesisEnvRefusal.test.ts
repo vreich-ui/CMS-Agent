@@ -151,3 +151,70 @@ describe("A2.2 — the build hook is adopted, never duplicated", () => {
     expect((await client.createBuildHook("site_1", "site.duplicate genesis (genesis-lab-3)")).hookId).toBe("hook_new");
   });
 });
+
+// A2.6 (2026-09-15) — WHAT THE LIVE RATE LIMIT TAUGHT.
+//
+// Three genesis runs inside four minutes rate-limited the account's env API, and ONE 429 produced
+// THIRTEEN blockages on a tenant whose environment was completely intact. Two causes, both here:
+//   1. `request()` retries 429/5xx with backoff; the three read-before-write PROBES called fetchImpl
+//      directly and had no retry at all — the call shape genesis makes most often was the one shape
+//      that could not survive a wobble.
+//   2. Both callers of the site probe used `.catch(() => false)`, reading "could not ask" as "not
+//      set" — and then took a repair path that ROTATES a live tenant's Client Manager bearer.
+describe("A2.6 — the existence probe retries, and an unanswered probe is not a 'no'", () => {
+  const retryingClient = (statuses: number[]) => {
+    const seen: number[] = [];
+    let call = 0;
+    const fetchImpl = vi.fn(async (_url: string, init?: Record<string, unknown>) => {
+      if ((init?.method ?? "GET") !== "GET") return jsonResponse(201, {});
+      const status = statuses[Math.min(call, statuses.length - 1)]!;
+      call += 1;
+      seen.push(status);
+      return jsonResponse(status, {});
+    });
+    // No real sleeping: the backoff is injected.
+    return { client: new NetlifyGenesisClient("live", "tok", fetchImpl as never, async () => {}), seen, calls: () => call };
+  };
+
+  it("retries a 429 on the site-scoped probe and answers once Netlify does", async () => {
+    const { client, calls } = retryingClient([429, 429, 200]);
+    await expect(client.siteEnvVarExists("acct_1", "site_1", "MCP_HTTP_AUTH_TOKEN")).resolves.toBe(true);
+    expect(calls()).toBe(3);
+  });
+
+  it("retries a 429 on the ACCOUNT probe too", async () => {
+    const { client, calls } = retryingClient([429, 200]);
+    await expect(client.accountEnvVarExists("acct_1", "TRACKING_SINK_URL")).resolves.toBe(true);
+    expect(calls()).toBe(2);
+  });
+
+  it("does NOT retry a 404 — that is an answer, not a failure", async () => {
+    const { client, calls } = retryingClient([404]);
+    await expect(client.siteEnvVarExists("acct_1", "site_1", "PUBLISH_SECRET")).resolves.toBe(false);
+    expect(calls()).toBe(1);
+  });
+
+  it("refuses rather than guessing when every attempt is rate-limited", async () => {
+    const { client, calls } = retryingClient([429]);
+    await expect(client.siteEnvVarExists("acct_1", "site_1", "MCP_HTTP_AUTH_TOKEN")).rejects.toThrow(/429/);
+    expect(calls()).toBe(3);
+  });
+
+  it("setEnvVar's own read-before-write retries too, then writes", async () => {
+    const calls: Call[] = [];
+    let gets = 0;
+    const fetchImpl = vi.fn(async (url: string, init?: Record<string, unknown>) => {
+      calls.push({ url, init });
+      if ((init?.method ?? "GET") === "GET") {
+        gets += 1;
+        return gets < 3 ? jsonResponse(429, {}) : jsonResponse(404, {});
+      }
+      return jsonResponse(201, {});
+    });
+    const client = new NetlifyGenesisClient("live", "tok", fetchImpl as never, async () => {});
+    await client.setEnvVar("acct_1", "site_1", "TRACKING_PROJECT_ID", "genesis-lab-3");
+    expect(gets).toBe(3);
+    // A 404 after the retries means CREATE: the collection POST, not the per-key PUT.
+    expect(calls.filter((call) => call.init?.method === "POST")).toHaveLength(1);
+  });
+});
