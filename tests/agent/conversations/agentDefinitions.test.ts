@@ -70,7 +70,7 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
@@ -78,7 +78,7 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
     // Every earlier canonical text (rev 1 through rev 6) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(7);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(8);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
@@ -90,14 +90,20 @@ describe("canonical client_manager workspace definition", () => {
   // takes. That is what produced the content_item node-schema failure, and behind that failure the
   // raw verb path could create AND publish an article carrying none of the judge/score substrate.
   // These assertions are the regression wall for both. A deletion here is a live defect.
-  it("rev 4 carries read-before-you-write and the single article production path", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+  // CMP (2026-09-15): rev 9 RENAMED this section to "Verify, don't discover" and changed WHEN the
+  // read happens — never WHETHER the write is checked. The wall therefore moves to the new heading
+  // and keeps every substantive assertion: do not guess a governed shape, dry-run before the write,
+  // the contract is authoritative, and work on the bound object. If a future edit can delete one of
+  // these lines and still pass, the wall is gone — the heading is the only thing allowed to change.
+  it("rev 4 carries read-before-you-write (rev 9: 'Verify, don't discover') and the single article production path", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
 
     // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
-    expect(CLIENT_MANAGER_PROMPT).toContain("## Read before you write");
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Verify, don't discover");
     expect(CLIENT_MANAGER_PROMPT).toMatch(/never guess the shape of a governed object/i);
     expect(CLIENT_MANAGER_PROMPT).toMatch(/object_contract/);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/dry-run a candidate body or patch before proposing the write/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/the contract is authoritative/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/before a write, dry-run it/i);
     // The object-binding half of the same dropped block.
     expect(CLIENT_MANAGER_PROMPT).toMatch(/work on THAT object unless the editor explicitly asks about another/i);
 
@@ -126,7 +132,7 @@ describe("canonical client_manager workspace definition", () => {
   // regression wall on the HISTORY (any tenant still on that exact text upgrades cleanly), not on
   // what ships today. Whether this feature returns to the live prompt is a separate editorial call.
   it("rev 5 routed a one-off look through a named standard, never through words in the brief (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## A one-off look for a set of articles");
@@ -159,7 +165,7 @@ describe("canonical client_manager workspace definition", () => {
   // W5 (2026-09-13): same situation as rev 5 above — this section lives only in the rev-6
   // historical text now (index 5), not in the live CLIENT_MANAGER_PROMPT.
   it("rev 6 forbade assembling an object id and made an empty list an answer, not a dead end (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## Object ids you were not given");
@@ -191,7 +197,7 @@ describe("canonical client_manager workspace definition", () => {
   // SUPERSEDED_CLIENT_MANAGER_PROMPTS[6] — this test moved with it rather than being deleted, the
   // same pattern the rev 5/rev 6 historical tests above already follow.
   it("rev 7 landed the live-store operator edit verbatim, byte for byte (historical, superseded by rev 8)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
     const rev7Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[6];
     const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
     expect(sha256(rev7Text)).toBe("fa143f797dbc827e5519cbdccb011212cea4123ebb1897eefb2bc7873a73ef77");
@@ -221,50 +227,110 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).not.toBe(rev7Text);
   });
 
-  // ASV2-W4-CA (2026-09-14, docs/cms-architecture/chat-controls-protocol.md §6-§7 in the platform
-  // repo) — rev 8 mirrors the chat-controls protocol v2 into Client Manager: prefer a `controls`
-  // block over typed-out prose for a finite choice, offer an `ui_capabilities.actions` entry as an
-  // `actions` button instead of describing it, never name a verb outside that turn's
-  // `ui_capabilities.actions`, one block per message, and treat a `[controls:…]` reply as the
-  // editor's settled decision rather than re-asking. This is the ONLY change from rev 7 — nothing
-  // else in the prompt moved (see the header comment above CLIENT_MANAGER_PROMPT).
-  it("rev 8 teaches the chat-controls protocol v2 (ui_capabilities, controls blocks, offered-verb rule)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(8);
+  // ASV2-W4-CA (2026-09-14) — rev 8 mirrored the chat-controls protocol v2 into Client Manager.
+  // CMP (2026-09-15) superseded it with rev 9's house briefing, so — following the same pattern the
+  // rev 5/6/7 historical tests above already use — this test moved to the superseded text rather
+  // than being deleted. The sha256 below is unchanged from when rev 8 was live, which is the proof
+  // that landing rev 9 carried rev 8's bytes across untouched.
+  it("rev 8 taught the chat-controls protocol v2 (historical, superseded by rev 9)", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    const rev8Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[7];
     const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-    expect(sha256(CLIENT_MANAGER_PROMPT)).toBe("c3109cb6c011787fea898c3795f24a1235b8791a723a8752d1bf570c51609027");
-    expect(CLIENT_MANAGER_PROMPT.length).toBe(10586);
+    expect(sha256(rev8Text)).toBe("c3109cb6c011787fea898c3795f24a1235b8791a723a8752d1bf570c51609027");
+    expect(rev8Text.length).toBe(10586);
 
-    expect(CLIENT_MANAGER_PROMPT).toContain("## Choices and actions render as controls, not prose");
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/emit one `controls` block instead of typing the options into prose/i);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/at most one block per message/i);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/context\.ui_capabilities/);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/ui_capabilities\.controls/);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/ui_capabilities\.actions/);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/never name a verb that is not present in that turn's `ui_capabilities\.actions`/i);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/\[controls:<id>\]/);
-    expect(CLIENT_MANAGER_PROMPT).toMatch(/is the editor's own settled decision, already recorded/i);
+    expect(rev8Text).toContain("## Choices and actions render as controls, not prose");
+    expect(rev8Text).toMatch(/emit one `controls` block instead of typing the options into prose/i);
+    expect(rev8Text).toMatch(/never name a verb that is not present in that turn's `ui_capabilities\.actions`/i);
 
-    // Every section rev 7 carried is still present — this was an insertion, not a rewrite.
+    // The two sections rev 9 replaced were still present at rev 8.
+    expect(rev8Text).toContain("## Operations come before plans");
+    expect(rev8Text).toContain("## Read before you write");
+
+    expect(rev8Text).not.toMatch(/dr-lurie|fernwell|platform|zilberman/i);
+    expect(classifyConversationalAgentPrompt(rev8Text)).toBe("superseded");
+    expect(CLIENT_MANAGER_PROMPT).not.toBe(rev8Text);
+  });
+
+  // CMP (client-manager-pro, 2026-09-15) — rev 9. Rev 8 told this agent to DISCOVER the house on
+  // every turn: list the operations, get the descriptor, read the object, read its contract. Every
+  // one of those reads answers a question whose answer was already knowable before the turn started,
+  // and each one is a round trip an editor waits through before the first useful sentence. Rev 9
+  // hands the agent the house instead (src/agent/conversations/briefing/) and rewrites the five
+  // sections that were only true while discovery was the mechanism.
+  //
+  // The two rules that must NOT loosen, and are asserted below: preflight is still the gate for
+  // INPUT (the menu replaces catalog discovery, never preflight), and a write is still checked
+  // before it lands (the dry-run replaces the re-read, never the check).
+  it("rev 9 replaces discovery with a house briefing, and keeps preflight and the dry-run as the gates", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+
+    // W3.1 — the menu IS the catalog.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## You already know the house");
+    expect(CLIENT_MANAGER_PROMPT).not.toContain("## Operations come before plans");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/the menu in the briefing IS the catalog/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never invent an operation it does not list/i);
+    // …and preflight is NOT removed: it is still the gate, and still the three-way answer.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/preflight is the gate, not the way you learn/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("**Executable.**");
+    expect(CLIENT_MANAGER_PROMPT).toContain("**Blocked on input.**");
+    expect(CLIENT_MANAGER_PROMPT).toContain("**Not supported yet.**");
+
+    // W3.2 — verify, don't discover. The dry-run survives; the per-turn re-read does not.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Verify, don't discover");
+    expect(CLIENT_MANAGER_PROMPT).not.toContain("## Read before you write");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never guess the shape of a governed object/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/before a write, dry-run it/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/re-read only for cause/i);
+
+    // W3.3/W3.4/W3.5 — the three new sections.
+    expect(CLIENT_MANAGER_PROMPT).toContain("## House operating manual");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/these are defaults, not options/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Question budget");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/one question per conversation/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never ask "shall I proceed"/i);
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Push through when allowed");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/is a BLOCKAGE, not a question/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/do not re-submit a call a human already declined/i);
+
+    // W3.5b — the origin block answers "what does the editor want", so the agent stops asking.
+    expect(CLIENT_MANAGER_PROMPT).toContain('see "What this chat is about"');
+
+    // TWO RULES REV 8 CARRIED THAT REV 9 NEARLY LOST — restored after adversarial review, and walled
+    // off here because both failures were silent. Dropping the first would let the agent hand-build
+    // what an operation exists to do; dropping the second would leave the model believing the
+    // briefing's digest is the whole contract, when the digest deliberately omits the body schema.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/not things for you to assemble by hand/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/it deliberately does NOT carry the body schema/);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/the only place the full schema lives/i);
+
+    // The single clarifying-question rule lives in ONE place. Two rules about the same thing is how a
+    // model picks the looser one, so rev 8's "How to answer" sentence had to go when Question budget
+    // arrived — and this is the assertion that keeps it gone.
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/Ask at most one clarifying question/i);
+
+    // W3.6 — everything that was to be kept verbatim is still here.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Say who you are once");
-    expect(CLIENT_MANAGER_PROMPT).toContain("## Operations come before plans");
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Editor-facing language");
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Lifecycle vocabulary");
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Choices and actions render as controls, not prose");
+    expect(CLIENT_MANAGER_PROMPT).toContain("## Candidates in learning mode");
     expect(CLIENT_MANAGER_PROMPT).toContain("## One production path for articles");
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/saving is not applying, and applying is not releasing/i);
 
     // Still project-neutral.
     expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform|zilberman/i);
 
-    // classifyConversationalAgentPrompt / pendingCanonicalPromptUpgrades still behave: the live
-    // store's prompt (now == CLIENT_MANAGER_PROMPT) classifies canonical, and every prior canonical
-    // text — including rev 7, now superseded rather than current — is upgradeable.
+    // The upgrade path still works for every canonical text this agent has ever shipped.
     expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(8);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) {
       expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
       expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: superseded }])).toEqual([
         { id: "agt_client_manager", prompt: CLIENT_MANAGER_PROMPT }
       ]);
     }
-    // An operator's own further edit — anything not matching a known canonical/superseded text —
-    // is never touched by the upgrade path.
     expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: "An operator wrote this." }])).toEqual([]);
   });
 
@@ -272,9 +338,9 @@ describe("canonical client_manager workspace definition", () => {
   // literal above — ensureConversationalAgentSeeds only ever increments the LIVE stored rev by one,
   // off whatever it currently holds, and only when that stored prompt still exactly matches a known
   // superseded text (never a diverged, operator-edited one). A store on rev 7's exact text moves to
-  // rev 8's *text* but its own stored rev becomes (its rev)+1, which may not equal the literal 8
-  // above if that workspace's live rev had already drifted from the freshly-seeded baseline.
-  it("upgrades a workspace still on the rev 7 text to the rev 8 text, incrementing whatever rev it already held", async () => {
+  // the CURRENT canonical *text* but its own stored rev becomes (its rev)+1, which may not equal the
+  // literal above if that workspace's live rev had already drifted from the freshly-seeded baseline.
+  it("upgrades a workspace still on the rev 7 text to the current canonical text, incrementing whatever rev it already held", async () => {
     const rev7Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[6];
     const stale = { ...createCanonicalClientManagerAgent(), prompt: rev7Text, rev: 41 };
     const store = new WorkspaceStateStore({ ...createDefaultWorkspaceDocument(), conversationalAgents: [stale] });
