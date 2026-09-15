@@ -54,6 +54,7 @@ import { buildObjectPublishPlan, executeObjectPublish, type ObjectPublishPlan } 
 // into this stage's own output.
 import { TemplateLibraryStore } from "../library/templateLibraryStore.js";
 import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
+import type { TenantCallContext } from "../tools/tenantInvoke.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
 // T15.34 (#210; ADR-2026-08-25-structure-studio §7) — the pdf-template branch's own deterministic
@@ -105,7 +106,11 @@ import {
   type ImageTemplateRevisionBrief,
   type ImageRevisionItemLedgerEntry
 } from "../capture/imageTemplateRevisionEngine.js";
-import { resolveImageTemplateRevisionProviders } from "./imageTemplateRevisionProviders.js";
+import { hasImageTemplateRevisionProviderOverride, resolveImageTemplateRevisionProviders } from "./imageTemplateRevisionProviders.js";
+// Milestone A remainder (3a) — the production assembly of the three seams A9 left injectable. See
+// that module's header for what each seam is backed by and for the two platform gaps it names
+// rather than guesses at.
+import { buildImageTemplateRevisionProviders } from "../capture/imageTemplateRevisionPlatformProviders.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 
 export const CLONE_STAGES = [
@@ -142,6 +147,19 @@ export const readCloneStage = (node: Pick<WorkspaceNode, "metadata">): CloneStag
 export type CloneStageOutcome = { kind: "completed"; output: Record<string, unknown> } | { kind: "refused"; code: string; message: string };
 
 const refused = (code: string, message: string): CloneStageOutcome => ({ kind: "refused", code, message });
+
+// Milestone A remainder (3a) — ONE place decides where image_template_revision's seams come from.
+// A test that installed doubles through setImageTemplateRevisionProviders keeps winning, unchanged
+// (hasImageTemplateRevisionProviderOverride); every other run gets real, per-run providers bound to
+// this tenant, its site object id and this run's own tenantContext.
+const imageRevisionProvidersFor = (scope: { targetProjectId: string; tenantContext?: TenantCallContext; siteId?: string }) =>
+  hasImageTemplateRevisionProviderOverride()
+    ? resolveImageTemplateRevisionProviders()
+    : buildImageTemplateRevisionProviders({
+        targetProjectId: scope.targetProjectId,
+        ...(scope.siteId ? { siteId: scope.siteId } : {}),
+        deps: { ...(scope.tenantContext ? { tenantContext: scope.tenantContext } : {}) }
+      });
 
 // T15.30 (#206; ADR-2026-08-25-structure-studio §3) — "one node graph, two entry adapters." A run's
 // facts now carry EITHER a captureRunId (clone-driven, unchanged since T13.1) OR a structureBrief
@@ -502,14 +520,24 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
             "The run's initialInput carries no imageTemplateRevisionBrief; image_revision_intake needs one to resolve a source asset or fetch any target template. A binding that dispatches this workflow without constructing an imageTemplateRevisionBrief cannot run it — see operationWorkflowBindings.ts's image_template_revision entry."
           );
         }
-        const providers = resolveImageTemplateRevisionProviders();
+        // The asset catalogue is the only seam intake needs, and it is NOT site-scoped
+        // (search_artifacts / get_artifact_metadata are artifact-plane verbs), so no site id is
+        // resolved here — see imageRevisionProvidersFor below.
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext });
         const envelope = await imageRevisionIntakeStep({ initialInput: run.initialInput }, { assetCatalog: providers.assetCatalog });
         return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       case "image_revision_compile_preview": {
         const intake = envelopeOf(run, "image_revision_intake", IMAGE_REVISION_ARTIFACTS.intake);
         if (isOutcome(intake)) return intake;
-        const providers = resolveImageTemplateRevisionProviders();
+        // Milestone A remainder (3a) — preview renders through pdf-tool, which is site-scoped by the
+        // tenant's own site object id (pdfToolSiteScope.ts), exactly as apply below already was.
+        // Refused by name here rather than sent as a tenantId platform would reject with
+        // artifact_site_mismatch.
+        const { config: previewConfig } = await resolveCloneAuthority(targetProjectId);
+        const previewScope = resolvePdfToolSiteId(previewConfig);
+        if (!previewScope.ok) return refused(previewScope.code, previewScope.reason);
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext, siteId: previewScope.siteId });
         const priorRaw = stageOutput(run, "image_revision_compile_preview");
         const priorItems =
           priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.compilePreview && Array.isArray(priorRaw.items)
@@ -540,7 +568,7 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         }
         const initial = isRecord(run.initialInput) ? run.initialInput : {};
         const brief = isRecord(initial.imageTemplateRevisionBrief) ? (initial.imageTemplateRevisionBrief as ImageTemplateRevisionBrief) : undefined;
-        const providers = resolveImageTemplateRevisionProviders();
+        const providers = imageRevisionProvidersFor({ targetProjectId, tenantContext, siteId: applyScope.siteId });
         const priorRaw = stageOutput(run, "image_revision_apply");
         const priorItems =
           priorRaw && priorRaw.artifact === IMAGE_REVISION_ARTIFACTS.apply && Array.isArray(priorRaw.items)
