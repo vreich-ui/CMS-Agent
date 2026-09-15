@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNodes, useRubrics, useRun, useRuns, useWorkflows } from '../../api/hooks';
-import { changesListEvents, nodeListOutputs } from '../../api/verbs';
+import { changesListEvents } from '../../api/verbs';
 import { suppliedOutputMarker } from '../../components/drive/overrideStatus';
 import { Dot } from '../../components/primitives';
 import { Skeleton } from '../../components/Skeleton';
@@ -69,7 +69,6 @@ function RailRow({
   selected,
   current,
   wf,
-  runId,
   evalScore,
   errorFreq,
   learned,
@@ -84,42 +83,40 @@ function RailRow({
   selected: boolean;
   current: boolean;
   wf: string;
-  runId: string | null;
   evalScore: number | null | undefined;
   errorFreq: number;
   learned: boolean;
-  /** Adversarial-review fix (post-W4) — this node's supplied-output
-   * provenance in the bound run, straight from the run record
-   * (overrideStatus.ts's suppliedOutputMarker): 'default_output' (pushed
-   * through from its standing default), 'operator_override' (a pasted
-   * operator value), or null when the run carries no provenance for this
-   * node — in which case the legacy node_list_outputs query below is the
-   * only signal available (an older run, recorded before outputProvenance
-   * existed). */
+  /** This node's supplied-output provenance in the bound run, straight from the
+   * run record (overrideStatus.ts's suppliedOutputMarker): 'default_output'
+   * (pushed through from its standing default), 'operator_override' (a pasted
+   * operator value), or null — which means this node produced its own output,
+   * the normal case, and is NOT a reason to go asking the server anything. */
   provenance: 'default_output' | 'operator_override' | null;
   onSelect: (id: string) => void;
   rowRef: (el: HTMLButtonElement | null) => void;
 }) {
   const ql = useNodeQuickLook(nid, wf);
 
-  // Legacy override marker — node_list_outputs' 'operator_override'-typed
-  // entry. The live server no longer produces one (see overrideStatus.ts's
-  // header comment on suppliedOutputMarker); this query only still runs,
-  // and only still matters, for a run whose record carries no
-  // `outputProvenance` for this node at all — never queried once `provenance`
-  // above already has an answer. Silent on any failure: a missing signal
-  // here must read as "no marker", never as an error banner on the whole rail.
-  const needsLegacyCheck = provenance === null;
-  const overrideQ = useQuery({
-    queryKey: ['nodeOutputs', nid, runId],
-    queryFn: () => nodeListOutputs({ nodeId: nid, runId: runId ?? undefined }),
-    enabled: needsLegacyCheck && Boolean(runId) && st === 'completed',
-    staleTime: 30_000,
-    retry: false,
-  });
-  const overrideList = Array.isArray(overrideQ.data) ? overrideQ.data : (overrideQ.data?.outputs ?? []);
-  const legacyOverride = needsLegacyCheck && overrideQ.isSuccess && overrideList.some((e) => (e as { type?: string })?.type === 'operator_override');
-  const hasOverride = provenance === 'operator_override' || legacyOverride;
+  // THE PER-NODE QUERY IS GONE, and it is gone rather than narrowed.
+  //
+  // It asked node_list_outputs, once per row, whether this node carried an entry typed
+  // 'operator_override'. Two things were wrong with that, and the first one alone is fatal:
+  //
+  //   1. THE LIVE SERVER NEVER PRODUCES THAT TYPE. `node_list_outputs` returns the run's artifacts
+  //      typed by the node's own `produces[0]` (verified live 2026-09-15 against
+  //      run_1789486803011_iz521v: type "document_render.execute.v1"). Only the fixture mock
+  //      synthesized an 'operator_override' row — which is exactly why this survived review twice.
+  //      The query could only ever answer "no", for every run, old or new.
+  //   2. ITS GUARD NEVER CLOSED. `needsLegacyCheck = provenance === null` reads "the record says
+  //      nothing about this node" as "the record is too old to know" — but absence is the NORMAL
+  //      case: a node that produced its own output carries no outputProvenance at all. So even after
+  //      the field reached the compact run view, the guard stayed true for essentially every node and
+  //      the query fired for every completed one, on every paint. 25 requests on a publishing run,
+  //      each one guaranteed to return nothing useful.
+  //
+  // The run record is now the only source, which is what it was always meant to be: a node whose
+  // output was supplied carries `outputProvenance`, and a node without one supplied nothing.
+  const hasOverride = provenance === 'operator_override';
   const defaulted = provenance === 'default_output';
 
   return (
@@ -417,7 +414,6 @@ export function Rail() {
                       selected={node === nid}
                       current={run?.cur === nid}
                       wf={wf}
-                      runId={runId}
                       evalScore={scoreByNode.get(nid)}
                       errorFreq={wfRunsQ.data ? nodeErrorFrequency(wfRunsQ.data, nid) : 0}
                       learned={learned}
