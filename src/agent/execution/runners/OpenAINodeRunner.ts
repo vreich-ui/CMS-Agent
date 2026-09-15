@@ -11,6 +11,7 @@ import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
 import { resolveNodeInstructions } from "../nodeInstructions.js";
+import { selectedSkillsFor } from "../../skills/runSkillSelection.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult, NodeToolCallRecord } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { NodeBudgetExceededError, prospectiveOutputTokens, wrapModelWithBudgetGuard, type BudgetGuardState } from "./budgetGuard.js";
@@ -314,7 +315,12 @@ export class OpenAINodeRunner implements NodeRunner {
     const c = cfg(node);
     const provider = resolveProvider(c);
     if (!process.env[provider.apiKeyEnv]) return { ok: false, code: "invalid_node_configuration", message: `${provider.apiKeyEnv} is required for ${provider.label} execution.` };
-    const resolvedInstructions = await resolveNodeInstructions(node);
+    // C2 — resolve against the skills THIS RUN pinned for this node at its dispatch claim, not
+    // against the node's live assignment. A `skill.assign` that landed while this run was in flight
+    // therefore cannot change what this node runs with, and two runs wanting different skills for
+    // the same node no longer race one global list. Undefined (a node.execute outside a run, or a
+    // record from before the pin existed) falls back to the live assignment exactly as before.
+    const resolvedInstructions = await resolveNodeInstructions(node, undefined, selectedSkillsFor(context.run, node.id));
     if (resolvedInstructions.errors.length) return { ok: false, code: "invalid_node_configuration", message: resolvedInstructions.errors.join("; ") };
     // F2b (T-2, run_1785352838155_l544ye): the run's OWN budgetUsd ceiling was only ever evaluated
     // BETWEEN nodes (advanceRun's budget gate, before dispatch) — nothing inside a node's own turn

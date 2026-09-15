@@ -39,6 +39,7 @@ import { bearerEnvClientSiteBindingAdvisory, createProject, deleteProject, proje
 import { ProjectMcpAdapter, READ_TOOL_ALLOWLIST } from "../../projects/projectMcpAdapter.js";
 import { normalizeSkillInput, skillDefinitionSchema, validateSkillDefinition } from "../../skills/skillValidator.js";
 import { resolveSkillsForNode } from "../../skills/skillResolver.js";
+import { selectedSkillsFor } from "../../skills/runSkillSelection.js";
 import { skillStatuses, type SkillDefinition } from "../../skills/skillTypes.js";
 import { listTools as listControlledTools, getTool as getControlledTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { resolveNodeForExecution } from "../../workspace/nodeResolution.js";
@@ -992,7 +993,33 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       if (!run || !node) return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId), engine, capability, resolvedAgainst: "node_declaration" });
       return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, dispatchToolContext({ run, node })), engine, capability, resolvedAgainst: "run_dispatch" });
     } }),
-    tool({ name: "node.get_effective_skills", description: "Resolve effective skill policy for one node.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { await skillRepository.ensureSkillSeeds(); const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); if (!node) throw new Error("Unknown node"); return ok({ policy: await resolveSkillsForNode(node, skillRepository) }); } }),
+    // C2 — WITH a runId this answers "what did that run dispatch this node with"; WITHOUT one it
+    // answers "what would this node dispatch with if it ran now". Those are different questions and
+    // used to share one answer: every caller got the live assignment, and a finished run's inspection
+    // presented it as the run's own. `source` says which question was answered, so no surface can
+    // render a current preview as an execution record by accident (W2's requirement that a preview be
+    // visibly different from a historical snapshot, and that unavailable evidence be labelled).
+    tool({ name: "node.get_effective_skills", description: "Resolve effective skill policy for one node. Pass runId to get the selection that run PINNED for this node at its dispatch (source: run_selection, with the versions it dispatched at and a warning per skill edited since). Without runId — or for a node that run never dispatched — the live assignment is resolved instead and reported as source: current_preview, which is what the node WOULD use now, not what any run used.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => {
+      const data = nodeToolInput.parse(input);
+      await skillRepository.ensureSkillSeeds();
+      const node = await workspaceRepository.getNode(data.nodeId);
+      if (!node) throw new Error("Unknown node");
+      const run = data.runId ? await getRun(data.runId, executionRepository) : undefined;
+      const selection = run ? selectedSkillsFor(run, data.nodeId) : undefined;
+      if (selection) {
+        return ok({
+          policy: await resolveSkillsForNode(node, skillRepository, { pinnedSkillIds: selection.skillIds, pinnedVersions: selection.versions }),
+          source: "run_selection", runId: data.runId, selectedAt: selection.selectedAt, pinnedVersions: selection.versions
+        });
+      }
+      return ok({
+        policy: await resolveSkillsForNode(node, skillRepository),
+        source: "current_preview",
+        // Naming WHY there is no pinned answer beats returning the preview silently: "that run never
+        // dispatched this node" and "you did not ask about a run" send a reader to different places.
+        ...(data.runId ? { runId: data.runId, previewReason: run ? "this run has no pinned skill selection for this node — it never dispatched it, or it predates run-pinned selection" : `unknown run: ${data.runId}` } : {})
+      });
+    } }),
     tool({ name: "node.get_input_schema", description: "Get one node input schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.inputSchema ?? null }); } }),
     tool({ name: "node.get_output_schema", description: "Get one node output schema.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { const node = await workspaceRepository.getNode(nodeToolInput.parse(input).nodeId); return ok({ schema: node?.outputSchema ?? null }); } }),
     tool({ name: "node.validate_input", description: "Validate input against a node input schema.", zodSchema: nodeValidateInput, inputSchema: nodeValidateJsonSchema, execute: async (input) => { const data = nodeValidateInput.parse(input); const node = await workspaceRepository.getNode(data.nodeId); if (!node) throw new Error(`Unknown node: ${data.nodeId}`); return ok({ validation: validateAgainstNodeSchema(data.value, node.inputSchema) }); } }),
