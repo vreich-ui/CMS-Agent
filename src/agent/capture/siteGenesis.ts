@@ -401,8 +401,15 @@ export type SiteGenesisResult = {
   objectDialect: ProjectObjectDialect;
   // A2.2 — every step that refused, with its key and its remedy. Empty on a clean mint.
   blockages: GenesisBlockage[];
-  // The record's status after this mint: "active" when nothing blocked, otherwise "provisioning".
+  // The record's status after this mint. NOT the same question as `mintComplete`: a tenant that was
+  // already "active" is never demoted by a later run, because a transient API wobble must not change
+  // a live tenant's posture. So read `status` for "what does the registry say" and `mintComplete` for
+  // "did THIS run finish".
   status: ProjectStatus;
+  // A2.6 — did this run complete every step it attempted? `false` whenever `blockages` is non-empty,
+  // stated as its own field so a caller does not have to infer it from an array's length, and so
+  // `status: "active"` beside a blockage is two true statements rather than a contradiction.
+  mintComplete: boolean;
   // Always true: every step in this driver reads before it writes, so the identical call adopts what
   // exists and completes the rest. Stated on the result so a caller does not have to know that.
   resumable: boolean;
@@ -709,6 +716,32 @@ export class NetlifyGenesisClient {
 
   private record(step: string, detail: string, data?: Record<string, unknown>): void {
     this.actions.push({ step, kind: this.mode === "dry_run" ? "dry_run" : "executed", detail, at: now(), ...(data ? { data } : {}) });
+  }
+
+  /**
+   * A2.6 (2026-09-15) — THE EXISTENCE PROBE, WITH THE SAME RETRY EVERY OTHER CALL GETS.
+   *
+   * THE LIVE FAILURE. Three genesis runs inside four minutes rate-limited this account's env API,
+   * and a single 429 turned into THIRTEEN blockages on one mint. Cause: `request()` retries 429 and
+   * 5xx with backoff, and the three read-before-write probes — setEnvVar's own pre-read,
+   * `accountEnvVarExists` and `siteEnvVarExists` — called `fetchImpl` DIRECTLY and so had no retry
+   * at all. The one call shape genesis makes most often was the one shape that could not survive a
+   * wobble.
+   *
+   * It stays separate from `request()` rather than folded into it because a 404 here is an ANSWER
+   * ("not set"), not a failure — `request()` would throw on it. So: same retry policy, different
+   * success set.
+   */
+  private async probe(url: string): Promise<{ ok: boolean; status: number }> {
+    let response!: Awaited<ReturnType<NetlifyFetch>>;
+    for (let attempt = 0; attempt < NETLIFY_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+      response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.token}` } });
+      if (response.ok || response.status === 404 || !isRetryableNetlifyStatus(response.status)) break;
+      const backoff = NETLIFY_REQUEST_BACKOFF_MS[attempt];
+      if (backoff === undefined) break;
+      await this.sleepImpl(backoff);
+    }
+    return { ok: response.ok, status: response.status };
   }
 
   private async request(
@@ -1050,7 +1083,7 @@ export class NetlifyGenesisClient {
       return true;
     }
     const url = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}`;
-    const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.token}` } });
+    const response = await this.probe(url);
     if (response.status === 404) {
       this.record("netlify_check_env", `Account-level env var ${key} is NOT set on this team.`, { key, present: false });
       return false;
@@ -1091,7 +1124,7 @@ export class NetlifyGenesisClient {
     const keyUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}?site_id=${encodeURIComponent(siteId)}`;
     const collectionUrl = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env?site_id=${encodeURIComponent(siteId)}`;
     const envContext: NetlifyEnvWriteContext = { step: "netlify_set_env", key, isSecret, scopes: effectiveScopes, contexts: valueContexts, valueEmpty: value.length === 0, secrets: [value] };
-    const existing = await this.fetchImpl(keyUrl, { headers: { Authorization: `Bearer ${this.token}` } });
+    const existing = await this.probe(keyUrl);
     if (!existing.ok && existing.status !== 404) {
       const remedy = netlifyEnvRemedy(existing.status, key, undefined, envContext);
       throw new SiteGenesisRefusal(
@@ -1129,7 +1162,7 @@ export class NetlifyGenesisClient {
   async siteEnvVarExists(accountId: string, siteId: string, key: string): Promise<boolean> {
     if (this.mode === "dry_run") return false;
     const url = `https://api.netlify.com/api/v1/accounts/${encodeURIComponent(accountId)}/env/${encodeURIComponent(key)}?site_id=${encodeURIComponent(siteId)}`;
-    const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.token}` } });
+    const response = await this.probe(url);
     if (response.status === 404) return false;
     if (!response.ok) {
       throw new SiteGenesisRefusal(
@@ -2066,6 +2099,26 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     }
   };
 
+  /**
+   * A2.6 — "IS THIS KEY ON THE SITE?" HAS THREE ANSWERS, AND THE THIRD ONE IS NOT "NO".
+   *
+   * Both callers below used `.catch(() => false)`, which reads a rate limit or an outage as "the key
+   * is absent" — and each then takes a repair path with a real cost: re-minting the Client Manager
+   * bearer ROTATES a credential the live site is currently serving, and the tenant-bearer branch
+   * re-pushes a secret that was already there. On the live 429 both branches fired against a tenant
+   * whose env was completely intact.
+   *
+   * So an unanswerable probe returns "unknown", and every caller treats unknown as "change nothing,
+   * and say so" — the conservative direction in both cases.
+   */
+  const probeSiteEnvVar = async (envAccount: string, key: string): Promise<boolean | "unknown"> => {
+    try {
+      return await netlify.siteEnvVarExists(envAccount, siteId!, key);
+    } catch {
+      return "unknown";
+    }
+  };
+
   let project = (await ensureGenesisProjectRecord(deps.projectRepository, {
     slug,
     name: slug,
@@ -2357,10 +2410,27 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     // AND a CMS_AGENT_MCP_TOKEN actually present on the site. One without the other is exactly the
     // half-finished state a re-run exists to repair, so then it DOES mint.
     const activeCredential = await credentials.findActiveCredentialForProject?.(slug);
-    const tokenOnSite = activeCredential
-      ? await netlify.siteEnvVarExists(envAccount, siteId, "CMS_AGENT_MCP_TOKEN").catch(() => false)
-      : false;
-    if (activeCredential && tokenOnSite) {
+    const tokenOnSite = activeCredential ? await probeSiteEnvVar(envAccount, "CMS_AGENT_MCP_TOKEN") : false;
+    if (activeCredential && tokenOnSite === "unknown") {
+      // A2.6 — the most consequential "unknown" in this file. Minting here would retire the digest
+      // the live site is serving and install a replacement it only picks up on its next deploy, so a
+      // transient API wobble would break a working tenant. Change nothing; name it.
+      blockages.push({
+        step: "cms_agent_client_manager_credential",
+        key: "CMS_AGENT_MCP_TOKEN",
+        code: "netlify_probe_unanswered",
+        detail: `This tenant has an ACTIVE managed Client Manager credential, but Netlify could not be asked whether CMS_AGENT_MCP_TOKEN is on the site.`,
+        remedy: `Genesis changed nothing and did NOT rotate — re-minting on an unanswered probe is how a working tenant gets broken. Re-run site.duplicate once the Netlify API answers; if the credential really is missing, the re-run installs it.`,
+        resumable: true
+      });
+      ledger.push({
+        step: "cms_agent_client_manager_credential",
+        kind: "requires_human",
+        detail: "An active managed Client Manager credential exists for this tenant, but the site could not be asked whether it carries CMS_AGENT_MCP_TOKEN. Genesis adopted the existing credential and rotated nothing: on an unanswered probe, rotating is the destructive choice.",
+        at: now(),
+        data: { projectId: slug, netlifySiteId: siteId, rotated: false, adopted: true, probe: "unanswered" }
+      });
+    } else if (activeCredential && tokenOnSite === true) {
       await attempt(
         "netlify_set_env",
         "Refreshing CMS_AGENT_MCP_ENDPOINT",
@@ -2521,8 +2591,27 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
   if (existingRecord?.tokenSecretRef && mode === "live") {
     tenantTokenSecretRef = existingRecord.tokenSecretRef;
     const envAccount = accountId ?? await netlify.getSiteAccountId(siteId);
-    const onSite = await netlify.siteEnvVarExists(envAccount, siteId, "MCP_HTTP_AUTH_TOKEN").catch(() => false);
-    if (onSite) {
+    const onSite = await probeSiteEnvVar(envAccount, "MCP_HTTP_AUTH_TOKEN");
+    if (onSite === "unknown") {
+      // A2.6 — unknown is not absent. The repair below re-reads the secret and re-pushes it; doing
+      // that against a site that already has it is wasted writes against the very API that just
+      // refused to answer, and it is what turned one 429 into a cascade of blockages.
+      blockages.push({
+        step: "tenant_mcp_token_custody",
+        key: "MCP_HTTP_AUTH_TOKEN",
+        code: "netlify_probe_unanswered",
+        detail: `This tenant's bearer is in custody at ${existingRecord.tokenSecretRef}, but Netlify could not be asked whether the site carries MCP_HTTP_AUTH_TOKEN.`,
+        remedy: `Genesis changed nothing and minted nothing. Re-run site.duplicate once the Netlify API answers: it will re-install the STORED value if the key is genuinely missing, and leave it alone if it is not.`,
+        resumable: true
+      });
+      ledger.push({
+        step: "tenant_mcp_token_custody",
+        kind: "requires_human",
+        detail: `Custody exists at ${existingRecord.tokenSecretRef}; whether the site carries MCP_HTTP_AUTH_TOKEN could not be determined, so genesis neither re-installed nor re-minted. Nothing was rotated.`,
+        at: now(),
+        data: { projectId: slug, secretId: tokenSecretId, tokenSecretRef: existingRecord.tokenSecretRef, rotated: false, probe: "unanswered" }
+      });
+    } else if (onSite === true) {
       tenantTokenInstalled = true;
       ledger.push({
         step: "tenant_mcp_token_custody",
@@ -2775,6 +2864,7 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     netlifySiteName,
     blockages,
     status: project.status,
+    mintComplete: blockages.length === 0,
     resumable: true,
     ...(siteId ? { netlifySiteId: siteId } : {}),
     envVarNames: { endpoint: `${envPrefix}_MCP_ENDPOINT`, token: `${envPrefix}_MCP_TOKEN` },

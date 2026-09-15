@@ -308,10 +308,11 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
               // `blockages` is a half-born tenant that says so, instead of a thrown 422 that named
               // nothing and left an orphan Netlify site (genesis-lab-3, 2026-09-15).
               status: genesis.status,
+              mintComplete: genesis.mintComplete,
               blockages: genesis.blockages,
               resumable: genesis.resumable,
               note: genesis.blockages.length > 0
-                ? `Genesis is INCOMPLETE: ${genesis.blockages.length} step(s) blocked and the record stays status "provisioning". Each blockage names its step, its env var and its remedy in \`blockages\` and on the human checklist. Re-running this identical site.duplicate call adopts the Netlify site, build hook, env vars, secrets and record that already exist and completes only what is missing — no resource is duplicated and no credential is rotated.`
+                ? `Genesis is INCOMPLETE: ${genesis.blockages.length} step(s) blocked, so mintComplete is false and the record reads status "${genesis.status}" (an already-active tenant is never demoted by a later run — a transient API wobble must not change a live tenant's posture). Each blockage names its step, its env var and its remedy in \`blockages\` and on the human checklist. Re-running this identical site.duplicate call adopts the Netlify site, build hook, env vars, secrets and record that already exist and completes only what is missing — no resource is duplicated and no credential is rotated.`
                 : "Genesis only: the tenant is registered and provisioned, and NO run was started (no sourceUrl was supplied). Its capturePolicy is deny-all — name an allowed origin with project.update before any later site.duplicate into it. To publish, start a run against this projectId with workflow.start_dry_run.",
               genesis: {
                 projectId: genesis.projectId,

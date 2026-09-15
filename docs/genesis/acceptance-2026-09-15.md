@@ -184,3 +184,72 @@ Known live-run hazards carried over from 2026-09-14, none of them A2's:
 Recommended order: redeploy → mint `genesis-lab-3` as the acceptance (it is a lab tenant; if anything
 is still wrong, it is wrong on the lab) → mint `seniorpets` → do the commit/promote work once, for
 `seniorpets`, and run G6 there.
+
+---
+
+## 6. A2.5 — RUN (2026-09-15, service sha `0d36350`)
+
+Three live mint-only calls against the deployed service. **The A2 mechanism passed every check**, and
+the third and fourth runs exposed two defects of their own, fixed on `fix/genesis-probe-retry` (§7).
+
+### Run 1 — 14:35:47Z → 14:36:10Z (23s). Clean.
+
+| check | result |
+|---|---|
+| 1 `blockages` | `[]` |
+| `status` | `active` |
+| site | **created** `kugel-genesis-lab-3` · `d20cbff6-94f2-4aa1-8b19-b6ddec325c4c` (A2.3 rename taken) |
+| orphan | `delete_orphan_netlify_site` first on the checklist, naming `genesis-lab-3`. Nothing deleted |
+| deploy binding | `executed` — `vreich-ui/platform#main`, base `sites/genesis-lab-3`, package dir and cmd cleared, **verified by re-read** |
+| build hook | created, `6aa957c67544c1e147bf5485` |
+| 4 env | **14 keys**, exactly the expected set |
+| 5 `NETLIFY_AUTH_TOKEN` scopes | `builds, functions, runtime` · `droppedScopes: ["post_processing"]` — **the A2.1 fix, live** |
+| bearer custody | `genesis-lab-3-mcp-token` v1 in `cms-agent-503015`; `tokenSecretRef` on the record |
+| Client Manager credential | minted, installed, **verified** against the public `/mcp`, superseded digests retired |
+| 2 `project_test_connection` | `endpointConfigured: true`, `tokenConfigured: true`, `endpointSource: "registry"`, `tokenSource: "secret"`. The call itself is HTTP 404 — the tenant has no deploy yet (§2), which is the expected state |
+| 3 `genesis:parity-check` | not runnable from the cloud session (needs the live GCS store). Verified field-by-field off the `register_project` ledger instead: dialect complete, `autonomyMode: "autonomous"`, `tracking.projectId`, binding with `netlifySiteNameSource: "derived"` |
+
+### Run 2 — 14:36:31Z → 14:36:47Z. Idempotency, against a real HTTP 429.
+
+The identical call. Netlify rate-limited the env API mid-run (three runs plus the acceptance env
+reads inside four minutes). Every A2.2 invariant held on an unstaged failure:
+
+- site **resolved existing** — no second site, no `POST /sites`
+- deploy binding `skipped: "already_bound"`, left untouched
+- build hook **adopted**, `adopted: true`, same hook id
+- all four object-store secrets `skipped: "already_set"` — no rotation
+- Client Manager credential `rotated: false, adopted: true`
+- tenant bearer: custody found, read back from Secret Manager and re-installed — `rotated: false, repaired: true`
+- the one refused write became **one blockage** naming `MCP_HTTP_AUTH_TOKEN`, its status and its remedy
+- record stayed `provisioning`; `deploy_side_mcp_env` flipped to *"it is in CUSTODY but NOT on the site"*
+
+### Run 3 — 14:38:43Z. The cascade that found the defects.
+
+With the limit still in force, 13 steps blocked — every one a read-before-write probe. No resource
+was duplicated, no credential rotated, nothing deleted, and all 13 were named with keys and remedies.
+But 13 blockages from one rate limit is not proportionate, and §7 is why.
+
+**Live state of the tenant now:** materially complete from run 1 — all 14 env vars, the binding, the
+hook, the secret and the credential are in place. Only the *record* reads `provisioning`, because runs
+2–3 could not verify. One clean re-run flips it to `active`.
+
+---
+
+## 7. What A2.5 found: two defects in A2's own machinery
+
+Both fixed on `fix/genesis-probe-retry`, both with tests.
+
+1. **The existence probes bypassed the retry path.** `request()` retries 429/5xx with backoff;
+   `setEnvVar`'s own pre-read, `accountEnvVarExists` and `siteEnvVarExists` called `fetchImpl`
+   directly and had none. The call shape genesis makes most often was the one shape that could not
+   survive a wobble. Now a shared `probe()` applies the same policy, with 404 as an answer rather
+   than a failure.
+2. **An unanswerable probe was read as "absent".** Both callers used `.catch(() => false)`, and each
+   then takes a repair path with a real cost — re-minting the Client Manager bearer **rotates** a
+   credential the live site is serving. On the 429 both fired against a tenant whose env was intact.
+   The probe is now tri-state; `"unknown"` changes nothing and records a
+   `netlify_probe_unanswered` blockage.
+
+Also added: `mintComplete` on the result. `status` answers "what does the registry say" and is never
+demoted for an already-active tenant; `mintComplete` answers "did THIS run finish". Reporting
+`status: "active"` beside a blockage is then two true statements instead of a contradiction.

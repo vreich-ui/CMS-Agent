@@ -42,7 +42,7 @@ const memoryProjectRepository = (): ProjectRepository => {
  * the same stub sees exactly what the first one left behind. That is the only way to test resumption
  * honestly — a stub that answers statelessly cannot tell adoption from duplication.
  */
-const netlifyApi = ({ refuseEnvKeys = new Set<string>(), buildHooksFail = false }: { refuseEnvKeys?: Set<string>; buildHooksFail?: boolean } = {}) => {
+const netlifyApi = ({ refuseEnvKeys = new Set<string>(), buildHooksFail = false, rateLimitKeys = new Set<string>() }: { refuseEnvKeys?: Set<string>; buildHooksFail?: boolean; rateLimitKeys?: Set<string> } = {}) => {
   const sites: Array<Record<string, unknown>> = [];
   const hooks: Array<Record<string, unknown>> = [];
   const siteEnv = new Map<string, unknown>();
@@ -74,6 +74,8 @@ const netlifyApi = ({ refuseEnvKeys = new Set<string>(), buildHooksFail = false 
       const [path, query] = url.split("?");
       const scopedToSite = (query ?? "").includes("site_id=");
       const keyed = /\/env\/([^?]+)$/.exec(path!);
+      // A2.6: a persistent 429 on ONE key's probe — the live failure shape.
+      if (keyed && rateLimitKeys.has(decodeURIComponent(keyed[1]!))) return json(429, { message: "rate limited" });
       if (keyed && method === "GET") {
         // No site id = the ACCOUNT collection. This team provides nothing account-wide in this test,
         // which is the honest shape: the inherited sink pair is a checklist item, not a blockage.
@@ -375,5 +377,63 @@ describe("A2.2 — the honest-status invariants the first pass got wrong", () =>
         } as never
       )
     ).rejects.toThrow(/credential_cleanup_failed/);
+  });
+});
+
+describe("A2.6 — an unanswerable probe changes nothing", () => {
+  it("does not rotate the Client Manager bearer when the site probe is rate-limited", async () => {
+    const repository = memoryProjectRepository();
+    const credentials = credentialRepository();
+
+    // Run 1: clean.
+    const healthy = netlifyApi();
+    await mint(repository, healthy, credentials);
+    expect(credentials.mintCount()).toBe(1);
+
+    // Run 2: the CMS_AGENT_MCP_TOKEN probe is 429 on every attempt. Reading that as "absent" would
+    // mint a replacement and retire the digest the live site is serving.
+    const limited = netlifyApi({ rateLimitKeys: new Set(["CMS_AGENT_MCP_TOKEN"]) });
+    limited.seedSite("kugel-genesis-lab-3");
+    const second = await mint(repository, limited, credentials);
+
+    expect(credentials.mintCount()).toBe(1);
+    expect(second.blockages.map((blockage) => [blockage.code, blockage.key])).toContainEqual([
+      "netlify_probe_unanswered",
+      "CMS_AGENT_MCP_TOKEN"
+    ]);
+    const credentialStep = second.ledger.find((action) => action.step === "cms_agent_client_manager_credential");
+    expect(credentialStep?.data).toMatchObject({ rotated: false, adopted: true, probe: "unanswered" });
+    // The RUN did not finish; the record keeps "active" because this tenant was already active and a
+    // transient wobble must not demote a live tenant. Two fields, two true statements.
+    expect(second.mintComplete).toBe(false);
+    expect(second.status).toBe("active");
+  });
+
+  it("does not re-push the tenant bearer when its probe is rate-limited", async () => {
+    const repository = memoryProjectRepository();
+    await repository.save({
+      projectId: "genesis-lab-3",
+      name: "genesis-lab-3",
+      clientSiteBinding: { netlifySiteName: "kugel-genesis-lab-3", netlifySiteId: "site_kugel-genesis-lab-3", netlifySiteNameSource: "derived" },
+      mcpEndpointEnvVar: "GENESIS_LAB_3_MCP_ENDPOINT",
+      authMode: "bearer_env",
+      tokenSecretRef: "projects/cms-agent-503015/secrets/genesis-lab-3-mcp-token/versions/latest",
+      allowedTools: [],
+      contentContract: { contentContract: "content_source.v1" },
+      publishingPolicy: { publishEnabled: true, requiresExplicitPublish: false, description: "", autonomyMode: "autonomous" },
+      status: "provisioning"
+    } as unknown as ProjectConnectionConfig);
+
+    const limited = netlifyApi({ rateLimitKeys: new Set(["MCP_HTTP_AUTH_TOKEN"]) });
+    limited.seedSite("kugel-genesis-lab-3");
+    const result = await mint(repository, limited, credentialRepository());
+
+    expect(result.blockages.map((blockage) => [blockage.code, blockage.key])).toContainEqual([
+      "netlify_probe_unanswered",
+      "MCP_HTTP_AUTH_TOKEN"
+    ]);
+    const custody = result.ledger.find((action) => action.step === "tenant_mcp_token_custody");
+    expect(custody?.data).toMatchObject({ rotated: false, probe: "unanswered" });
+    expect(result.status).toBe("provisioning");
   });
 });
