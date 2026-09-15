@@ -33,6 +33,7 @@ import type { WorkspaceNode } from "../workspace/nodeTypes.js";
 import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 import { listRunsPage, runNextNode, startDryRun } from "../workspace/executor.js";
 import { readCommissioning, type Commissioning } from "./commissioningTypes.js";
+import { getCommissionReservationStore, type CommissionReservation, type CommissionReservationStore } from "./commissioningReservations.js";
 import {
   COMMISSIONED_BY,
   MEASURED_RUN_COST_USD,
@@ -74,6 +75,12 @@ export type PlannerDeps = {
   proposeCandidates?: (context: ModelTurnContext) => Promise<CandidateBrief[]>;
   /** Test seam: replaces the tenant read path. */
   readTenant?: (projectId: string, tool: string, args: Record<string, unknown>) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  /**
+   * C7 — durable uniqueness. Resolved LAZILY at the point of use, never in `deps()`: the default
+   * store binds to the blob/GCS transport on construction, and a test that never commissions must
+   * not be made to stand up a store just by calling `planForProject`.
+   */
+  reservationStore?: CommissionReservationStore;
 };
 
 export type ModelTurnContext = {
@@ -86,7 +93,7 @@ export type ModelTurnContext = {
   wanted: number;
 };
 
-export type PlannerSkip = { projectId: string; planned: false; reason: "no_project_record" | "no_strategy" | "no_commissioning_block" | "commissioning_disabled" | "nothing_to_plan"; detail: string };
+export type PlannerSkip = { projectId: string; planned: false; reason: "no_project_record" | "no_strategy" | "no_commissioning_block" | "commissioning_disabled" | "nothing_to_plan" | "pass_in_flight" | "run_history_unreadable"; detail: string };
 export type PlannerPlanned = { projectId: string; planned: true; /** The tenant's own switch — planning is allowed while it is off; starting a run is not. */ enabled: boolean; plan: CommissionPlan; blockage?: ReturnType<typeof plannerHaltBlockage>; inputs: { inventoryCount: number; recentRunCount: number; candidateCount: number; seedCount: number; modelCandidateCount: number; pricedRunCostUsd: number; degraded: string[] } };
 export type PlannerResult = PlannerSkip | PlannerPlanned;
 
@@ -103,7 +110,8 @@ const deps = (overrides: PlannerDeps = {}) => ({
   learningRepository: overrides.learningRepository ?? repositoryManager.getLearningRepository(),
   now: overrides.now ?? (() => new Date()),
   proposeCandidates: overrides.proposeCandidates,
-  readTenant: overrides.readTenant
+  readTenant: overrides.readTenant,
+  reservationStore: overrides.reservationStore
 });
 
 // ── gathering ────────────────────────────────────────────────────────────────
@@ -520,51 +528,112 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
  */
 export const commissionForProject = async (
   projectId: string,
-  options: { planId?: string; max?: number } = {},
+  options: { planId?: string; max?: number; holder?: string } = {},
   overrides: PlannerDeps = {}
 ): Promise<CommissionResult> => {
   const d = deps(overrides);
-  const result = await planForProject(projectId, overrides);
-  if (!result.planned) return result;
-  if (!result.enabled) {
-    return { ...result, planned: false, reason: "commissioning_disabled", detail: `${projectId} has commissioning.enabled = false; planned ${result.plan.requests.length} request(s) and started none.`, commissioned: [] } as CommissionResult;
-  }
-  if (result.plan.halt) return { ...result, commissioned: [] };
-  // A stale planId is refused rather than ignored: an operator commissioning "the plan I just read"
-  // must not silently get a different one built from inventory that changed in between.
-  if (options.planId && options.planId !== result.plan.planId) {
-    return { ...result, commissioned: [], inputs: { ...result.inputs, degraded: [...result.inputs.degraded, `plan_id_stale: asked for ${options.planId}, current plan is ${result.plan.planId}`] } };
+  const reservations = d.reservationStore ?? getCommissionReservationStore();
+
+  // C7 — THE PASS LEASE, AND WHY IT IS TAKEN BEFORE THE PLAN.
+  //
+  // Per-request reservations (below) stop two callers minting the same request id twice. They do
+  // nothing about two overlapping passes that each read `runsAlreadyToday: 0`, each pick a
+  // DIFFERENT top topic, and each start a full day's allowance — plan.ts's caps are computed once,
+  // from a read that is already stale by the time the first run starts. One pass per project at a
+  // time is what makes `runsPerDay` mean runs per day rather than runs per invocation.
+  //
+  // Taken before `planForProject` on purpose: a caller that is going to lose should not also pay
+  // for the model turn of a plan it will never spend.
+  const lease = await reservations.acquirePass(projectId, options.holder ?? PLANNER_NODE_ID);
+  if (!lease.ok) {
+    return { projectId, planned: false, reason: "pass_in_flight", detail: lease.detail, commissioned: [] } as CommissionResult;
   }
 
-  const limit = options.max === undefined ? result.plan.requests.length : Math.max(0, Math.min(result.plan.requests.length, Math.floor(options.max)));
-  const commissioned: CommissionOutcome[] = [];
-  for (const request of result.plan.requests.slice(0, limit)) {
-    commissioned.push(await startCommissionedRun(projectId, request, d));
+  try {
+    const result = await planForProject(projectId, overrides);
+    if (!result.planned) return result;
+    if (!result.enabled) {
+      return { ...result, planned: false, reason: "commissioning_disabled", detail: `${projectId} has commissioning.enabled = false; planned ${result.plan.requests.length} request(s) and started none.`, commissioned: [] } as CommissionResult;
+    }
+    if (result.plan.halt) return { ...result, commissioned: [] };
+    // C7 — A DEGRADED PLAN IS A PREVIEW, NOT A BUDGET.
+    //
+    // `planForProject` carries on when the run history cannot be read, records `runs_unavailable:`
+    // and plans anyway. That is right for `planner.plan`, which is a preview and says so. It is
+    // wrong here: with no run history the caps compute `runsAlreadyToday: 0`, `spentTodayUsd: 0`,
+    // `openRuns: 0`, so the one call that cannot see what today already cost is the call that
+    // authorizes a whole fresh day of it. Refuse to SPEND on a plan that could not count.
+    const unreadableRuns = result.inputs.degraded.find((note) => note.startsWith("runs_unavailable:"));
+    if (unreadableRuns) {
+      return { ...result, planned: false, reason: "run_history_unreadable", detail: `${projectId}'s run history could not be read (${unreadableRuns}), so today's run count, spend and concurrency are all unknown; planned ${result.plan.requests.length} request(s) and started none.`, commissioned: [] } as CommissionResult;
+    }
+    // A stale planId is refused rather than ignored: an operator commissioning "the plan I just read"
+    // must not silently get a different one built from inventory that changed in between.
+    if (options.planId && options.planId !== result.plan.planId) {
+      return { ...result, commissioned: [], inputs: { ...result.inputs, degraded: [...result.inputs.degraded, `plan_id_stale: asked for ${options.planId}, current plan is ${result.plan.planId}`] } };
+    }
+
+    const limit = options.max === undefined ? result.plan.requests.length : Math.max(0, Math.min(result.plan.requests.length, Math.floor(options.max)));
+    const commissioned: CommissionOutcome[] = [];
+    for (const request of result.plan.requests.slice(0, limit)) {
+      commissioned.push(await startCommissionedRun(projectId, request, d, reservations));
+    }
+    return { ...result, commissioned };
+  } finally {
+    // Released whatever happened, including a throw out of planForProject: a lease that leaks would
+    // silence this tenant's commissioning until PASS_LEASE_STALE_MS expires.
+    await reservations.releasePass(projectId, lease.token);
   }
-  return { ...result, commissioned };
 };
 
-const startCommissionedRun = async (projectId: string, request: CommissionRequest, d: ReturnType<typeof deps>): Promise<CommissionOutcome> => {
+const startCommissionedRun = async (
+  projectId: string,
+  request: CommissionRequest,
+  d: ReturnType<typeof deps>,
+  reservations: CommissionReservationStore
+): Promise<CommissionOutcome> => {
   const base = { requestId: request.requestId, topic: request.contentSource.topic, rationale: request.rationale };
+  let reservation: CommissionReservation | undefined;
   try {
-    // LAST-MOMENT COLLISION CHECK. Nothing serializes commissioning: the 06:00 job and an operator's
-    // `planner.commission` can overlap, and both would read the same `runsAlreadyToday`, sort the
-    // same candidates the same deterministic way, and mint the SAME request id for the same top
-    // topic. `startDryRun` enforces no uniqueness, so that is two live runs on one id — double the
-    // spend, and only one of them ever gets a row in the tenant's inbox.
+    // 1 — EVIDENCE: today's runs for this project, read for real.
     //
-    // This does not make commissioning atomic; it closes the window from the whole plan down to the
-    // few milliseconds around this call, which is the difference between a collision on any
-    // overlapping invocation and a collision on a genuine race. Read immediately before starting,
-    // deliberately, rather than reusing the plan's own already-stale run list.
-    // Bounded to today: a minted id carries today's date, so a collision can only be with a run
-    // started today. There is no requestId filter on the store, and listing a project's whole
+    // This read used to end in `.catch(() => [])`, which made a store that could not be read
+    // indistinguishable from a store that answered "nothing has run today" — and on the one day the
+    // read fails, that answer is what clears the way for the duplicate the check exists to prevent.
+    // A read that did not happen is not evidence of absence, so a failure now REFUSES the start and
+    // says so, rather than proceeding on an empty list it invented.
+    //
+    // Bounded to today because a minted id carries today's date, so a collision can only be with a
+    // run started today. There is no requestId filter on the store, and listing a project's whole
     // history to answer this would cost more than the race it prevents.
     const startOfDay = new Date(d.now()); startOfDay.setUTCHours(0, 0, 0, 0);
-    const existing = await d.executionRepository.listRuns({ projectId, from: startOfDay.toISOString() }).catch(() => []);
+    let existing: WorkflowExecutionRecord[];
+    try {
+      existing = await d.executionRepository.listRuns({ projectId, from: startOfDay.toISOString() });
+    } catch (error) {
+      return { ...base, started: false, error: `Refusing to commission ${request.requestId} on ${projectId}: today's run list could not be read (${error instanceof Error ? error.message : String(error)}), so it cannot be shown that no run already exists for this request id.` };
+    }
     if (existing.some((run) => run.requestId === request.requestId)) {
       return { ...base, started: false, error: `A run for ${request.requestId} already exists on ${projectId}; refusing to start a second one on the same request id.` };
     }
+
+    // 2 — THE ATOMIC CLAIM. `onlyIfNew` in the object store, so the loser of a genuine race is told
+    // it lost BY THE STORE rather than by a re-read that races in turn. This is what the old
+    // check-then-start could not do at any window size, and it holds across processes — the 06:00
+    // Cloud Run job, an operator's `planner.commission` over MCP, and a Netlify function share no
+    // memory, only this bucket.
+    //
+    // `allowReclaim` is true only because step 1 SUCCEEDED and showed no run for this id. A stale
+    // reservation whose run is actually alive must stay held: reclaiming one on an assumption is
+    // the double-spend, wearing the costume of a repair.
+    const claim = await reservations.reserve(projectId, request.requestId, PLANNER_NODE_ID, { allowReclaim: true });
+    if (!claim.ok) {
+      return claim.reason === "held"
+        ? { ...base, started: false, error: `${request.requestId} is already reserved on ${projectId} by ${claim.holder.reservedBy} (${claim.holder.state}${claim.holder.runId ? `, run ${claim.holder.runId}` : ""}, reserved ${claim.holder.reservedAt}); refusing to start a second run on the same request id.` }
+        : { ...base, started: false, error: `Refusing to commission ${request.requestId} on ${projectId}: ${claim.detail}.` };
+    }
+    reservation = claim.reservation;
+
     const run = await startDryRun(
       {
         projectId,
@@ -583,6 +652,9 @@ const startCommissionedRun = async (projectId: string, request: CommissionReques
       d.workspaceRepository,
       d.projectRepository
     );
+    // 3 — BIND THE CLAIM TO THE RUN. After this the reservation is never reclaimable by age: a long
+    // run is exactly the case where "it has been quiet for a while" must not mean "start another".
+    await reservations.markStarted(projectId, request.requestId, run.runId).catch(() => undefined);
     // THE KICK, exactly as platform's run_workspace_workflow does it: start_dry_run only queues, and
     // one node is enough to hand the run to the continuation tick. Driving the whole run here would
     // put a twenty-node pipeline inside a job's task window.
@@ -596,9 +668,15 @@ const startCommissionedRun = async (projectId: string, request: CommissionReques
       .catch(() => undefined);
     return { ...base, runId: run.runId, started: true };
   } catch (error) {
-    // One tenant's refusal — a request-id collision, a subject gate, a budget block — must not stop
-    // the rest of the plan or the rest of the fleet.
-    return { ...base, started: false, error: error instanceof Error ? error.message : String(error) };
+    // One tenant's refusal — a subject gate, a budget block, a dead workspace — must not stop the
+    // rest of the plan or the rest of the fleet.
+    //
+    // Release the claim on the way out, so a start that was REFUSED does not wedge this request id
+    // until the stale window expires. Recorded as `abandoned` rather than deleted: "tried, and
+    // refused for this reason" is a fact the next pass wants, and an absent key cannot state it.
+    const detail = error instanceof Error ? error.message : String(error);
+    if (reservation) await reservations.abandon(projectId, request.requestId, `start refused: ${detail}`).catch(() => undefined);
+    return { ...base, started: false, error: detail };
   }
 };
 
