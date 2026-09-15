@@ -1613,7 +1613,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) precisely so `node_execute` never has to be:
     // it takes no nodeId, no executionMode, and writes nothing. See visualIdentityTools.ts.
     ...createVisualIdentityTools({ workspaceRepository, executionRepository, projectRepository }),
-    ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository, skillRepository }),
+    ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository, skillRepository, executionRepository, improvementRepository: repositoryManager.getImprovementRepository() }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
     ...createImprovementTools({ workspaceRepository, executionRepository, learningRepository, evaluationRepository: repositoryManager.getEvaluationRepository(), improvementRepository: repositoryManager.getImprovementRepository(), meta }),

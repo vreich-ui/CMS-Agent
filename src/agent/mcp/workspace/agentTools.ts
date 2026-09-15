@@ -4,6 +4,8 @@ import type { WorkspaceRepository } from "../../repository/interfaces/WorkspaceR
 import type { ConversationTurnRepository } from "../../repository/interfaces/ConversationTurnRepository.js";
 import type { UsageRepository } from "../../repository/interfaces/UsageRepository.js";
 import type { SkillRepository } from "../../repository/interfaces/SkillRepository.js";
+import type { ExecutionRepository } from "../../repository/interfaces/ExecutionRepository.js";
+import type { ImprovementRepository } from "../../repository/interfaces/ImprovementRepository.js";
 import { ConversationalRunner } from "../../conversations/conversationalRunner.js";
 import { resolveConversationSkills } from "../../conversations/conversationSkills.js";
 import { agentConverseInputSchema, agentConverseJsonSchema } from "../../conversations/conversationContract.js";
@@ -89,14 +91,20 @@ export type AgentToolDeps = {
   // F2 — required so agent.list/get/update's skillReadiness is never a guess; the one real
   // construction site (tools.ts) always has a skill repository (RepositoryManager builds one).
   skillRepository: SkillRepository;
+  // CMP — the two stores the house briefing reads beyond the four above: the execution store answers
+  // "where is the run this chat is about" (W2b.2) and the improvement store carries the tenant's
+  // curated lessons (W4). Optional here because a caller that omits one gets a briefing without that
+  // block, never a failed turn.
+  executionRepository?: ExecutionRepository;
+  improvementRepository?: ImprovementRepository;
   conversationalRunner?: Pick<ConversationalRunner, "run">;
 };
 
 // CA2 deliberately resolves only the canonical workspace seed. Project-specific overrides and
 // conversational execution are later waves; callers discover an opaque ref instead of selecting
 // a node or implementation id.
-export function createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository, conversationalRunner }: AgentToolDeps): WorkspaceTool[] {
-  const runner = conversationalRunner ?? new ConversationalRunner({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository });
+export function createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository, executionRepository, improvementRepository, conversationalRunner }: AgentToolDeps): WorkspaceTool[] {
+  const runner = conversationalRunner ?? new ConversationalRunner({ workspaceRepository, projectRepository, conversationTurnRepository, usageRepository, skillRepository, executionRepository, improvementRepository });
   return [
     tool({
       name: "agent.resolve",

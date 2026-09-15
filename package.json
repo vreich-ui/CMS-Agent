@@ -15,6 +15,7 @@
     "nodes:check": "tsx scripts/seedNodesFromWorkspace.ts",
     "nodes:update": "tsx scripts/seedNodesFromWorkspace.ts --write",
     "nodes:check:offline": "tsx scripts/seedNodesFromWorkspace.ts --from-canonical",
+    "chat:audit": "tsx scripts/chatAudit.ts",
     "contract:check": "tsx scripts/contractCheck.ts",
     "env:audit": "tsx scripts/netlify-env-audit.ts",
     "genesis:parity-check": "tsx scripts/genesisParityCheck.ts",

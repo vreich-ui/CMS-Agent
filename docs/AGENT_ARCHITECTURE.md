@@ -90,6 +90,34 @@ Nodes call only **controlled tools** (`src/agent/tools/toolRegistry.ts`, 49 ids 
 
 The run record is the only execution state (`executionTypes.ts`). Every node transition is one CAS `saveRun`; four drivers coordinate purely through CAS + claims ([DATA_ARCHITECTURE.md](DATA_ARCHITECTURE.md) §5). Idempotency exists only where a ledger was built: `agent_converse` (claim per `(conversation_id, turn_id)`), release (`releaseLedger` per `${runId}:${requestId}` with the site-side `idempotencyKey`), artifact adoption (`artifactMaterialization.ts` adopt-or-create), and the tenant object shell (`contentItemShell.ts`, reuse of the existing object for the same request id). Node model calls themselves are **not** idempotent: a reclaimed-then-finished node pays twice.
 
+## 2b. The house briefing (admin chat prompt assembly)
+
+Every `agent_converse` turn assembles a system prompt in `conversationalRunner.ts`'s `assembleConversationPrompt`. As of agent **rev 9** (CMP, 2026-09-15) that prompt carries a **house briefing**: the facts Client Manager used to discover by tool call, resolved deterministically before the model runs.
+
+| Block | What it carries | Built by | Cost |
+|---|---|---|---|
+| `## Publication identity` | display name, project id, site id — from the project record | `renderPublicationIdentityBlock` | free (record already fetched) |
+| `## What this chat is about` | the surface the editor opened the chat from, the starter's intent, the selection, and the named run's real state | `briefing/chatOrigin.ts` from `context.origin` (additive, rev-9 gated) + `ExecutionRepository.getRun` | one in-process store read |
+| `## House briefing` | **This house** (strategy, voice status, visual standard, autonomy, publish policy) · **What this house can do** (all six registered operations with required inputs) · **Object contracts** (≤12-line digest per dialect type) · **What this house has learned** (curated playbook) · **Tools on this turn** (grouped by purpose) | `briefing/assembleBriefing.ts` | tenant half cached per project for 24 h; contract digests reuse `getReducedContract`'s fingerprint cache |
+| `## Bound object` | title, the tenant's own status word, lifecycle state, last revision, open review, and that type's contract digest | `briefing/objectDossier.ts` — one `object_get` on the `voicePrefetch.ts` seam, budget `min(8s, max(1.5s, timeout_ms/4))` | one tenant read per turn, only when the chat is bound |
+| `## Registered project voice` | the full voice body (G6 record-first) | unchanged | free |
+| `## Assigned skills` | resolved skill blocks | `conversationSkills.ts` | free |
+| `## Caller context` | the untrusted JSON, last, as always | unchanged | free |
+
+**Three invariants, held in `assembleBriefing.ts`.**
+
+1. *A briefing never fails a turn.* Every gather is wrapped; a dead tenant, an expired credential or a hung read degrades to a named line and the turn proceeds on rev-8 behaviour (read before you write). `## Registered project knowledge` survives only on the no-briefing path, for callers constructed before this parameter existed.
+2. *A briefing never costs the second turn anything.* The tenant half is cached per project for a day. The per-turn half — the bound object and the run — is deliberately not cached, because those are the facts that change while the editor is looking at them.
+3. *A briefing never carries a secret, never carries transport prose, and never lets text become structure.* `briefing/safeReason.ts` holds both halves of that rule. `safeReadFailure` / `safeWarningCode` classify every read failure into a fixed sentence and return **none** of their input — a tenant adapter's error names this deployment's env vars, a node blockage's `message` can carry a provider's 401 body and a model name. `promptSafe` shapes **every** string that reaches a briefing block from outside this repo's own literals: the caller's origin labels, and equally the tenant's own object titles, strategy fields, template labels and contract notes. The boundary is the block, not the source — these blocks render outside `<caller_context_json>`, so an object title carrying a newline and a `##` would otherwise open a new section of the system prompt. `_` and `-` survive, because every id this system renders is snake_case and a mangled id is an id a model may try to use.
+
+**Time and cost.** The whole gather shares one deadline, `briefingBudgetMs = min(12s, max(2s, timeout_ms/3))`; the tenant's two standing reads run in parallel. Whatever has not arrived by the deadline renders as a degradation and the turn proceeds — the reads keep running and populate the caches, so a slow tenant is paid for once rather than every turn. The briefing uses its **own** `RunScopedCache`, never the shared `conductorCache`: that one is keyed by runId and never expires, and a chat's "run id" is a project, which does not end. A **degraded** tenant half lives 60 s, not 24 h, so one transient outage cannot pin "not set" across a tenant for a day. Contract digests are resolved per turn (memoized underneath by fingerprint) so `### Object contracts` and `## Bound object` can never disagree about the same type.
+
+Size is bounded at **6,000 estimated tokens** (`MAX_BRIEFING_TOKENS`, `chars/4` as elsewhere in this repo). Over budget, sections are dropped from the bottom — tools first, then lessons, then contracts; the tenant half and the operations menu are never dropped, because they are the two things the model cannot recover without spending the round trips the briefing exists to remove.
+
+**The menu makes no approval claim.** A descriptor's declared `effects[].riskLevel` describes what running an operation would do and gates nothing (`operations/operationTypes.ts`); deriving a per-operation "starts without asking" from it was already wrong for `image_template_revision`, whose bound workflow runs a publish-risk node behind a registered gate. The house's autonomy is stated once, from the project record, in the block header.
+
+**Baseline:** `npm run chat:audit` reports, per conversation, `toolCallsBeforeFirstAnswer`, `questionsAsked`, `turnsToFirstAction`, `catalogReads` and `contractReads` from the conversation-turn store.
+
 ## 3. Workflows and stages
 
 | Workflow id | Nodes | Purpose | Registered in | Composition |

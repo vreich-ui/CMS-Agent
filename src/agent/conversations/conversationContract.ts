@@ -131,6 +131,35 @@ const uiCapabilitiesSchema = z.object({
   actions: z.array(uiCapabilityActionSchema).max(MAX_UI_CAPABILITY_ACTIONS)
 }).strict();
 
+// CMP-W2b.1, additive: WHERE the chat was opened and WHICH job it is about.
+//
+// Everything else in `context` describes what is on screen. Nothing described why the editor opened
+// the chat, so a conversation started from a run's activity card and one started from the hub
+// arrived identically blank and the agent's first move on both was to ask a question the surface had
+// already answered.
+//
+// Accepted from agent rev 9 onward; Platform gates sending it on `agent_resolve` reporting rev >= 9,
+// exactly as `ui_capabilities` was gated on rev >= 8. An older workspace still holding rev 8 simply
+// never receives the field — this schema accepting it is harmless there, and the rev gate is what
+// keeps a rev-8 prompt from being handed a block it has no section for.
+//
+// UNTRUSTED, LIKE EVERY OTHER CONTEXT FIELD. `surface` and `starter` are the client's own labels;
+// briefing/chatOrigin.ts sanitises both before they cross into the prompt, and the run's STATE is
+// read from this workspace's own execution store rather than taken from `run_id`'s sender. A caller
+// naming a run it does not own learns only that the run exists.
+const conversationOriginSchema = z.object({
+  surface: z.string().min(1).max(120),
+  starter: z.string().min(1).max(500).optional(),
+  request_id: z.string().min(1).max(256).optional(),
+  run_id: z.string().min(1).max(256).optional(),
+  selection: z.object({
+    object_type: z.string().min(1).max(128),
+    object_id: z.string().min(1).max(256)
+  }).strict().optional()
+}).strict();
+
+export type ConversationOriginInput = z.infer<typeof conversationOriginSchema>;
+
 export const conversationContextSchema = z.object({
   site_id: z.string().min(1).max(128),
   object_type: z.string().min(1).max(128).optional(),
@@ -145,7 +174,9 @@ export const conversationContextSchema = z.object({
   // ASV2-W4-CA §7, additive: absent means "no manifest reached the client for this turn" — the
   // prompt (and, client-side, `allowedAction`) treats that the same as an empty one, never as
   // permission to offer anything. See uiCapabilitiesSchema above for shape and bounds.
-  ui_capabilities: uiCapabilitiesSchema.optional()
+  ui_capabilities: uiCapabilitiesSchema.optional(),
+  // CMP-W2b.1 — see conversationOriginSchema above.
+  origin: conversationOriginSchema.optional()
 }).strict().refine((context) => Boolean(context.object_type) === Boolean(context.object_id), {
   message: "object_type and object_id must be supplied together"
 });
@@ -220,7 +251,7 @@ export const agentConverseJsonSchema = {
     conversation_id: { type: "string", minLength: 1, maxLength: 256 },
     turn_id: { type: "string", minLength: 1, maxLength: 256 },
     actor: { type: "object", additionalProperties: false, required: ["kind", "id"], properties: { kind: { type: "string", const: "human" }, id: { type: "string", minLength: 1, maxLength: 256 } } },
-    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, diagnostics_requested: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 }, ui_capabilities: { type: "object", additionalProperties: false, required: ["v", "controls", "actions"], properties: { v: { type: "integer", const: 2 }, controls: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 32 } }, actions: { type: "array", maxItems: MAX_UI_CAPABILITY_ACTIONS, items: { type: "object", additionalProperties: false, required: ["verb", "label"], properties: { verb: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" }, label: { type: "string", minLength: 1, maxLength: 120 }, params: { type: "object" } } } } } } } },
+    context: { type: "object", additionalProperties: false, required: ["site_id"], properties: { site_id: { type: "string", minLength: 1, maxLength: 128 }, object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 }, focus: { type: "string", minLength: 1, maxLength: 500 }, learning_mode: { type: "boolean" }, diagnostics_requested: { type: "boolean" }, approval_note: { type: "string", minLength: 1, maxLength: 1000 }, ui_capabilities: { type: "object", additionalProperties: false, required: ["v", "controls", "actions"], properties: { v: { type: "integer", const: 2 }, controls: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 32 } }, actions: { type: "array", maxItems: MAX_UI_CAPABILITY_ACTIONS, items: { type: "object", additionalProperties: false, required: ["verb", "label"], properties: { verb: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" }, label: { type: "string", minLength: 1, maxLength: 120 }, params: { type: "object" } } } } } }, origin: { type: "object", additionalProperties: false, required: ["surface"], properties: { surface: { type: "string", minLength: 1, maxLength: 120 }, starter: { type: "string", minLength: 1, maxLength: 500 }, request_id: { type: "string", minLength: 1, maxLength: 256 }, run_id: { type: "string", minLength: 1, maxLength: 256 }, selection: { type: "object", additionalProperties: false, required: ["object_type", "object_id"], properties: { object_type: { type: "string", minLength: 1, maxLength: 128 }, object_id: { type: "string", minLength: 1, maxLength: 256 } } } } } } },
     messages: { type: "array", minItems: 1, maxItems: MAX_TRANSCRIPT_MESSAGES, items: { oneOf: [
       { type: "object", additionalProperties: false, required: ["role", "text"], properties: { role: { type: "string", const: "user" }, text: { type: "string" } } },
       { type: "object", additionalProperties: false, required: ["role"], properties: { role: { type: "string", const: "assistant" }, text: { type: "string" }, tool_calls: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "name", "args"], properties: { id: { type: "string" }, name: { type: "string" }, args: { type: "object" } } } } } },
