@@ -34,6 +34,7 @@
 // is the correct one: discard and let the caller return the stored record.
 import { RunConcurrencyError, type ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { NodeExecutionState, WorkflowExecutionRecord } from "./executionTypes.js";
+import { mergeSkillSelections } from "../skills/runSkillSelection.js";
 
 export const NODE_ADVANCE_SAVE_MAX_RETRIES = 5;
 
@@ -105,6 +106,13 @@ export const mergeNodeAdvance = (stored: WorkflowExecutionRecord, advanced: Work
     // store path, not through this merge.
     ...((stored.defaultedNodeIds ?? []).length || (advanced.defaultedNodeIds ?? []).length
       ? { defaultedNodeIds: [...new Set([...(stored.defaultedNodeIds ?? []), ...(advanced.defaultedNodeIds ?? [])])] }
+      : {}),
+    // C2 — the pinned skill selection, merged the same way and for the same reason. Write-once per
+    // node, so STORED wins a key both hold: if the record already carries an entry, that entry is
+    // what the dispatch used. Dropping it here would be #353's `defaultedNodeIds` bug rebuilt one
+    // field over — a run whose nodes ran under a recorded policy, with no record of the policy.
+    ...(mergeSkillSelections(stored.skillSelection, advanced.skillSelection)
+      ? { skillSelection: mergeSkillSelections(stored.skillSelection, advanced.skillSelection)! }
       : {}),
     updatedAt: advanced.updatedAt
   };

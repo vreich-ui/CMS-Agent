@@ -16,6 +16,7 @@ import type { Blockage } from "../execution/blockage.js";
 import type { EconomicDecision } from "./economicDecision.js";
 import type { NoProgressLedgerEntry } from "./noProgressFingerprint.js";
 import type { ProgressBudgets } from "./progressBudgets.js";
+import type { RunSkillSelection } from "../skills/runSkillSelection.js";
 
 export const executionStatuses = ["queued", "running", "paused", "completed", "failed", "blocked", "cancelled", "skipped"] as const;
 export type ExecutionStatus = typeof executionStatuses[number];
@@ -292,6 +293,14 @@ export const runStallFacts = (run: WorkflowExecutionRecord): RunStallFacts => {
 
 export type WorkflowExecutionRecord = {
   runId: string;
+  /**
+   * C2 — WHICH SKILLS EACH NODE OF THIS RUN DISPATCHED WITH, pinned at its first dispatch and never
+   * recomputed. Keyed by nodeId. Absent on a run whose nodes have not dispatched, and on every run
+   * that predates this field, in which case a reader falls back to the node's live assignment and
+   * must SAY it is doing so — that fallback is a current preview, not what the run used.
+   * See skills/runSkillSelection.ts for the boundary this pin does and does not guarantee.
+   */
+  skillSelection?: Record<string, RunSkillSelection>;
   workflowId: string;
   projectId: string;
   // R-9: the join key between a platform workflow record and this workspace run — without it, the

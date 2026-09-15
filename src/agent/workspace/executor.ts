@@ -3,6 +3,7 @@ import { runStallFacts, HALTED_EXECUTION_STATUSES, type ApprovalRequired, type E
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository, type RunSummaryRecord } from "../repository/interfaces/ExecutionRepository.js";
 import { saveNodeAdvance } from "./nodeAdvanceSave.js";
+import { pinSkillSelection } from "../skills/runSkillSelection.js";
 import { beginDispatchHeartbeat, DISPATCH_HEARTBEAT_GRACE_MS, DISPATCH_HEARTBEAT_INTERVAL_MS, endDispatchHeartbeat, isDispatchHeartbeatSilent, resolveDispatchHeartbeatRepository, type DispatchHeartbeat } from "./dispatchHeartbeat.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -3646,6 +3647,12 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
   // state. A CAS conflict here propagates to advanceRun's retry loop like any other save conflict.
   if (claim) {
     stampDispatch(run.runId, state, startedAt, nodeTimeoutMs(nextNode), options.driver ?? "http_run_all", await projectEndpointConfiguredFor(run.projectId));
+    // C2 — pin this node's skill selection into the SAME save as its dispatch claim. Riding along
+    // with a write that already happens is what makes the pin free, and tying it to the claim is
+    // what makes it correct: the claim is the moment this node became this driver's to execute, so
+    // it is the moment its policy stops being negotiable. Write-once — a reclaim or a retry finds
+    // the existing entry and leaves it alone.
+    await pinSkillSelection(run, nextNode, repositoryManager.getSkillRepository());
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
   }

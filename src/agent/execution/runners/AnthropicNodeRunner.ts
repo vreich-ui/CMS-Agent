@@ -21,6 +21,7 @@ import type { WorkspaceNode } from "../../workspace/nodeTypes.js";
 import type { ExecutionMode, NodeRunnerContext } from "../executionContext.js";
 import { validateOutput } from "../outputValidator.js";
 import { resolveNodeInstructions } from "../nodeInstructions.js";
+import { selectedSkillsFor } from "../../skills/runSkillSelection.js";
 import type { NodeRunner, NodeRunnerInput, NodeRunnerResult } from "./NodeRunner.js";
 import { readRunContext, renderRunContextInstruction } from "../../workspace/runContext.js";
 import { boundDependencyOutput, dependencyOutputMaxChars } from "./OpenAINodeRunner.js";
@@ -155,7 +156,12 @@ export class AnthropicNodeRunner implements NodeRunner {
   async run({ node, input }: NodeRunnerInput, context: NodeRunnerContext): Promise<NodeRunnerResult> {
     const valid = this.validateConfiguration(node);
     if (!valid.ok) return { ok: false, code: "invalid_node_configuration", message: valid.errors.join("; ") };
-    const resolvedInstructions = await resolveNodeInstructions(node);
+    // C2 — resolve against the skills THIS RUN pinned for this node at its dispatch claim, not
+    // against the node's live assignment. A `skill.assign` that landed while this run was in flight
+    // therefore cannot change what this node runs with, and two runs wanting different skills for
+    // the same node no longer race one global list. Undefined (a node.execute outside a run, or a
+    // record from before the pin existed) falls back to the live assignment exactly as before.
+    const resolvedInstructions = await resolveNodeInstructions(node, undefined, selectedSkillsFor(context.run, node.id));
     if (resolvedInstructions.errors.length) return { ok: false, code: "invalid_node_configuration", message: resolvedInstructions.errors.join("; ") };
     const c = cfg(node);
     const model = stringFrom(c.model) ?? process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;

@@ -24,10 +24,25 @@ const missingSkillMessage = (skillId: string): string => SEEDED_SKILL_IDS.has(sk
   ? `Assigned skill not found: ${skillId} — this is a canonical seed absent from this store; call skill_list or skill_resolve_for_node to additively restore it (operator edits to other skills are never touched).`
   : `Assigned skill not found: ${skillId} — this id is not a canonical seed; create it (skill_create) or unassign it from this node (skill_unassign).`;
 
-export type ResolveSkillOptions = { workspaceSystemPolicy?: string; projectPolicy?: string; runInstructions?: string; platformTools?: string[]; runAuthorizedTools?: string[]; riskPolicy?: WorkspaceRiskLevel };
+export type ResolveSkillOptions = {
+  workspaceSystemPolicy?: string; projectPolicy?: string; runInstructions?: string;
+  platformTools?: string[]; runAuthorizedTools?: string[]; riskPolicy?: WorkspaceRiskLevel;
+  /**
+   * C2 — resolve THESE skill ids instead of the node's live `assignedSkills`. Passed by a dispatch
+   * that is running inside a run whose node already pinned its selection, and by any inspection
+   * asked what a particular run used. Absent means "resolve the live assignment", which is a CURRENT
+   * PREVIEW and every caller that renders it must label it as one.
+   */
+  pinnedSkillIds?: string[];
+  /** The versions those ids carried when they were pinned, so drift since then can be reported rather than hidden. */
+  pinnedVersions?: Record<string, string>;
+};
 
 export async function resolveSkillsForNode(node: WorkspaceNode, repository: SkillRepository, options: ResolveSkillOptions = {}): Promise<SkillResolvedPolicy> {
-  const skillIds = unique(node.assignedSkills ?? []);
+  // The pinned set wins when there is one. An EMPTY pinned array is a real answer — a node that
+  // dispatched with no skills — so the check is on presence, never on length.
+  const pinned = options.pinnedSkillIds !== undefined;
+  const skillIds = unique(pinned ? options.pinnedSkillIds! : (node.assignedSkills ?? []));
   // One repository read per resolution. The blob repository loads the skill document on every
   // read; fetching each assigned skill separately multiplies that cost on every model dispatch.
   const available = skillIds.length ? await repository.list({ skillIds }) : [];
@@ -36,6 +51,19 @@ export async function resolveSkillsForNode(node: WorkspaceNode, repository: Skil
   const conflicts: SkillConflict[] = [];
   for (const id of skillIds) if (!assigned.some((skill) => skill.skillId === id)) conflicts.push({ severity: "blocker", source: id, message: missingSkillMessage(id) });
   for (const skill of assigned) if (skill.status !== "active") conflicts.push({ severity: "warning", source: skill.skillId, message: `Skill is ${skill.status}; its instructions are not applied.` });
+  // C2 — DRIFT SINCE THE PIN, reported rather than silently applied. Resolving a run's pinned ids
+  // reads whatever the store holds NOW, so a skill edited since the dispatch resolves to its new
+  // text under its old id. That is not something this resolver can undo — versions are snapshots the
+  // skill repository owns — but presenting it as what the run used would be the lie the pin exists
+  // to end, so it is named.
+  if (options.pinnedVersions) {
+    for (const skill of assigned) {
+      const pinnedVersion = options.pinnedVersions[skill.skillId];
+      if (pinnedVersion && pinnedVersion !== skill.version) {
+        conflicts.push({ severity: "warning", source: skill.skillId, message: `Skill has changed since this run pinned it: dispatched at v${pinnedVersion}, the store now holds v${skill.version}. The instructions shown are the current ones.` });
+      }
+    }
+  }
   // R-2: a real structural check (see schemaCompatibility.ts), not JSON.stringify equality. Only a
   // genuine contradiction — one no output could satisfy — is a blocker, and the conflict now names
   // which field contradicts instead of asserting that two schemas are not byte-identical.
