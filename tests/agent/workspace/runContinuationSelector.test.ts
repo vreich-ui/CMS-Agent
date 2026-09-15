@@ -10,7 +10,7 @@ import {
   selectContinuableRuns
 } from "../../../src/agent/workspace/runContinuation.js";
 import type { ExecutionStatus, WorkflowExecutionRecord } from "../../../src/agent/workspace/executionTypes.js";
-import { runSummaryOf, type ExecutionRepository } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
+import { runSummaryOf, type ExecutionRepository, type ListRunsFilters } from "../../../src/agent/repository/interfaces/ExecutionRepository.js";
 
 // T5 — the continuation tick's whole judgement is this selector, so it is tested as what it is: a
 // pure function of the persisted record plus a clock. No repository, no schedule, no network.
@@ -114,16 +114,38 @@ describe("T5 continuation selector — which runs a scheduled tick re-enters", (
 
 // A repository stub: the tick only ever calls listRuns and getRun, and drives through the injected
 // advance. Everything else on the interface would be unused ceremony.
-const fakeStore = (records: WorkflowExecutionRecord[]): ExecutionRepository => ({
-  listRuns: async () => records,
-  listRunsPage: async () => ({ runs: records, matchedCount: records.length, hasMore: false }),
-  listRunSummariesPage: async () => ({ rows: records.map((record) => runSummaryOf(record)), matchedCount: records.length, hasMore: false }),
-  getRun: async (runId: string) => records.find((record) => record.runId === runId),
-  createRun: async (record) => record,
-  saveRun: async (record) => record,
-  resetRun: async (_runId, next) => next,
-  health: async () => ({ backend: "memory", ok: true } as never)
-});
+//
+// It honours `status` — and only `status` — because that is the single filter the tick passes, and
+// the scan that filter produces is what these tests are about. Array order is deliberately preserved
+// rather than re-sorted newest-first: the verdict ordering asserted below is the fixture's own, not
+// the repository's, and a stub that quietly re-sorted would make those assertions test the stub.
+// `seenFilters` records every call so a test can assert what the tick ASKED for, which is the part
+// the bill responds to — a tick that asked for everything and filtered in memory would still pass a
+// test that only looked at the runs it acted on.
+const fakeStore = (records: WorkflowExecutionRecord[], seenFilters: ListRunsFilters[] = []): ExecutionRepository => {
+  const select = (filters: ListRunsFilters = {}): WorkflowExecutionRecord[] => {
+    seenFilters.push(filters);
+    if (filters.status === undefined) return records;
+    const wanted = new Set(Array.isArray(filters.status) ? filters.status : [filters.status]);
+    return records.filter((record) => wanted.has(record.status));
+  };
+  return {
+    listRuns: async (filters) => select(filters),
+    listRunsPage: async (filters) => {
+      const runs = select(filters);
+      return { runs, matchedCount: runs.length, hasMore: false };
+    },
+    listRunSummariesPage: async (filters) => {
+      const runs = select(filters);
+      return { rows: runs.map((record) => runSummaryOf(record)), matchedCount: runs.length, hasMore: false };
+    },
+    getRun: async (runId: string) => records.find((record) => record.runId === runId),
+    createRun: async (record) => record,
+    saveRun: async (record) => record,
+    resetRun: async (_runId, next) => next,
+    health: async () => ({ backend: "memory", ok: true } as never)
+  };
+};
 
 describe("T5 continuation tick — the shell over the selector", () => {
   // S1: the tick now preflights the driver's environment (driverEnvPreflight.ts) and refuses to
@@ -191,5 +213,62 @@ describe("T5 continuation tick — the shell over the selector", () => {
     });
     expect(result.driven[0]).toMatchObject({ runId: "r-boom", error: "store unreachable" });
     expect(result.driven[1]).toMatchObject({ runId: "r-ok", statusAfter: "completed", steps: 1 });
+  });
+
+  // COST — the tick's scan BREADTH, as distinct from the runs it drives. Everything above asserts
+  // which runs moved; these two assert what was read to decide that, which is the line on the bill.
+  it("asks the repository only for the statuses it can act on, and never reads a terminal run", async () => {
+    // 12:30 — outside FULL_SCAN_MINUTE_WINDOW, so this is an ordinary indexed tick.
+    const INDEXED_MINUTE = new Date("2026-08-13T12:30:00.000Z");
+    const records = [
+      run({ runId: "r-active", status: "running", updatedAt: at(1_000) }),
+      run({ runId: "r-done", status: "completed" }),
+      run({ runId: "r-failed", status: "failed" }),
+      run({ runId: "r-cancelled", status: "cancelled" })
+    ];
+    const seen: ListRunsFilters[] = [];
+    const result = await runContinuationTick({
+      executionRepository: fakeStore(records, seen),
+      now: () => INDEXED_MINUTE,
+      advance: async (runId) => {
+        const record = records.find((candidate) => candidate.runId === runId)!;
+        record.status = "completed";
+        return record;
+      }
+    });
+
+    expect(result.scanMode).toBe("indexed");
+    // The ASK, not just the outcome: a tick that requested the whole fleet and filtered it in memory
+    // would still drive the right run and still cost the bucket every read this change removes.
+    expect(seen[0]).toEqual({ status: ["running", "queued"] });
+    // Three terminal runs were never read, so they cannot appear in the count or among the refusals.
+    expect(result.scanned).toBe(1);
+    expect(result.verdicts.map((verdict) => verdict.runId)).toEqual(["r-active"]);
+    expect(result.driven.map((report) => report.runId)).toEqual(["r-active"]);
+  });
+
+  it("takes one UNFILTERED scan at the top of the hour, so a lost index entry cannot park a run forever", async () => {
+    const records = [
+      run({ runId: "r-active", status: "running", updatedAt: at(1_000) }),
+      run({ runId: "r-done", status: "completed" })
+    ];
+    const seen: ListRunsFilters[] = [];
+    const result = await runContinuationTick({
+      // NOW is 12:00:00Z — inside FULL_SCAN_MINUTE_WINDOW, which is why every other tick test in this
+      // file still exercises the pre-change full-fleet behaviour unmodified.
+      executionRepository: fakeStore(records, seen),
+      now: () => NOW,
+      advance: async (runId) => {
+        const record = records.find((candidate) => candidate.runId === runId)!;
+        record.status = "completed";
+        return record;
+      }
+    });
+
+    expect(result.scanMode).toBe("full");
+    expect(seen[0]).toEqual({});
+    expect(result.scanned).toBe(2);
+    // The terminal run is seen and refused by name, exactly as it was before the indexed scan existed.
+    expect(result.verdicts.filter((verdict) => !verdict.reenter).map((verdict) => verdict.code)).toEqual(["skip_not_active"]);
   });
 });

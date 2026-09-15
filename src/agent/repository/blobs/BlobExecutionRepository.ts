@@ -251,10 +251,18 @@ export class BlobExecutionRepository implements ExecutionRepository {
     const cached = this.fullFleetCache;
     if (cached && cached.expiresAt > Date.now()) return this.pageFromRecords(await cached.runs, filters);
 
-    // Unscoped AND unwindowed: the caller genuinely needs every run record (constellation tools,
-    // node fallback listings, run continuation). The index cannot help — every blob gets fetched
+    // Unscoped AND unwindowed AND not status-filtered: the caller genuinely needs every run record
+    // (constellation tools, node fallback listings). The index cannot help — every blob gets fetched
     // either way — so take the cached full-fleet path.
-    if (!filters.projectId && filters.limit === undefined && filters.after === undefined) {
+    //
+    // `status` is the exception, and the reason this condition grew a third clause. The index entry
+    // already CARRIES the status (windowRunRows filters on it at ExecutionRepository.ts:70), so a
+    // non-matching run is rejected without its blob ever being opened. The continuation tick asks
+    // for exactly two statuses out of a fleet whose terminal runs outnumber its active ones by three
+    // orders of magnitude; before this clause it paid one `list` plus one GET per run — ~2,000 Class
+    // B operations every two minutes — to discard ~99.5% of them at `skip_not_active`. The answer,
+    // the ordering and `matchedCount` are identical either way; only the reads differ.
+    if (!filters.projectId && filters.limit === undefined && filters.after === undefined && filters.status === undefined) {
       return this.pageFromRecords(await this.fetchAllRuns(), filters);
     }
 

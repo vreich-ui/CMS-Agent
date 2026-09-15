@@ -292,3 +292,56 @@ describe("MemoryExecutionRepository mirrors the windowed listRuns contract", () 
     }
   });
 });
+
+// The continuation tick's scan (runContinuation.ts). It asks for the two statuses it can act on and
+// nothing else — no projectId, no limit, no cursor — which before this wave fell through to the
+// full-fleet path and opened every run blob in the bucket every two minutes. The index entry already
+// carries the status, so the filter belongs on the index side of the read.
+describe("status-filtered listing takes the index path", () => {
+  const fleet = [
+    run({ runId: "old-1", projectId: "p1", status: "completed", startedAt: "2026-09-01T10:00:00.000Z" }),
+    run({ runId: "old-2", projectId: "p1", status: "failed", startedAt: "2026-09-01T11:00:00.000Z" }),
+    run({ runId: "old-3", projectId: "p2", status: "cancelled", startedAt: "2026-09-01T12:00:00.000Z" }),
+    run({ runId: "live-1", projectId: "p1", status: "running", startedAt: "2026-09-01T13:00:00.000Z" }),
+    run({ runId: "live-2", projectId: "p2", status: "queued", startedAt: "2026-09-01T14:00:00.000Z" })
+  ] as WorkflowExecutionRecord[];
+
+  it("opens only the matching runs' blobs, not the whole fleet", async () => {
+    const fake = fakeStore(fleet, { seedIndex: true });
+    const repository = new BlobExecutionRepository(fake.store);
+    fake.resetCounters();
+
+    const page = await repository.listRunsPage({ status: ["running", "queued"] });
+
+    expect(page.runs.map((r) => r.runId).sort()).toEqual(["live-1", "live-2"]);
+    expect(page.matchedCount).toBe(2);
+    // The point of the whole change: three terminal runs cost nothing. A regression here shows up as
+    // 5 instead of 2 — and on the real bucket as ~2,000.
+    expect(fake.runBlobGets()).toBe(2);
+  });
+
+  it("still fetches the whole fleet when no status filter is given", async () => {
+    const fake = fakeStore(fleet, { seedIndex: true });
+    const repository = new BlobExecutionRepository(fake.store);
+    fake.resetCounters();
+
+    const page = await repository.listRunsPage({});
+
+    expect(page.matchedCount).toBe(5);
+    expect(fake.runBlobGets()).toBe(5);
+  });
+
+  it("agrees with the in-memory repository on the same query", async () => {
+    const blob = new BlobExecutionRepository(fakeStore(fleet, { seedIndex: true }).store);
+    const memory = new MemoryExecutionRepository();
+    for (const r of fleet) await memory.createRun(r);
+
+    const [fromBlob, fromMemory] = [
+      await blob.listRunsPage({ status: ["running", "queued"] }),
+      await memory.listRunsPage({ status: ["running", "queued"] })
+    ];
+    expect(fromBlob.runs.map((r) => r.runId)).toEqual(fromMemory.runs.map((r) => r.runId));
+    expect(fromBlob.matchedCount).toBe(fromMemory.matchedCount);
+    expect(fromBlob.hasMore).toBe(fromMemory.hasMore);
+  });
+});

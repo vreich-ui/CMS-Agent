@@ -256,6 +256,9 @@ export type ContinuationRunReport = {
 export type ContinuationTickResult = {
   enabled: boolean;
   scanned: number;
+  // How this tick read the fleet. Absent when the tick returned before scanning at all (disabled, or
+  // an already-aborted signal) — those paths made no read to describe.
+  scanMode?: ContinuationScanMode;
   verdicts: ContinuationVerdict[];
   driven: ContinuationRunReport[];
   timedOut: boolean;
@@ -280,6 +283,23 @@ const DEFAULT_MAX_STEPS_PER_RUN = 100;
 // Runs are driven sequentially within a tick, so this bounds how long one tick can be held by a
 // backlog. Runs beyond it are picked up by the next tick — a bounded delay, not a dropped run.
 const DEFAULT_MAX_RUNS = 5;
+
+// How broadly THIS execution read the fleet. "indexed" asks the repository only for the statuses the
+// tick can act on, which the run index answers without opening a non-matching run's blob; "full" is
+// the unfiltered fleet scan. Reported on the result and logged per tick so a read volume that does
+// not fall is attributable to the scan that caused it rather than guessed at from a billing report.
+export type ContinuationScanMode = "indexed" | "full";
+// Minutes past the hour during which a tick takes the FULL scan instead of the indexed one.
+//
+// This is a correctness net, not a tuning knob. The run index is a separate write from the run
+// record: an index entry lost to a failed write would leave its run invisible to every indexed tick,
+// forever. One unfiltered scan at the top of each hour re-observes the whole fleet, so the worst a
+// dropped entry can cost is a run advancing up to ~60 minutes late — never not at all.
+//
+// Two minutes, because the job's schedule is */2: exactly one tick per hour lands inside the window.
+// A slower schedule (*/5, */10) still lands on minute 0; a faster one buys a few extra full scans
+// and stays correct either way.
+const FULL_SCAN_MINUTE_WINDOW = 2;
 
 export async function runContinuationTick(deps: ContinuationTickDeps): Promise<ContinuationTickResult> {
   const clock = deps.now ?? (() => new Date());
@@ -310,7 +330,18 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   const taskTimeoutMs = deps.taskTimeoutMs ?? TASK_TIMEOUT_MS(env);
   const taskDeadline = tickStartedAt.getTime() + taskTimeoutMs;
   const dispatchTimeoutMs = deps.dispatchTimeoutMs ?? ((run: WorkflowExecutionRecord) => nextDispatchTimeoutMs(run, deps.workspaceRepository).catch(() => undefined));
-  const runs = await deps.executionRepository.listRuns({});
+  // SCAN BREADTH — the read this tick is allowed to make.
+  //
+  // The tick only ever re-enters CONTINUABLE_RUN_STATUSES (see that constant), and the ledger loop
+  // at the bottom of this function already skips every terminal run before it writes anything. A
+  // full-fleet scan therefore fetched every run record ever written — thousands — every two minutes
+  // in order to act on single digits of them, and to file a `skip_not_active` refusal for each of
+  // the rest. Asking for the two statuses the tick can use takes the repository's index path
+  // instead; see the third clause in BlobExecutionRepository.listRunsPage for why that is the same
+  // answer for fewer reads. FULL_SCAN_MINUTE_WINDOW documents the hourly full scan that keeps a
+  // lost index entry from parking a run indefinitely.
+  const scanMode: ContinuationScanMode = tickStartedAt.getUTCMinutes() < FULL_SCAN_MINUTE_WINDOW ? "full" : "indexed";
+  const runs = await deps.executionRepository.listRuns(scanMode === "full" ? {} : { status: [...CONTINUABLE_RUN_STATUSES] });
   // W1.2 — the measured history the tick never had. One read per (workflowId, projectId) the scan
   // actually touches, memoized for the whole tick; scoped per tenant because four tenants share every
   // workflowId and a pooled p95 describes none of them (W0.1). Wholly best-effort: a timing store this
@@ -501,8 +532,8 @@ export async function runContinuationTick(deps: ContinuationTickDeps): Promise<C
   if (driverSilent) {
     // ERROR severity because this is the line an alert should fire on: the tick is running and the
     // runs are not moving, which is exactly the state that was invisible for 44 minutes.
-    console.error(JSON.stringify({ event: "workflow.continuation_tick_driver_silent", severity: "ERROR", tickId, scanned: runs.length, silentRunIds: [...selectedRunIds].filter((runId) => (stepsByRun.get(runId) ?? 0) === 0) }));
+    console.error(JSON.stringify({ event: "workflow.continuation_tick_driver_silent", severity: "ERROR", tickId, scanned: runs.length, scanMode, silentRunIds: [...selectedRunIds].filter((runId) => (stepsByRun.get(runId) ?? 0) === 0) }));
   }
 
-  return { enabled: true, scanned: runs.length, verdicts: [...reenter, ...skipped], driven, timedOut, tickId, ...(driverSilent ? { driverSilent: true } : {}), ...(deferredDeadline ? { deferredDeadline: true } : {}), ...(aborted ? { aborted: true } : {}) };
+  return { enabled: true, scanned: runs.length, scanMode, verdicts: [...reenter, ...skipped], driven, timedOut, tickId, ...(driverSilent ? { driverSilent: true } : {}), ...(deferredDeadline ? { deferredDeadline: true } : {}), ...(aborted ? { aborted: true } : {}) };
 }
