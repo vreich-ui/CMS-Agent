@@ -8,7 +8,7 @@ Documentation map: this README → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 
 
 | Plane | What | Where |
 |---|---|---|
-| Control plane | MCP server (151 tools), OAuth 2.1 authorization server, `/health`; also drives runs inside a 45 s request window | Google Cloud Run service `cms-agent-mcp` (`us-central1`, project `cms-agent-503015`), image from `Dockerfile.mcp`, entrypoint `src/agent/entrypoints/mcpServerMainRun.ts` |
+| Control plane | MCP server (163 tools), OAuth 2.1 authorization server, `/health`; also drives runs inside a 45 s request window | Google Cloud Run service `cms-agent-mcp` (`us-central1`, project `cms-agent-503015`), image from `Dockerfile.mcp`, entrypoint `src/agent/entrypoints/mcpServerMainRun.ts` |
 | Background drivers | `continuation-tick` (every 2 min, advances runnable runs), `conductor-run` (one run to completion — created by hand in Aug 2026; its current existence is not verifiable from the repo, see docs/DEPLOYMENT.md §1), `site-credential-reconciler` (daily, tenant chat credentials) | Cloud Run jobs from the same image |
 | State | Every repository (workspace document, runs, projects, skills, changes, evaluation, improvement, conversations, sessions, OAuth) | GCS bucket `cms-agent-503015-cms-agent-state` (`WORKSPACE_STORE=gcs`) |
 | Secrets | API keys, tenant tokens, scoped bearers, Netlify token | Secret Manager → Cloud Run env; records hold names/references only |

@@ -11,6 +11,7 @@ import type { WorkspaceNode } from "../workspace/nodeTypes.js";
 import type { WorkflowExecutionRecord } from "../workspace/executionTypes.js";
 import { analyzeNode, type OptimizerDeps, type NodeAnalysis } from "./optimizer.js";
 import { applyPlaybookDelta, renderPlaybookForPrompt } from "./playbook.js";
+import type { PolicyScope } from "../scope/policyScope.js";
 import { makeImprovementId, type NodePlaybook, type PlaybookDelta, type PlaybookItemKind } from "./improvementTypes.js";
 
 const now = () => new Date().toISOString();
@@ -87,13 +88,16 @@ export type CurationResult = { playbook: NodePlaybook | null; curated: boolean; 
 // Curate a node's playbook from its evaluation evidence. mock = deterministic heuristic (default,
 // no model); openai = Reflector→Curator LLM pass. Applies the derived delta through applyPlaybookDelta
 // (dedup + budget enforced) and persists it. A no-evidence node (or an empty LLM delta) is a no-op.
-export async function curatePlaybook(params: { nodeId: string; mode: "mock" | "openai" }, deps: OptimizerDeps): Promise<CurationResult> {
+export async function curatePlaybook(params: { nodeId: string; mode: "mock" | "openai"; scope?: PolicyScope }, deps: OptimizerDeps): Promise<CurationResult> {
   const analysis = await analyzeNode({ nodeId: params.nodeId }, deps);
-  const existing = await deps.improvementRepository.getPlaybook(params.nodeId);
+  // C2 (part 2) — curation reads and writes ONE scope: the lessons it derives are evidence about the
+  // node in that scope, and folding a tenant's evidence into the fleet playbook (or the reverse) is
+  // precisely the leak the vocabulary closes. Omitted scope = the fleet playbook, as before.
+  const existing = await deps.improvementRepository.getPlaybook(params.nodeId, params.scope);
   const delta = params.mode === "openai" ? await llmCurationDelta(analysis, existing, deps) : heuristicCurationDelta(analysis);
   if (!delta || (!delta.add?.length && !delta.retire?.length && !delta.markHelpful?.length && !delta.markHarmful?.length)) {
     return { playbook: existing ?? null, curated: false, mode: params.mode, reason: params.mode === "openai" ? "Curator proposed no actionable delta." : "No criterion-level evaluation evidence yet." };
   }
-  const playbook = await deps.improvementRepository.savePlaybook(applyPlaybookDelta(existing, params.nodeId, delta, now()));
+  const playbook = await deps.improvementRepository.savePlaybook(applyPlaybookDelta(existing, params.nodeId, delta, now(), params.scope));
   return { playbook, curated: true, mode: params.mode, delta };
 }

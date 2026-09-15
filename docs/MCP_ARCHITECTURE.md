@@ -78,7 +78,7 @@ Authorization inside CMS-Agent is therefore **per bearer, not per tool**: a full
 
 ## 4. Catalog and namespaces
 
-151 tools in 24 "namespaces" (segment before the first `.` of the internal name). `tools/list` advertises **canonical underscore names** (`workspace_get_nodes`) because remote connectors forward names into `^[a-zA-Z0-9_-]{1,64}$`-constrained APIs; `tools/call` also accepts the dotted internal spelling and three deprecated aliases (`node.list`, `node.get_execution`, `workspace.update_node_schema`). The surface is locked by `docs/mcp-tool-manifest.json` (CI `npm run test:drift`, both the Netlify adapter and the Cloud Run router are driven in-process and must match).
+163 tools in 24 "namespaces" (segment before the first `.` of the internal name). `tools/list` advertises **canonical underscore names** (`workspace_get_nodes`) because remote connectors forward names into `^[a-zA-Z0-9_-]{1,64}$`-constrained APIs; `tools/call` also accepts the dotted internal spelling and three deprecated aliases (`node.list`, `node.get_execution`, `workspace.update_node_schema`). The surface is locked by `docs/mcp-tool-manifest.json` (CI `npm run test:drift`, both the Netlify adapter and the Cloud Run router are driven in-process and must match).
 
 | Namespace | Count | Purpose |
 |---|---|---|

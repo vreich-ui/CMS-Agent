@@ -303,6 +303,18 @@ export type WorkflowExecutionRecord = {
   skillSelection?: Record<string, RunSkillSelection>;
   workflowId: string;
   projectId: string;
+  /**
+   * C2 (part 2) — THE NAMED GOAL THIS RUN WAS STARTED UNDER, when the operator named one, and the
+   * third dimension of the scope vocabulary (scope/policyScope.ts).
+   *
+   * Operator-supplied at `workflow.start_dry_run` and never derived: an objective inferred from a
+   * topic string or a request id would be a guess that then SILENTLY selects policy, which is the
+   * one thing the vocabulary's "unknown is not a match" rule exists to prevent. Absent on every run
+   * that did not name one — which is every run today — and an objective-scoped skill or playbook
+   * therefore applies to nothing until a run declares it. Carried across `workflow.reset_run`, for
+   * the same reason `requestId` is: a reset retries the same request, under the same goal.
+   */
+  objective?: string;
   // R-9: the join key between a platform workflow record and this workspace run — without it, the
   // learning corpus sees outcomes with no method (it can see a run happened and see a platform-side
   // event happened, with no way to prove they are the same request). Generated once at run creation

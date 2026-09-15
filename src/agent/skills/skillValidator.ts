@@ -1,7 +1,17 @@
 import { z } from "zod";
 import { workspaceRiskLevels } from "../workspace/nodeTypes.js";
 import { validateJsonSchema } from "../mcp/workspace/store.js";
+import { SCOPE_DIMENSIONS, validateScope, type PolicyScope } from "../scope/policyScope.js";
 import { skillStatuses, type SkillDefinition, type SkillValidationResult } from "./skillTypes.js";
+
+// C2 (part 2) — the scope vocabulary at the skill boundary. `.strict()` so a misspelled dimension is
+// refused at authoring time rather than silently scoping a skill to nothing; the messages that say
+// WHICH dimensions exist come from validateScope, which is the single authority.
+export const policyScopeSchema = z.object(
+  Object.fromEntries(SCOPE_DIMENSIONS.map((dimension) => [dimension, z.string().min(1).optional()]))
+).strict().superRefine((value, ctx) => {
+  for (const issue of validateScope(value as PolicyScope)) ctx.addIssue({ code: "custom", message: issue });
+}) as z.ZodType<PolicyScope>;
 
 const stringArray = z.array(z.string().min(1)).default([]);
 export const skillDefinitionSchema = z.object({
@@ -11,7 +21,8 @@ export const skillDefinitionSchema = z.object({
   preconditions: stringArray, completionCriteria: stringArray, blockerCriteria: stringArray,
   memoryPolicy: z.object({ namespaces: stringArray, read: z.boolean(), write: z.boolean(), retention: z.string().optional() }).strict(),
   toolPolicy: z.object({ requestedTools: stringArray, mutatingToolsRequireApproval: z.boolean(), notes: z.string().optional() }).strict(),
-  riskLevel: z.enum(workspaceRiskLevels), metadata: z.record(z.string(), z.unknown()), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
+  riskLevel: z.enum(workspaceRiskLevels), scope: policyScopeSchema.optional(), family: z.string().min(1).optional(),
+  metadata: z.record(z.string(), z.unknown()), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).strict() as z.ZodType<SkillDefinition>;
 
 // Complete a partially-specified skill so a caller only supplies the authoring essentials
@@ -45,6 +56,10 @@ export function normalizeSkillInput(candidate: unknown): unknown {
     memoryPolicy: { namespaces: typeof skillId === "string" ? [skillId] : [], read: true, write: false, ...(isObject(input.memoryPolicy) ? input.memoryPolicy : {}) },
     toolPolicy: { requestedTools: allowedTools, mutatingToolsRequireApproval: true, ...(isObject(input.toolPolicy) ? input.toolPolicy : {}) },
     riskLevel: input.riskLevel ?? "read",
+    // Absent stays absent: an unscoped skill is a fleet skill, and defaulting it to `{}` here would
+    // write a field onto every seeded skill for no change in meaning.
+    ...(isObject(input.scope) ? { scope: input.scope } : {}),
+    ...(typeof input.family === "string" && input.family.trim() ? { family: input.family.trim() } : {}),
     metadata: isObject(input.metadata) ? input.metadata : {},
     createdAt: typeof input.createdAt === "string" ? input.createdAt : timestamp,
     updatedAt: timestamp

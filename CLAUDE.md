@@ -7,7 +7,7 @@ Read [AGENTS.md](AGENTS.md) (the contract) and [docs/AI_CONTEXT.md](docs/AI_CONT
 | Need | Go to |
 |---|---|
 | How the system actually works | `docs/ARCHITECTURE.md`, then the domain doc for your area |
-| MCP tools (all 151) | `docs/reference/MCP_TOOLS.md` (generated) · code `src/agent/mcp/workspace/tools.ts`, `*Tools.ts` |
+| MCP tools (all 163) | `docs/reference/MCP_TOOLS.md` (generated) · code `src/agent/mcp/workspace/tools.ts`, `*Tools.ts` |
 | Run engine | `src/agent/workspace/executor.ts` (`advanceRun`, `executeRunnableNode`, `retryNode`) |
 | Node definitions | `src/agent/workspace/nodes.ts`, `captureConductorNodes.ts`, `cloneConductorNodes.ts`, `visualIdentityNodes.ts` (generated-locked) |
 | Publishing | `src/agent/workspace/{publisher,publishDecision,publishExecution,releaseExecution,objectPublishExecution}.ts`, `src/agent/projects/<tenant>/hooks.ts` — `docs/PUBLISHING_ARCHITECTURE.md` |

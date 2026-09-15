@@ -14,6 +14,9 @@ import type { ImprovementRepository } from "../../repository/interfaces/Improvem
 import { redactSensitiveKeys } from "../../observability/redaction.js";
 import { evalRubricInputSchema, feedbackKinds, makeImprovementId, playbookDeltaSchema, rubricStatuses, type EvalRubric, type FeedbackRecord, type PlaybookDelta } from "../../improvement/improvementTypes.js";
 import { applyPlaybookDelta, renderPlaybookForPrompt } from "../../improvement/playbook.js";
+import { composePlaybookForDispatch } from "../../improvement/playbookRetrieval.js";
+import { CLIENT_MANAGER_PLAYBOOK_NODE_ID, clientManagerPlaybookScope, legacyClientManagerPlaybookNodeId } from "../../conversations/briefing/houseLessons.js";
+import { scopeKey, type PolicyScope } from "../../scope/policyScope.js";
 import { scoreOutput } from "../../improvement/rubricJudge.js";
 import { buildDataset, exportPreferences, exportSft, judgeEvidenceFromNodeState, type ReplayDeps } from "../../improvement/replay.js";
 import { analyzeNode, optimizerStatus, promoteProposal, proposeImprovement, runTrial } from "../../improvement/optimizer.js";
@@ -57,6 +60,11 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const datasetBuildInput = z.object({ nodeId: z.string().min(1), name: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(), projectId: z.string().min(1).optional(), executionMode: z.enum(["mock", "openai"]).optional(), allowDuplicateSubjects: z.boolean().optional() }).strict();
   const datasetIdInput = z.object({ datasetId: z.string().min(1) }).strict();
   const nodeFilterInput = z.object({ nodeId: z.string().min(1).optional() }).strict();
+  // C2 (part 2) — the `site` dimension on the wire is spelled `projectId`, because that is what every
+  // other tool in this surface calls a tenant. One spelling per concept per surface.
+  const playbookGetInput = z.object({ nodeId: z.string().min(1), projectId: z.string().min(1).optional() }).strict();
+  const migrateScopeInput = z.object({ projectIds: z.array(z.string().min(1)).min(1), dryRun: z.boolean().optional(), ...mutationMeta }).strict();
+  const playbookScopeFor = (projectId?: string): PolicyScope | undefined => (projectId ? { site: projectId } : undefined);
   const exportSftInput = z.object({ nodeId: z.string().min(1), minScore: z.number().min(0).max(1).optional(), limit: z.number().int().min(1).max(500).optional() }).strict();
   const exportPrefInput = z.object({ nodeId: z.string().min(1), limit: z.number().int().min(1).max(500).optional() }).strict();
   const fineTuneReadinessInput = z.object({ nodeId: z.string().min(1), minScore: z.number().min(0).max(1).optional() }).strict();
@@ -66,8 +74,8 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
   const promoteInput = z.object({ proposalId: z.string().min(1), ...mutationMeta }).strict();
   const autoPromoteInput = z.object({ nodeId: z.string().min(1).optional(), dryRun: z.boolean().optional(), minScore: z.number().min(0).max(1).optional(), max: z.number().int().min(1).max(50).optional(), ...mutationMeta }).strict();
   const nodeIdInput = z.object({ nodeId: z.string().min(1) }).strict();
-  const applyDeltaInput = z.object({ nodeId: z.string().min(1), delta: z.unknown(), ...mutationMeta }).strict();
-  const curateInput = z.object({ nodeId: z.string().min(1), mode: modeSchema }).strict();
+  const applyDeltaInput = z.object({ nodeId: z.string().min(1), delta: z.unknown(), projectId: z.string().min(1).optional(), ...mutationMeta }).strict();
+  const curateInput = z.object({ nodeId: z.string().min(1), mode: modeSchema, projectId: z.string().min(1).optional() }).strict();
   const migrateInput = z.object({ dryRun: z.boolean().optional() }).strict();
   const runRegressionInput = z.object({ nodeId: z.string().min(1), datasetId: z.string().min(1).optional(), rubricId: z.string().min(1).optional(), mode: modeSchema, caseLimit: z.number().int().min(1).max(100).optional() }).strict();
   const listRegressionInput = z.object({ nodeId: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
@@ -213,19 +221,23 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
       return ok({ result: await autoPromoteProposals({ nodeId: data.nodeId, dryRun: data.dryRun, minScore: data.minScore, max: data.max, actor: stamped.actor }, replayDeps) });
     } }),
 
-    tool({ name: "playbook.get", description: "Get a node's ACE playbook (curated, budgeted lessons) and its rendered prompt-injection form.", zodSchema: nodeIdInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 } }, ["nodeId"]), execute: async (input) => {
-      const playbook = await improvementRepository.getPlaybook(nodeIdInput.parse(input).nodeId) ?? null;
-      return ok({ playbook, rendered: playbook ? renderPlaybookForPrompt(playbook) : "" });
+    tool({ name: "playbook.get", description: "Get a node's ACE playbook (curated, budgeted lessons) and its rendered prompt-injection form. Omit projectId for the FLEET playbook (the record every playbook was before scope existed). Supply projectId for that tenant's own playbook — `playbook` is then the tenant's record alone (null when it has none), while `composed` is what a dispatch on that tenant actually receives: the tenant's lessons first, then the fleet's, deduplicated, under one budget.", zodSchema: playbookGetInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1, description: "Scope the read to this tenant (scope dimension `site`)." } }, ["nodeId"]), execute: async (input) => {
+      const data = playbookGetInput.parse(input);
+      const scope = playbookScopeFor(data.projectId);
+      const playbook = await improvementRepository.getPlaybook(data.nodeId, scope) ?? null;
+      const composed = await composePlaybookForDispatch(data.nodeId, data.projectId ? { site: data.projectId } : {}, improvementRepository);
+      return ok({ playbook, scope: scopeKey(scope), rendered: playbook ? renderPlaybookForPrompt(playbook) : "", composed });
     } }),
-    tool({ name: "playbook.apply_delta", description: "Apply a curated delta to a node's playbook: adds (deduplicated), helpful/harmful counters, retirements — budget-enforced.", zodSchema: applyDeltaInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, delta: { type: "object" }, ...metaJson }, ["nodeId", "delta"]), execute: async (input) => {
+    tool({ name: "playbook.apply_delta", description: "Apply a curated delta to a node's playbook: adds (deduplicated), helpful/harmful counters, retirements — budget-enforced. Omit projectId to write the FLEET playbook, which every tenant's dispatch of this node reads; supply it to write only that tenant's. A lesson learned on one tenant belongs to that tenant unless it is craft that holds everywhere.", zodSchema: applyDeltaInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, delta: { type: "object" }, projectId: { type: "string", minLength: 1, description: "Write to this tenant's playbook (scope dimension `site`) instead of the fleet's." }, ...metaJson }, ["nodeId", "delta"]), execute: async (input) => {
       const data = applyDeltaInput.parse(input);
       const delta = playbookDeltaSchema.parse(coerceJsonObjectInput(data.delta)) as PlaybookDelta;
-      const existing = await improvementRepository.getPlaybook(data.nodeId);
-      return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now())) });
+      const scope = playbookScopeFor(data.projectId);
+      const existing = await improvementRepository.getPlaybook(data.nodeId, scope);
+      return ok({ playbook: await improvementRepository.savePlaybook(applyPlaybookDelta(existing, data.nodeId, delta, now(), scope)), scope: scopeKey(scope) });
     } }),
-    tool({ name: "playbook.curate", description: "Reflector→Curator pass: derive a playbook delta from the node's evaluation evidence and apply it (dedup + item/char budget enforced). mode=mock (default) is the deterministic heuristic (weakest rubric criterion becomes a pitfall lesson); mode=openai runs the Curator LLM for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons. A no-evidence node is a no-op.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson }, ["nodeId"]), execute: async (input) => {
+    tool({ name: "playbook.curate", description: "Reflector→Curator pass: derive a playbook delta from the node's evaluation evidence and apply it (dedup + item/char budget enforced). mode=mock (default) is the deterministic heuristic (weakest rubric criterion becomes a pitfall lesson); mode=openai runs the Curator LLM for richer adds (strategy/pitfall/constraint) plus retirement of stale lessons. A no-evidence node is a no-op.", zodSchema: curateInput, inputSchema: objectSchema({ nodeId: { type: "string", minLength: 1 }, mode: modeJson, projectId: { type: "string", minLength: 1, description: "Curate this tenant's playbook (scope dimension `site`) instead of the fleet's. The evidence read is unchanged; only the record written is scoped." } }, ["nodeId"]), execute: async (input) => {
       const data = curateInput.parse(input);
-      return ok(await curatePlaybook(data, replayDeps));
+      return ok(await curatePlaybook({ nodeId: data.nodeId, mode: data.mode, ...(data.projectId ? { scope: { site: data.projectId } } : {}) }, replayDeps));
     } }),
     // 2.7 (handoff 2026-08-10): this used to read ONLY observation.metadata?.nodeId, but recordObservation
     // has only ever written nodeId at the TOP level — so of 34 stored observations, zero matched and this
@@ -252,6 +264,40 @@ export function createImprovementTools(deps: ImprovementToolDeps): WorkspaceTool
         }
       }
       return ok({ migratedNodes: byNode.size, migratedObservations: [...byNode.values()].reduce((sum, texts) => sum + texts.length, 0), skippedWithoutNodeId: skipped, dryRun: Boolean(data.dryRun) });
+    } }),
+    // C2 (part 2) — THE ONE MIGRATION THE SCOPE VOCABULARY NEEDS, and deliberately the only one.
+    //
+    // Fleet playbooks did not move: the fleet scope keeps the key it always had, so every existing
+    // `improvement/playbooks/{nodeId}.json` is read today exactly as it was yesterday. The single
+    // record that IS in the wrong place is the chat one: `houseLessons.ts` had no vocabulary to say
+    // "this agent's lessons, on this tenant" and encoded it in a nodeId — `chat_client_manager:{projectId}`
+    // — which is a per-tenant record masquerading as a node. This moves those into the vocabulary.
+    //
+    // NON-DESTRUCTIVE, and dry by default. The legacy record is copied, never deleted: the briefing
+    // still falls back to it, so a migration that ran and a migration that did not are both correct
+    // states, and nothing is lost if this is run against the wrong tenant. A tenant already holding a
+    // scoped playbook is reported as `alreadyScoped` and left untouched rather than merged — merging
+    // two curated lists by machine is how counters and provenance get quietly invented.
+    tool({ name: "playbook.migrate_scope", description: "Copy legacy per-tenant chat playbooks (stored under the nodeId convention chat_client_manager:<projectId>) into the scope vocabulary as chat_client_manager scoped to site=<projectId>. Names the tenants explicitly — nothing is enumerated or guessed. dryRun defaults to TRUE: it reports what it would copy and writes nothing. Non-destructive: the legacy record is left in place, and a tenant that already has a scoped playbook is skipped, never merged. Fleet playbooks need no migration — the fleet scope keeps its existing storage key.", zodSchema: migrateScopeInput, inputSchema: objectSchema({ projectIds: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1, description: "The tenants (CMS-Agent projectIds) whose legacy chat playbook should be copied." }, dryRun: { type: "boolean", description: "Default true. Set false to actually write." }, ...metaJson }, ["projectIds"]), execute: async (input) => {
+      const data = migrateScopeInput.parse(input);
+      const dryRun = data.dryRun ?? true;
+      const copied: string[] = [];
+      const alreadyScoped: string[] = [];
+      const noLegacyRecord: string[] = [];
+      for (const projectId of data.projectIds) {
+        const scope = clientManagerPlaybookScope(projectId);
+        if (await improvementRepository.getPlaybook(CLIENT_MANAGER_PLAYBOOK_NODE_ID, scope)) { alreadyScoped.push(projectId); continue; }
+        const legacy = await improvementRepository.getPlaybook(legacyClientManagerPlaybookNodeId(projectId));
+        if (!legacy) { noLegacyRecord.push(projectId); continue; }
+        if (!dryRun) {
+          // The items, counters, provenance and version are carried across unchanged; only the
+          // record's own identity moves. The copy therefore neither claims a longer history than
+          // the lessons have nor presents curated lessons as brand new.
+          await improvementRepository.savePlaybook({ ...legacy, nodeId: CLIENT_MANAGER_PLAYBOOK_NODE_ID, scope, updatedAt: now() });
+        }
+        copied.push(projectId);
+      }
+      return ok({ dryRun, copied, alreadyScoped, noLegacyRecord, targetNodeId: CLIENT_MANAGER_PLAYBOOK_NODE_ID });
     } })
   ];
 }

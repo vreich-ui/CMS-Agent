@@ -225,7 +225,7 @@ Status: audit of commit `40424c4` (2026-09-05); **post-merge verification at `92
 
 ## K-M. MCP risks
 
-### K-M1 Catalog size — **Medium**, high: ~124 KB / ~30–35 k tokens per `tools/list`; connectors with the full bearer load all 151 tools. Fix: default `MCP_EXPOSED_TOOL_PREFIXES` per credential; split admin namespaces behind a second endpoint or scope.
+### K-M1 Catalog size — **Medium**, high: ~124 KB / ~30–35 k tokens per `tools/list`; connectors with the full bearer load all 163 tools. Fix: default `MCP_EXPOSED_TOOL_PREFIXES` per credential; split admin namespaces behind a second endpoint or scope.
 ### K-M2 Namespace irregularity — see C-5.
 ### K-M3 Hand-maintained JSON Schema beside zod — **Medium**, medium: `tools.ts` declares both; locked only for node/project/run tools and controlled tools (`tests/agent/mcp/*ToolSchemas.test.ts`). Fix: derive JSON Schema from zod (`z.toJSONSchema` in zod 4) and snapshot the whole manifest's schemas (the manifest already hashes them).
 ### K-M4 Self-asserted actor attribution — **Medium**, high, **reproduced** (`scripts/repro/knownIssues.ts`): `mcpEndpoint.ts:56-68` accepts `x-workspace-actor {kind:"human", id}` from any bearer; change history then shows a human. Fix: only honour the header for the (retired) proxy path; derive actor from the credential.
