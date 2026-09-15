@@ -40,6 +40,13 @@ import {
   VISUAL_IDENTITY_BRIEF_REQUIRED_OPERATION_FIELDS
 } from "./visualIdentityBriefBuilder.js";
 import { DOCUMENT_RENDER_WORKFLOW_ID } from "./documentRenderWorkflow.js";
+import { ASSET_LOOKUP_WORKFLOW_ID } from "./assetLookupWorkflow.js";
+import {
+  buildAssetLookupBrief,
+  ASSET_LOOKUP_BRIEF_BUILDER_ID,
+  ASSET_LOOKUP_BRIEF_KEY,
+  ASSET_LOOKUP_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "../capture/assetLookupBriefBuilder.js";
 import {
   buildDocumentRenderBrief,
   DOCUMENT_RENDER_BRIEF_BUILDER_ID,
@@ -182,6 +189,29 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
         };
       }
       return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [DOCUMENT_RENDER_BRIEF_KEY]: built.brief } };
+    }
+  },
+  {
+    // A5 (runner 3c) — asset_lookup_adopt -> asset_lookup_studio. Nested brief, same posture as the
+    // three above.
+    builderId: ASSET_LOOKUP_BRIEF_BUILDER_ID,
+    workflowId: ASSET_LOOKUP_WORKFLOW_ID,
+    providesInitialInputFields: [ASSET_LOOKUP_BRIEF_KEY],
+    requiredOperationFields: [...ASSET_LOOKUP_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "asset_lookup_brief_conflict",
+    build: (input) => {
+      const built = buildAssetLookupBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.tenantId) {
+        return {
+          ok: false,
+          code: "asset_lookup_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.tenantId}". An asset lookup is never redirected to another project's artifacts; the two must name the same tenant.`
+        };
+      }
+      return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [ASSET_LOOKUP_BRIEF_KEY]: built.brief } };
     }
   }
 ];

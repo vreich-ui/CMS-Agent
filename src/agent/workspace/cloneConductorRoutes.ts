@@ -57,6 +57,8 @@ import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
 // A8 (runner 3b) — document_render_studio's own two deterministic stages, dispatched through the
 // same metadata-keyed route as A7's and A9's.
 import { buildDocumentRenderReportStep, documentRenderExecuteStep, DOCUMENT_RENDER_ARTIFACTS, type DocumentRenderBrief, type DocumentRenderExecuteEnvelope } from "../capture/documentRenderEngine.js";
+// A5 (runner 3c) — asset_lookup_studio's own two deterministic stages, on the same route.
+import { assetLookupAdoptStep, assetLookupSearchStep, ASSET_LOOKUP_ARTIFACTS, type AssetLookupBrief, type AssetLookupSearchEnvelope } from "../capture/assetLookupEngine.js";
 import type { TenantCallContext } from "../tools/tenantInvoke.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
@@ -138,7 +140,9 @@ export const CLONE_STAGES = [
   "image_revision_apply",
   "image_revision_report",
   "document_render_execute",
-  "document_render_report"
+  "document_render_report",
+  "asset_lookup_search",
+  "asset_lookup_adopt"
 ] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
@@ -633,6 +637,42 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
         if (isOutcome(execute)) return execute;
         const report = buildDocumentRenderReportStep({ execute: execute as unknown as DocumentRenderExecuteEnvelope });
         return { kind: "completed", output: report as unknown as Record<string, unknown> };
+      }
+      // A5 (runner 3c) — asset_lookup_studio's two stages: a read that resolves exactly one asset
+      // or none, then a governed write that records it — or names why it wrote nothing.
+      case "asset_lookup_search": {
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.assetLookupBrief)) {
+          return refused(
+            "asset_lookup_brief_missing",
+            "The run's initialInput carries no assetLookupBrief; asset_lookup_search needs one to know what to search for. A binding that dispatches this workflow without constructing an assetLookupBrief cannot run it — see operationWorkflowBindings.ts's asset_lookup_adopt entry."
+          );
+        }
+        const envelope = await assetLookupSearchStep(
+          { targetProjectId, brief: initial.assetLookupBrief as unknown as AssetLookupBrief },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "asset_lookup_adopt": {
+        const search = envelopeOf(run, "asset_lookup_search", ASSET_LOOKUP_ARTIFACTS.search);
+        if (isOutcome(search)) return search;
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.assetLookupBrief)) {
+          return refused(
+            "asset_lookup_brief_missing",
+            "The run's initialInput carries no assetLookupBrief; asset_lookup_adopt reads the adoption target from it and never infers one."
+          );
+        }
+        const envelope = await assetLookupAdoptStep(
+          {
+            targetProjectId,
+            search: search as unknown as AssetLookupSearchEnvelope,
+            brief: initial.assetLookupBrief as unknown as AssetLookupBrief
+          },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
       }
       // T15.10 (ADR-2026-08-25-publish-autonomy §6.2, §9) — clone_conductor's segment of the SHARED
       // publishing tail. These three stages ARE publish_payload / publication_controller /

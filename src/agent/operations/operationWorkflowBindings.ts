@@ -64,6 +64,7 @@ import { VISUAL_IDENTITY_WORKFLOW_ID } from "../workspace/visualIdentityWorkflow
 import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../workspace/pdfTemplateStudioWorkflow.js";
 import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../workspace/imageTemplateRevisionWorkflow.js";
 import { DOCUMENT_RENDER_WORKFLOW_ID } from "../workspace/documentRenderWorkflow.js";
+import { ASSET_LOOKUP_WORKFLOW_ID } from "../workspace/assetLookupWorkflow.js";
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
@@ -208,6 +209,21 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     workflowId: DOCUMENT_RENDER_WORKFLOW_ID,
     inputMapping: {},
     initialInputBuilder: declaredBuilderFor(DOCUMENT_RENDER_WORKFLOW_ID)
+  },
+  {
+    // A5 (Milestone A remainder, runner 3c) — asset_lookup_adopt -> asset_lookup_studio — BOUND.
+    // assetLookupWorkflow.ts registers the two-node graph (assetLookupNodes.ts) this operation's own
+    // two declared effects describe, one node each: search_assets (riskLevel "read") is
+    // asset_lookup_search, and adopt_asset (riskLevel "write") is asset_lookup_adopt — the same
+    // governed checkout/patch/checkin path cloneEngine.ts's restamp loop uses, not a second write
+    // path. Its requiredCapability, asset_search, already derives from search_artifacts
+    // (capabilityReadiness.ts), and its one completion criterion (exactly one asset resolved AND
+    // adopted) is reported by the adopt node from what actually happened — a search that matched
+    // several stops at a named asset_ambiguous outcome and writes nothing.
+    operationId: "asset_lookup_adopt",
+    workflowId: ASSET_LOOKUP_WORKFLOW_ID,
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(ASSET_LOOKUP_WORKFLOW_ID)
   }
 ];
 
@@ -218,12 +234,13 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // BINDINGS above (with its own evidence comment) rather than editing preflightOperation.ts. An
 // operation whose implementing task shipped an EXECUTOR instead (operationExecutorBindings.ts) is
 // also removed from here — site_inventory (A4) is the one example; see this module's header.
-export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
-  asset_lookup_adopt: "A5"
-  // document_render (A8) MOVED OUT on the Milestone A remainder: documentRenderWorkflow.ts registers
-  // document_render_studio and the BINDINGS row above binds it, which is exactly what this map's own
-  // header says to do when a task ships a real implementing workflow.
-};
+// Milestone A remainder — NOW EMPTY, and deliberately kept rather than deleted: it is the mechanism
+// preflightOperation() uses to name a concrete remedy for an operation with no implementation, and
+// the next operation added to the catalog before its workflow exists belongs here. document_render
+// (A8) and asset_lookup_adopt (A5) both moved OUT into BINDINGS above, which is exactly what this
+// map's own header says to do when a task ships a real implementing workflow. Every catalog
+// operation now has one — or, for site_inventory (A4), a registered executor.
+export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {};
 
 function assertBindingIsSound(binding: OperationWorkflowBinding): void {
   if (!listRegisteredWorkflowIds().includes(binding.workflowId)) {

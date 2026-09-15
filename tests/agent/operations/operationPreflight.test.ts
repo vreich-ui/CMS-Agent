@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import "../../../src/agent/operations/registerOperations.js";
 import { preflightOperation } from "../../../src/agent/operations/operationPreflight.js";
+import { UNBOUND_OPERATION_IMPLEMENTING_TASK } from "../../../src/agent/operations/operationWorkflowBindings.js";
 import type { TenantCapabilityFacts } from "../../../src/agent/operations/capabilityReadiness.js";
 
 // A repository double whose every method — read AND write — throws if called, plus a call log.
@@ -105,15 +106,35 @@ describe("preflightOperation", () => {
     expect(result.capabilityGaps.some((entry) => entry.reason === "not_supported")).toBe(false);
   });
 
-  it("a genuinely unbound operation (asset_lookup_adopt) reports executable:false, binding:null, executorBinding:null, and a not_supported capability gap naming the implementing task", () => {
+  // A5 (Milestone A remainder, runner 3c) — asset_lookup_adopt was the LAST genuinely unbound
+  // operation, and this test pinned the honest executable:false + "A5" remedy it reported. It is now
+  // bound to asset_lookup_studio, so what is asserted here is the two facts that replaced it: the
+  // unbound map is EMPTY (every catalog operation has a workflow binding or an executor), and this
+  // operation now reports no workflow_binding gap at all. The not_supported MECHANISM is unchanged
+  // and still reachable — it simply has no operation left to fire on, which is the point.
+  it("no catalog operation is unbound any more: the implementing-task map is empty, and asset_lookup_adopt reports a real binding rather than a not_supported gap", () => {
+    expect(UNBOUND_OPERATION_IMPLEMENTING_TASK).toEqual({});
+    // With its one capability derived available from trusted facts, the binding resolves — preflight
+    // only ever hands back a binding it would actually run (effectiveBinding).
+    const provisioned = preflightOperation(
+      { operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "logo" } },
+      capabilitySourceFor(fullyProvisionedDrLurieFacts())
+    );
+    expect(provisioned.binding).toMatchObject({
+      operationId: "asset_lookup_adopt",
+      workflowId: "asset_lookup_studio",
+      inputMapping: {},
+      initialInputBuilder: { builderId: "asset_lookup_adopt_brief_builder.v1", providesInitialInputFields: ["assetLookupBrief"], requiredOperationFields: ["tenantId", "query"] }
+    });
+    expect(provisioned.executable).toBe(true);
+
+    // ...and with NO capabilitySource nothing is assumed available: still not executable, but the
+    // reason is now a real capability gap, never "no implementation exists".
     const result = preflightOperation({ operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "logo" } });
+    expect(result.capabilityGaps.some((gap) => gap.reason === "not_supported")).toBe(false);
+    expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
     expect(result.executable).toBe(false);
-    expect(result.binding).toBeNull();
-    expect(result.executorBinding).toBeNull();
-    const gap = result.capabilityGaps.find((entry) => entry.reason === "not_supported");
-    expect(gap).toBeDefined();
-    expect(gap?.requiredBy).toBe("asset_lookup_adopt");
-    expect(gap?.remedy).toContain("A5");
+    expect(result.capabilityGaps.some((gap) => gap.capability === "asset_search")).toBe(true);
   });
 
   // R1c, flipped by the Milestone A remainder (A6): this binding used to EXIST but map only
@@ -356,12 +377,27 @@ describe("preflightOperation", () => {
       // A8 (Milestone A remainder) — document_render left this loop: it is bound to
       // document_render_studio and builder-backed, so it has no workflow_binding gap at all. Its own
       // current behaviour is asserted immediately after this loop, beside pdf_template_family's.
-      const unboundIds = ["asset_lookup_adopt"];
+      // A5 (Milestone A remainder) — this loop is EMPTY now: asset_lookup_adopt, the last operation
+      // in it, is bound to asset_lookup_studio and builder-backed. The loop is kept, over the live
+      // map rather than a hand-written list, so the day an operation is added to the catalog ahead
+      // of its workflow this test covers it without being edited.
+      const unboundIds = Object.keys(UNBOUND_OPERATION_IMPLEMENTING_TASK);
+      expect(unboundIds).toEqual([]);
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);
         expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding" && gap.reason === "not_supported")).toBe(true);
       }
+
+      // A5 — asset_lookup_adopt's own current behaviour, in place of the loop entry it left: bound,
+      // builder-backed, no workflow_binding gap, and executable once its one capability is derived
+      // available from trusted facts.
+      const assetLookup = preflightOperation(
+        { operationId: "asset_lookup_adopt", tenantId: "dr-lurie", input: { tenantId: "dr-lurie", query: "logo" } },
+        capabilitySourceFor(fullyProvisionedDrLurieFacts())
+      );
+      expect(assetLookup.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
+      expect(assetLookup.executable).toBe(true);
 
       // A8 — document_render is BOUND and builder-backed: no workflow_binding gap. Still not
       // executable on a bare {tenantId} dispatch, for the same input_schema reason as

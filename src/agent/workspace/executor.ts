@@ -53,6 +53,7 @@ import "./pdfTemplateStudioWorkflow.js";
 // image-on-every-page batch operation). See imageTemplateRevisionWorkflow.ts's own header.
 import "./imageTemplateRevisionWorkflow.js";
 import "./documentRenderWorkflow.js";
+import "./assetLookupWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";
