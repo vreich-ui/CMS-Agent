@@ -26,6 +26,8 @@ import {
 } from "../../../src/agent/planner/editorialPlanner.js";
 import { COMMISSIONED_BY } from "../../../src/agent/planner/plan.js";
 import { resetRun } from "../../../src/agent/workspace/executor.js";
+import { CommissionReservationStore } from "../../../src/agent/planner/commissioningReservations.js";
+import type { BlobStoreClient } from "../../../src/agent/repository/blobs/blobClient.js";
 
 const PROJECT_ID = "dr-lurie";
 const NOW = new Date("2026-09-14T06:00:00.000Z");
@@ -61,6 +63,36 @@ let executionRepository: MemoryExecutionRepository;
 let usageRepository: MemoryUsageRepository;
 let learningRepository: MemoryLearningRepository;
 let workspaceRepository: MemoryWorkspaceRepository;
+let reservationStore: CommissionReservationStore;
+
+/**
+ * C7 — the reservation store's transport, in memory. `yieldOnGet` forces two concurrent callers past
+ * their READ before either writes, which is the interleaving a pass lease has to survive; without it
+ * the test would serialize itself and prove nothing.
+ */
+const memoryBlobStore = (options: { yieldOnGet?: boolean } = {}): BlobStoreClient => {
+  const values = new Map<string, { data: unknown; etag: string }>();
+  let generation = 0;
+  const settle = async () => { if (options.yieldOnGet) { await Promise.resolve(); await Promise.resolve(); } };
+  return {
+    get: async (key: string) => { await settle(); return structuredClone(values.get(key)?.data ?? null); },
+    getWithMetadata: async (key: string) => {
+      await settle();
+      const current = values.get(key);
+      return current ? { data: structuredClone(current.data), etag: current.etag, metadata: {} } : null;
+    },
+    setJSON: async (key: string, data: unknown, opts?: { onlyIfNew?: boolean; onlyIfMatch?: string }) => {
+      const current = values.get(key);
+      if ((opts?.onlyIfNew && current) || (opts?.onlyIfMatch !== undefined && current?.etag !== opts.onlyIfMatch)) return { modified: false };
+      generation += 1;
+      const etag = String(generation);
+      values.set(key, { data: structuredClone(data), etag });
+      return { modified: true, etag };
+    },
+    list: async () => ({ blobs: [], directories: [] }),
+    delete: async (key: string) => { values.delete(key); }
+  } as unknown as BlobStoreClient;
+};
 
 const projectConfig = (): ProjectConnectionConfig =>
   ({
@@ -97,6 +129,7 @@ const deps = (over: PlannerDeps = {}): PlannerDeps => ({
   // No model by default — the seeds alone must be able to carry a day.
   proposeCandidates: async () => [],
   readTenant: tenantReader(),
+  reservationStore,
   ...over
 });
 
@@ -106,6 +139,7 @@ beforeEach(async () => {
   usageRepository = new MemoryUsageRepository();
   workspaceRepository = new MemoryWorkspaceRepository();
   learningRepository = new MemoryLearningRepository(workspaceRepository);
+  reservationStore = new CommissionReservationStore(memoryBlobStore(), () => NOW);
   await projectRepository.save(projectConfig());
 });
 
@@ -305,5 +339,105 @@ describe("helpers", () => {
   it("never prices a run below what one has actually been measured to cost", () => {
     const cheap = [0.2, 0.3, 0.4, 0.5].map((cost, index) => ({ runId: String(index), status: "completed", startedAt: "", costUsd: cost }));
     expect(p95RunCost(cheap)).toBe(4);
+  });
+});
+
+
+/**
+ * C7 — commissioning atomicity.
+ *
+ * The old path protected itself with a check-then-act whose own comment admitted it "does not make
+ * commissioning atomic", and read today's runs through `.catch(() => [])`, so a store that could not
+ * be read was indistinguishable from one that said nothing had run. These pin the replacements: a
+ * durable claim the store arbitrates, a pass lease that makes `runsPerDay` mean runs per day, and a
+ * refusal — never a guess — whenever the evidence is missing.
+ */
+describe("commissionForProject — C7 atomicity", () => {
+  const enabled = () => deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }) });
+
+  it("binds the reservation to the run it started", async () => {
+    const result = await commissionForProject(PROJECT_ID, { max: 1 }, enabled());
+    const outcome = (result as { commissioned: { requestId: string; runId?: string; started: boolean }[] }).commissioned[0]!;
+    expect(outcome.started).toBe(true);
+
+    const held = await reservationStore.get(PROJECT_ID, outcome.requestId);
+    expect(held?.state).toBe("started");
+    expect(held?.runId).toBe(outcome.runId);
+  });
+
+  it("refuses a request id another caller already holds, naming the holder", async () => {
+    // First pass takes the id for real.
+    const first = await commissionForProject(PROJECT_ID, { max: 1 }, enabled());
+    const requestId = (first as { commissioned: { requestId: string }[] }).commissioned[0]!.requestId;
+    // Erase the RUN but keep the reservation: the store has a claim, the run list does not show it.
+    // This is the crash-recovery shape, and the reservation is what must still refuse.
+    await resetRun((first as { commissioned: { runId?: string }[] }).commissioned[0]!.runId!).catch(() => undefined);
+
+    const second = await commissionForProject(PROJECT_ID, { max: 1 }, enabled());
+    const outcome = (second as { commissioned: { started: boolean; error?: string }[] }).commissioned[0];
+    if (outcome?.started === false) {
+      expect(outcome.error).toMatch(/already (exists|reserved)/);
+      expect(outcome.error).toContain(requestId);
+    } else {
+      // If the plan deduped it away instead, no second run was started either — which is the same
+      // guarantee reached one gate earlier.
+      expect((second as { commissioned: unknown[] }).commissioned).toHaveLength(0);
+    }
+  });
+
+  it("starts nothing when the run history cannot be read — an unreadable ledger is not an empty one", async () => {
+    // Prototype preserved: a plain spread of a class instance drops its methods, and the missing
+    // one would fail this test for a reason it is not about.
+    const blind = Object.assign(Object.create(Object.getPrototypeOf(executionRepository)), executionRepository, {
+      listRuns: async () => { throw new Error("bucket unreachable"); },
+      listRunsPage: async () => { throw new Error("bucket unreachable"); }
+    }) as MemoryExecutionRepository;
+
+    const result = await commissionForProject(PROJECT_ID, { max: 1 }, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }), executionRepository: blind }));
+    expect((result as { reason?: string }).reason).toBe("run_history_unreadable");
+    expect((result as { commissioned: unknown[] }).commissioned).toHaveLength(0);
+    // The caps would have read runsAlreadyToday:0 / spentTodayUsd:0 — a whole fresh day's budget
+    // authorized by the one call that could not see what today had already cost.
+    expect((result as { detail: string }).detail).toContain("bucket unreachable");
+  });
+
+  it("refuses the START when the ledger fails only at the last moment", async () => {
+    // Planning reads the ledger through `listRunsPage` and is left working; only the last-moment
+    // collision read (`listRuns`, immediately before startDryRun) fails. So this tenant HAS a plan,
+    // a budget and a slot — and still starts nothing, because the one read that could have shown a
+    // duplicate did not happen.
+    const flaky = Object.assign(Object.create(Object.getPrototypeOf(executionRepository)), executionRepository, {
+      listRuns: async () => { throw new Error("ledger timeout"); }
+    }) as MemoryExecutionRepository;
+
+    const result = await commissionForProject(PROJECT_ID, { max: 1 }, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }), executionRepository: flaky }));
+    const outcome = (result as { commissioned: { started: boolean; error?: string }[] }).commissioned[0]!;
+    expect(outcome.started).toBe(false);
+    expect(outcome.error).toContain("could not be read");
+    expect(outcome.error).toContain("ledger timeout");
+  });
+
+  it("lets only one of two concurrent passes commission, and tells the other why", async () => {
+    // One shared store, and a transport that forces both callers to read the lease before either
+    // writes it — a process-local mutex would pass this test by accident; a durable lease passes it
+    // for the reason it exists.
+    reservationStore = new CommissionReservationStore(memoryBlobStore({ yieldOnGet: true }), () => NOW);
+
+    const [a, b] = await Promise.all([
+      commissionForProject(PROJECT_ID, { max: 1, holder: "job" }, enabled()),
+      commissionForProject(PROJECT_ID, { max: 1, holder: "operator" }, enabled())
+    ]);
+
+    const refused = [a, b].filter((r) => (r as { reason?: string }).reason === "pass_in_flight");
+    const ran = [a, b].filter((r) => ((r as { commissioned?: unknown[] }).commissioned ?? []).length > 0);
+    expect(refused).toHaveLength(1);
+    expect(ran).toHaveLength(1);
+    expect((refused[0] as { detail: string }).detail).toContain("already in flight");
+  });
+
+  it("releases the pass lease afterwards, so the next pass is not locked out", async () => {
+    await commissionForProject(PROJECT_ID, { max: 1 }, enabled());
+    const lease = await reservationStore.acquirePass(PROJECT_ID, "next");
+    expect(lease.ok).toBe(true);
   });
 });
