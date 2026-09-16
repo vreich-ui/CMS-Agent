@@ -86,6 +86,12 @@ import {
   genesisArtifactWaysOut,
   missingGenesisArtifacts
 } from "./genesisPolicy.js";
+import {
+  GENESIS_SCAFFOLD_GITHUB_TOKEN_ENV,
+  advanceGenesisScaffold,
+  genesisScaffoldConfig,
+  scaffoldArtifactsDocument
+} from "./genesisScaffoldDispatch.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1296,6 +1302,13 @@ export function buildGenesisHumanChecklist(input: {
   netlifySiteName: string;
   envPrefix: string;
   scaffoldExecuted: boolean;
+  // G2 — set when the scaffold was handed to CI rather than run from a mounted checkout. Two facts,
+  // because they are two different moments and the checklist says different things at each:
+  //   scaffoldDispatched — a job is in flight; the tree is not in the repo yet
+  //   scaffoldViaCi      — the tree IS in the repo, and CI is what put it there, commit included
+  // Conflating them printed "commit the scaffolded tree yourself" for a commit CI had already made.
+  scaffoldDispatched?: boolean;
+  scaffoldViaCi?: boolean;
   netlifyMode: GenesisNetlifyMode;
   // The endpoint genesis derived and stored on the registry record. Present = the endpoint half of
   // the deploy-side connection is DONE and the checklist item shrinks to the token alone.
@@ -1371,11 +1384,15 @@ export function buildGenesisHumanChecklist(input: {
   if (!input.scaffoldExecuted) {
     items.push({
       id: "scaffold_site_tree",
-      title: `Scaffold sites/${slug}/ in the platform repo (no platform checkout is mounted for this deployment)`,
-      detail: `Runbook §1: "node packages/core/cli/create-site.mjs --name ${slug} --dry-run   # review the plan first" then "node packages/core/cli/create-site.mjs --name ${slug}". Then: run npm install at the repo root and COMMIT package-lock.json (a new site is a new npm workspace; without it every npm ci fails). Alternatively set ${PLATFORM_REPO_ROOT_ENV} on this deployment and re-run site.duplicate to automate this step.`,
+      title: input.scaffoldDispatched
+        ? `Wait for the genesis-scaffold CI job to land sites/${slug}/, then re-run the identical site.duplicate call`
+        : `Scaffold sites/${slug}/ in the platform repo (no platform checkout is mounted for this deployment)`,
+      detail: input.scaffoldDispatched
+        ? `Genesis dispatched genesis-scaffold.yaml on the platform repo. That job runs create-site.mjs, regenerates the root lockfile and the inventory, and commits sites/${slug}/ to main under a charter its own CI enforces. Nothing to type: watch the run, then re-run the identical site.duplicate call — genesis reads before it writes, so the re-run adopts the tree and completes every remaining step. If the job FAILED, this item's ledger entry names why; re-running will not fix it.`
+        : `Runbook §1: "node packages/core/cli/create-site.mjs --name ${slug} --dry-run   # review the plan first" then "node packages/core/cli/create-site.mjs --name ${slug}". Then: run npm install at the repo root and COMMIT package-lock.json (a new site is a new npm workspace; without it every npm ci fails). Alternatively set ${PLATFORM_REPO_ROOT_ENV} or ${GENESIS_SCAFFOLD_GITHUB_TOKEN_ENV} on this deployment and re-run site.duplicate to automate this step.`,
       source: "site-provisioning-runbook.md §1"
     });
-  } else {
+  } else if (!input.scaffoldViaCi) {
     items.push({
       id: "commit_scaffold",
       title: `Commit the scaffolded sites/${slug}/ tree + package-lock.json`,
@@ -1622,6 +1639,9 @@ export type SiteGenesisDeps = {
   env?: NodeJS.ProcessEnv;
   netlifyFetch?: NetlifyFetch;
   credentialFetch?: NetlifyFetch;
+  // G2 — the transport the CI scaffold dispatch uses, injected so a test can exercise the probe and
+  // the dispatch without reaching GitHub. Production leaves it unset.
+  scaffoldFetch?: typeof fetch;
   // A2.2 — the transport Secret Manager reads use, injected so a test can exercise the custody-repair
   // path without a Google metadata server. Production leaves it unset and the module uses global fetch.
   secretFetch?: typeof fetch;
@@ -1929,6 +1949,19 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     ...(input as unknown as Record<string, unknown>)
   };
 
+  // G2: the same artifact bodies the local scaffold passes as CLI flags, as the one document the CI
+  // job unpacks. Derived from the SAME input, so the two scaffold paths cannot seed a tenant
+  // differently.
+  // Resolved in EVERY mode. Suppressing it in dry-run made the plan report the human path for a
+  // mint that would in fact dispatch — a dry run that describes a different run is worse than none.
+  // What dry-run suppresses is the dispatch itself, at the call below.
+  const scaffoldDispatch = genesisScaffoldConfig(env);
+  const scaffoldArtifacts = scaffoldArtifactsDocument(scaffoldArtifactInput);
+  /** Set when the CI path started (or found) a job, so the checklist describes a job in flight. */
+  let scaffoldDispatched = false;
+  /** Set when the CI path found the tree already committed — so no commit item is listed. */
+  let scaffoldViaCi = false;
+
   // 1. Scaffold (filesystem, via the platform seam) — when a checkout is mounted.
   let scaffoldExecuted = false;
   // C3: whether platform's create-site reported the tokens-derived house standard it mints (P6). Read
@@ -1961,11 +1994,63 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
       at: now(),
       data: { mode: scaffold.mode, plannedFiles: scaffold.plannedFiles, ids: scaffold.ids, alreadyScaffolded: scaffold.alreadyScaffolded ?? null }
     });
+  } else if (scaffoldDispatch && mode !== "dry_run") {
+    // G2 — no checkout, but CI has one. The platform repo's genesis-scaffold.yaml runs create-site
+    // against a real working tree, rebuilds the root lockfile (a new site is a new npm workspace)
+    // and commits, under a charter its own CI enforces. This is a dispatch and a probe, not a wait:
+    // a mint is resumable, so the job landing and the mint completing are two calls, not one blocked
+    // one.
+    const step = await advanceGenesisScaffold(
+      scaffoldDispatch,
+      {
+        slug,
+        // EXACTLY what the mounted-checkout path passes, and nothing more. The two paths must seed
+        // one tenant identically: passing --brand-name and --niche here but not there gave the same
+        // mint a different site-identity brand name and a different strategy seed depending on
+        // which path happened to run.
+        ...(scaffoldArtifacts ? { artifacts: scaffoldArtifacts } : {})
+      },
+      { ...(deps.scaffoldFetch ? { fetchImpl: deps.scaffoldFetch } : {}) }
+    );
+    scaffoldExecuted = step.kind === "present";
+    scaffoldDispatched = step.kind === "dispatched" || step.kind === "running" || step.kind === "failed";
+    scaffoldViaCi = step.kind === "present";
+    if (step.kind === "present") {
+      ledger.push({
+        step: "scaffold",
+        kind: "executed",
+        detail: `sites/${slug}/ is already in ${scaffoldDispatch.repository}@${scaffoldDispatch.ref}; adopted rather than re-scaffolded. (Genesis reads before it writes — this is what makes a resumed mint safe.)`,
+        at: now(),
+        data: { repository: scaffoldDispatch.repository, adopted: true }
+      });
+    } else if (step.kind === "unavailable") {
+      ledger.push({ step: "scaffold", kind: "requires_human", detail: `The scaffold could not be dispatched to CI: ${step.reason}. Falling back to the human step.`, at: now() });
+    } else {
+      // dispatched / running / failed. `requires_human` is honest for all three: the tenant tree is
+      // not in the repo yet, so this mint is not finished, and the ledger says what to do next.
+      ledger.push({
+        step: "scaffold",
+        kind: "requires_human",
+        detail: step.detail,
+        at: now(),
+        data: { dispatch: step.kind, repository: scaffoldDispatch.repository, ...(step.kind === "failed" && step.refusal ? { refusal: step.refusal } : {}) }
+      });
+    }
+  } else if (scaffoldDispatch) {
+    // Configured, but this is a dry run. The plan has to name the dispatch it would make, or a
+    // dry run describes a different run than the live one it is supposed to preview.
+    ledger.push({
+      step: "scaffold",
+      kind: "dry_run",
+      detail: `DRY-RUN: would probe ${scaffoldDispatch.repository}@${scaffoldDispatch.ref} for sites/${slug}/ and, finding none, dispatch ${scaffoldDispatch.workflow} to scaffold it, regenerate the root lockfile and the inventory, and commit them. Genesis is resumable: the live mint then completes on a re-run once that job lands.`,
+      at: now(),
+      data: { repository: scaffoldDispatch.repository, workflow: scaffoldDispatch.workflow }
+    });
   } else {
     ledger.push({
       step: "scaffold",
       kind: "requires_human",
-      detail: `No platform checkout is mounted (${PLATFORM_REPO_ROOT_ENV} unset): the repo scaffold cannot run from this deployment and is surfaced on the human checklist — never silently skipped.`,
+      detail: `No platform checkout is mounted (${PLATFORM_REPO_ROOT_ENV} unset) and no CI scaffold dispatch is configured (${GENESIS_SCAFFOLD_GITHUB_TOKEN_ENV} unset): the repo scaffold cannot run from this deployment and is surfaced on the human checklist — never silently skipped.`,
       at: now()
     });
   }
@@ -2843,6 +2928,8 @@ export async function runSiteGenesis(input: SiteGenesisInput, deps: SiteGenesisD
     netlifySiteName,
     envPrefix,
     scaffoldExecuted,
+    scaffoldDispatched,
+    scaffoldViaCi,
     netlifyMode: mode,
     registeredMcpEndpoint: mcpEndpoint,
     // A key the new site HAS, whether genesis copied it or the account already supplied it (C-11).

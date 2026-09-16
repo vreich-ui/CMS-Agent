@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runSiteGenesis, type GenesisAction, type GenesisHumanChecklistItem } from "../../../src/agent/capture/siteGenesis.js";
+import { buildGenesisHumanChecklist, runSiteGenesis, type GenesisAction, type GenesisHumanChecklistItem } from "../../../src/agent/capture/siteGenesis.js";
 import { GENESIS_TENANT_DEFINITION_VERSION } from "../../../src/agent/projects/genesisTenantProfile.js";
 import type { ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 import type { ProjectRepository } from "../../../src/agent/repository/interfaces/ProjectRepository.js";
@@ -236,5 +236,57 @@ describe("G7 — a minted tenant is born with a DEPLOY binding", () => {
     // deploy binding had no owner in either column until now.
     const { result } = await genesis();
     expect(result.humanChecklist.find((entry) => entry.id === "github_repo_binding")!.title).toContain("CONTENT repo");
+  });
+});
+
+describe("G2 — the scaffold's two moments say different things", () => {
+  // buildGenesisHumanChecklist is exported and pure, which is the cheap way to pin the wiring that
+  // an operator actually reads. The defect this replaces: `scaffoldExecuted` and
+  // `scaffoldDispatched` are mutually exclusive, and the commit item was reachable only when the
+  // tree was ALREADY committed — so every successfully resumed CI mint ended by telling the
+  // operator to make a commit that CI had already made, and the "dispatched" wording was dead code.
+  const checklist = (extra: Record<string, unknown>) =>
+    buildGenesisHumanChecklist({ slug: "acme", netlifySiteName: "acme-site", envPrefix: "ACME", scaffoldExecuted: false, netlifyMode: "live", ...extra } as never);
+
+  const find = (items: GenesisHumanChecklistItem[], id: string) => items.find((entry) => entry.id === id);
+
+  it("says WAIT, not TYPE, while a CI job is in flight", async () => {
+    const items = checklist({ scaffoldDispatched: true });
+    expect(find(items, "scaffold_site_tree")!.title).toContain("Wait for the genesis-scaffold CI job");
+    expect(find(items, "scaffold_site_tree")!.detail).toContain("Nothing to type");
+  });
+
+  it("lists NO commit item once CI has scaffolded, because CI committed", async () => {
+    const items = checklist({ scaffoldExecuted: true, scaffoldViaCi: true });
+    expect(find(items, "scaffold_site_tree")).toBeUndefined();
+    expect(find(items, "commit_scaffold")).toBeUndefined();
+  });
+
+  it("still asks for the commit when a MOUNTED CHECKOUT scaffolded — that path commits nothing", async () => {
+    const items = checklist({ scaffoldExecuted: true });
+    expect(find(items, "commit_scaffold")!.title).toContain("Commit the scaffolded");
+  });
+
+  it("names both automation routes when neither ran", async () => {
+    expect(find(checklist({}), "scaffold_site_tree")!.detail).toContain("GENESIS_SCAFFOLD_GITHUB_TOKEN");
+  });
+});
+
+describe("G2 — a dry run describes the run it is previewing", () => {
+  it("names the dispatch it would make, instead of claiming no dispatch is configured", async () => {
+    // Suppressing the config in dry-run made the plan report the human path for a mint that would in
+    // fact dispatch to CI. A dry run that describes a different run than the live one is worse than
+    // no dry run at all.
+    const { result } = await genesis({}, baseEnv({ GENESIS_SCAFFOLD_GITHUB_TOKEN: "gh-token" }));
+    const scaffold = step(result.ledger, "scaffold")!;
+    expect(scaffold.kind).toBe("dry_run");
+    expect(scaffold.detail).toContain("genesis-scaffold.yaml");
+    expect(scaffold.detail).toContain("vreich-ui/platform");
+  });
+
+  it("still reports the human step when nothing is configured", async () => {
+    const scaffold = step((await genesis()).result.ledger, "scaffold")!;
+    expect(scaffold.kind).toBe("requires_human");
+    expect(scaffold.detail).toContain("GENESIS_SCAFFOLD_GITHUB_TOKEN");
   });
 });
