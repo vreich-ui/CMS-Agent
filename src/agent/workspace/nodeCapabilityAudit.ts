@@ -75,7 +75,7 @@ const HIGH_RISK: ReadonlySet<RouteRequiredTool["risk"]> = new Set(["publish", "a
 
 // The only part of a project record this audit reads. Narrowed rather than taking the whole config so
 // the audit stays pure and a caller can pass a fixture without building a connection record.
-export type ProjectPolicyView = Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies"> & { projectId: string };
+export type ProjectPolicyView = Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies" | "operatorToolPolicies"> & { projectId: string };
 export type { ToolPermission };
 
 // Pure and total: any node, including one carrying metadata this build has never seen, yields a

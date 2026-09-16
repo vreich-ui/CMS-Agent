@@ -386,6 +386,24 @@ export type ProjectConnectionConfig = {
   defaultToolPolicy?: ToolPermission;
   // Explicit per-tool overrides. Highest precedence — wins over allowedTools and defaultToolPolicy.
   toolPolicies?: Record<string, ToolPermission>;
+  // OPERATOR OVERLAY (2026-09-16). Per-tool decisions an OPERATOR made for THIS tenant, held in their
+  // own field because `toolPolicies` above is a MANAGED map, owned by code:
+  // `migrateDefaultProjectConfig` replaces it wholesale with the code definition (the five code
+  // projects) or with the genesis profile (every minted tenant) on the first read after a
+  // definitionVersion bump, and `planGenesisReconcile` patches it wholesale too. Any verb an operator
+  // added beyond that baseline was therefore reverted by a later read or reconcile, silently and with
+  // an ok:true on the write that made it — `zilberman` + `site_apply_brand_imagery` is the case that
+  // found it, and the same hole was open on every tenant, code-defined and minted alike.
+  //
+  // This field is never written by a migration or a reconcile, and it outranks everything below it, so
+  // an operator decision is durable BY CONSTRUCTION rather than by luck of the version number.
+  //
+  // DEVIATIONS ONLY. `updateProject` derives it from any toolPolicies write by diffing the written map
+  // against the managed baseline, so the Access page, project.update and any future surface all pin
+  // automatically without knowing this field exists; writing a verb back to its baseline value drops it
+  // from the overlay again. A profile that later GRANTS a verb the operator never touched still takes
+  // effect — only the verbs an operator actually decided are pinned.
+  operatorToolPolicies?: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
   // Optional only to represent legacy persisted records. Callers must use
   // resolveProjectCapturePolicy(), which denies all THIRD-PARTY capture when it is absent (the
@@ -419,14 +437,17 @@ export type ProjectConnectionConfig = {
 };
 
 // Resolve the effective permission for a tool. Precedence, highest first:
-//   1. toolPolicies[tool]  (explicit override)
-//   2. allowedTools includes tool  -> "allowed"  (legacy allow-list)
-//   3. defaultToolPolicy   (client-wide fallback)
-//   4. "blocked"           (deny-all default)
+//   1. operatorToolPolicies[tool]  (durable operator decision; survives every managed rewrite)
+//   2. toolPolicies[tool]  (managed override: code definition or genesis profile)
+//   3. allowedTools includes tool  -> "allowed"  (legacy allow-list)
+//   4. defaultToolPolicy   (client-wide fallback)
+//   5. "blocked"           (deny-all default)
 export function effectiveToolPermission(
-  config: Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies">,
+  config: Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies" | "operatorToolPolicies">,
   toolName: string
 ): ToolPermission {
+  const pinned = config.operatorToolPolicies?.[toolName];
+  if (pinned) return pinned;
   const explicit = config.toolPolicies?.[toolName];
   if (explicit) return explicit;
   if (config.allowedTools.includes(toolName)) return "allowed";
@@ -437,11 +458,14 @@ export function effectiveToolPermission(
 // toolPolicies overriding). Used by the safe summary so callers can render effective state without
 // re-deriving precedence. Does not include the client-wide default — that travels as defaultToolPolicy.
 export function toToolPolicyMap(
-  config: Pick<ProjectConnectionConfig, "allowedTools" | "toolPolicies">
+  config: Pick<ProjectConnectionConfig, "allowedTools" | "toolPolicies" | "operatorToolPolicies">
 ): Record<string, ToolPermission> {
   const map: Record<string, ToolPermission> = {};
   for (const tool of config.allowedTools) map[tool] = "allowed";
   for (const [tool, permission] of Object.entries(config.toolPolicies ?? {})) map[tool] = permission;
+  // The operator overlay is folded in LAST so the flattened map every surface renders (Access page,
+  // project.get, the conductor's projectToolPolicy snapshot) agrees with effectiveToolPermission.
+  for (const [tool, permission] of Object.entries(config.operatorToolPolicies ?? {})) map[tool] = permission;
   return map;
 }
 
@@ -486,6 +510,10 @@ export type ProjectSummary = {
   // tool list (project.list_tools) these let the UI render every tool's effective permission.
   defaultToolPolicy: ToolPermission;
   toolPolicies: Record<string, ToolPermission>;
+  // The durable operator overlay, reported separately from the flattened map above so an operator can
+  // see WHICH verbs are pinned by decision rather than inherited from the managed baseline. Empty
+  // object = nothing pinned.
+  operatorToolPolicies: Record<string, ToolPermission>;
   contentContract: ProjectContentContract;
   capturePolicy: ProjectCapturePolicy;
   publishingPolicy: ProjectPublishingPolicy;

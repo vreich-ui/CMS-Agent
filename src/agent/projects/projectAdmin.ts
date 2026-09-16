@@ -35,6 +35,7 @@ import { defaultProjectConfigs } from "./defaultMigration.js";
 import { toProjectSummary } from "./projectRegistry.js";
 import { genesisSiteNameSources } from "./genesisSiteName.js";
 import { DEFAULT_PROJECT_CAPTURE_POLICY, projectAuthModes, projectUpdateStatuses, toolPermissions, type ClientSiteBinding, type ProjectCapturePolicy, type ProjectConnectionConfig, type ProjectObjectDialect, type ProjectPublishingPolicy, type ProjectStatus, type ProjectSummary, type ProjectTrackingBinding } from "./projectTypes.js";
+import { deriveOperatorToolPolicies } from "./defaultMigration.js";
 
 // Lowercase-kebab project ids ("acme-daily"), matching the existing "dr-lurie" convention.
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -219,6 +220,12 @@ export const projectUpdateSchema = z.object({
   // defaultToolPolicy sets the client-wide fallback. Both are safe metadata (tool names, not secrets).
   defaultToolPolicy: toolPermissionSchema.optional(),
   toolPolicies: toolPoliciesSchema.optional(),
+  // OPERATOR OVERLAY (2026-09-16). Normally nobody sends this: updateProject DERIVES it from any
+  // toolPolicies/defaultToolPolicy/allowedTools write, so a caller that knows nothing about the field
+  // still gets a durable decision. Sent explicitly it replaces the overlay wholesale, and null clears
+  // it — the way to hand a tenant back to the managed baseline (its next read or reconcile then
+  // governs those verbs again).
+  operatorToolPolicies: toolPoliciesSchema.nullable().optional(),
   contentContract: z.object({ contentContract: z.string().min(1) }).strict().optional(),
   capturePolicy: capturePolicySchema.optional(),
   status: z.enum(projectUpdateStatuses).optional(),
@@ -486,6 +493,19 @@ export async function updateProject(repository: ProjectRepository, projectId: st
   if (patch.objectDialect !== undefined) {
     if (patch.objectDialect === null) delete next.objectDialect;
     else next.objectDialect = mergeObjectDialect(projectId, existing.objectDialect, patch.objectDialect);
+  }
+  // OPERATOR OVERLAY (2026-09-16) — the write half of the durability fix. An explicit overlay wins;
+  // otherwise any write that touches the managed policy re-derives it, so an operator who grants a
+  // verb through the Access page or through project.update gets a pin without asking for one, and one
+  // who sets a verb back to its baseline value loses the pin the same way. A patch that touches
+  // neither leaves the overlay exactly as it was.
+  if (patch.operatorToolPolicies !== undefined) {
+    if (patch.operatorToolPolicies === null || Object.keys(patch.operatorToolPolicies).length === 0) delete next.operatorToolPolicies;
+    else next.operatorToolPolicies = { ...patch.operatorToolPolicies };
+  } else if (patch.toolPolicies !== undefined || patch.defaultToolPolicy !== undefined || patch.allowedTools !== undefined) {
+    const derived = deriveOperatorToolPolicies(next);
+    if (Object.keys(derived).length > 0) next.operatorToolPolicies = derived;
+    else delete next.operatorToolPolicies;
   }
   requireTokenSourceForBearer(next.authMode, next.tokenEnvVar, next.tokenSecretRef);
   requireCredentialFreeEndpoint(next.mcpEndpoint);

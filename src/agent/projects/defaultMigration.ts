@@ -1,6 +1,7 @@
 import { defaultProjectConnections } from "./defaultProjects.js";
 import { GENESIS_TENANT_DEFINITION_VERSION, genesisTenantProfile, isGenesisMintedProject } from "./genesisTenantProfile.js";
-import type { ProjectConnectionConfig } from "./projectTypes.js";
+import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js";
+import { effectiveToolPermission } from "./projectTypes.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -27,7 +28,74 @@ export function migrateDefaultProjectConfig(config: ProjectConnectionConfig): { 
     return { config: clone(config), changed: false };
   }
 
-  return { config: clone(defaultConfig), changed: true };
+  // OPERATOR OVERLAY (2026-09-16). The code-project branch swaps in the WHOLE default record, which
+  // is right for everything a code definition owns and wrong for the one thing it does not: a decision
+  // an operator made about this tenant. Carried across explicitly, because there is nothing else here
+  // to carry it — this line is why a hand-granted verb on dr-lurie or platform now survives the next
+  // definitionVersion bump instead of disappearing on the read that follows it.
+  const preserved = config.operatorToolPolicies && Object.keys(config.operatorToolPolicies).length > 0
+    ? { operatorToolPolicies: clone(config.operatorToolPolicies) }
+    : {};
+  return { config: { ...clone(defaultConfig), ...preserved }, changed: true };
+}
+
+/**
+ * The tool policy this tenant's record is MANAGED to — what a migration or a reconcile would put
+ * there if nobody had touched it. Code projects: their own definition. Genesis-minted tenants: the
+ * genesis profile. Anything else (a hand-registered project no code owns): its own current policy,
+ * since nothing rewrites it and therefore nothing can erase an edit to it.
+ *
+ * This is the reference `deriveOperatorToolPolicies` diffs against, so "operator decision" means
+ * exactly "differs from what code would have written", with no second list to keep in step.
+ */
+export function managedPolicyBaseline(
+  config: ProjectConnectionConfig
+): Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies"> {
+  const defaultConfig = defaultProjectsById.get(config.projectId);
+  if (defaultConfig) {
+    return {
+      allowedTools: [...defaultConfig.allowedTools],
+      defaultToolPolicy: defaultConfig.defaultToolPolicy,
+      toolPolicies: { ...(defaultConfig.toolPolicies ?? {}) }
+    };
+  }
+  if (isGenesisMintedProject(config)) {
+    const profile = genesisTenantProfile();
+    return { allowedTools: [], defaultToolPolicy: profile.defaultToolPolicy, toolPolicies: { ...profile.toolPolicies } };
+  }
+  return {
+    allowedTools: [...config.allowedTools],
+    defaultToolPolicy: config.defaultToolPolicy,
+    toolPolicies: { ...(config.toolPolicies ?? {}) }
+  };
+}
+
+/**
+ * The operator overlay implied by a record's CURRENT managed map: every verb whose effective
+ * permission differs from the managed baseline's answer for that verb.
+ *
+ * DELIBERATELY ADDITIONS-AND-CHANGES ONLY. A verb the baseline names and the written map OMITS is not
+ * pinned: `toolPolicies` replaces wholesale, so an omission is as often a caller sending a partial map
+ * (the failure mode `requirePatchField` exists for) as it is a decision — and pinning it would make
+ * that accident permanent and put the profile's own later grants permanently out of reach. An operator
+ * who means "never allow this here" says so by naming the verb "blocked", which IS a difference and IS
+ * pinned.
+ */
+export function deriveOperatorToolPolicies(config: ProjectConnectionConfig): Record<string, ToolPermission> {
+  const baseline = managedPolicyBaseline(config);
+  // Start from the overlay the record already carries, and let the WRITTEN map add to it or release
+  // from it. Recomputing from scratch instead would hand `genesis:reconcile` the erasure this whole
+  // change exists to remove: reconcile's patch IS the baseline map, so a from-scratch derivation would
+  // find no deviations and drop every pin on the very call meant to leave them alone.
+  const overlay: Record<string, ToolPermission> = { ...(config.operatorToolPolicies ?? {}) };
+  for (const [verb, permission] of Object.entries(config.toolPolicies ?? {})) {
+    // Named and different -> an operator decision, pinned. Named and identical to the baseline -> the
+    // operator has handed the verb back to the managed policy, so the pin is released. Not named at
+    // all -> untouched, because an omission from a wholesale map is not a decision (see above).
+    if (effectiveToolPermission(baseline, verb) !== permission) overlay[verb] = permission;
+    else delete overlay[verb];
+  }
+  return overlay;
 }
 
 export function defaultProjectConfigs(): ProjectConnectionConfig[] {
