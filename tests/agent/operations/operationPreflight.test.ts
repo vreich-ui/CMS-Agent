@@ -112,11 +112,14 @@ describe("preflightOperation", () => {
   // unbound map is EMPTY (every catalog operation has a workflow binding or an executor), and this
   // operation now reports no workflow_binding gap at all. The not_supported MECHANISM is unchanged
   // and still reachable — it simply has no operation left to fire on, which is the point.
-  it("the implementing-task map holds exactly the operations registered ahead of their implementation (T3's image_annotation), and asset_lookup_adopt reports a real binding rather than a not_supported gap", () => {
-    // T3 (2026-09-16 annotate-bridge plan) — image_annotation is registered as a CONTRACT ahead of
-    // the executor T4 will ship, so it is the one entry here. Every A-milestone operation is still
-    // bound; this map is again doing the job its own header describes.
-    expect(UNBOUND_OPERATION_IMPLEMENTING_TASK).toEqual({ image_annotation: "T4 of the 2026-09-16 annotate-bridge plan" });
+  it("the implementing-task map is empty again — every registered operation has a real workflow binding or executor — and asset_lookup_adopt reports a real binding rather than a not_supported gap", () => {
+    // T3 (2026-09-16 annotate-bridge plan) put image_annotation here, registered as a CONTRACT ahead
+    // of its implementation; T5 shipped that implementation (image_annotation_studio) and moved the
+    // id OUT into the binding table, which is exactly the procedure the map's own header prescribes.
+    // The map is deliberately KEPT, empty: it is how preflight names a concrete remedy for the next
+    // operation registered ahead of its own workflow, and the loop further down runs over it live so
+    // that day is covered without this file being edited again.
+    expect(UNBOUND_OPERATION_IMPLEMENTING_TASK).toEqual({});
     // With its one capability derived available from trusted facts, the binding resolves — preflight
     // only ever hands back a binding it would actually run (effectiveBinding).
     const provisioned = preflightOperation(
@@ -384,11 +387,13 @@ describe("preflightOperation", () => {
       // it, is bound to asset_lookup_studio and builder-backed. The loop was kept, over the live map
       // rather than a hand-written list, so the day an operation is added to the catalog ahead of
       // its workflow this test would cover it without being edited. T3 is that day, and it did.
-      // T3 — the loop is live again, over the map rather than a hand-written list: image_annotation
-      // is registered ahead of its implementation, so it reports the honest executable:false plus a
-      // not_supported workflow_binding gap naming T4.
+      // T3 — the loop went live again over the map (rather than a hand-written list) when
+      // image_annotation was registered ahead of its implementation. T5 then shipped that
+      // implementation, so the map — and therefore this loop — is EMPTY once more. It is kept for the
+      // same reason A5 kept it: the next operation registered ahead of its workflow is covered here
+      // without this file being edited, which is precisely what happened on T3.
       const unboundIds = Object.keys(UNBOUND_OPERATION_IMPLEMENTING_TASK);
-      expect(unboundIds).toEqual(["image_annotation"]);
+      expect(unboundIds).toEqual([]);
       for (const operationId of unboundIds) {
         const result = preflightOperation({ operationId, tenantId: "dr-lurie", input: { tenantId: "dr-lurie" } });
         expect(result.executable).toBe(false);
