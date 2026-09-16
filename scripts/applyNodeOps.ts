@@ -23,7 +23,8 @@
  *
  *   - Each op is a level-3 heading: "### <n>. `<tool>` — node `<nodeId>`", tools being one of
  *     workspace_update_node_input_schema, workspace_update_node_output_schema,
- *     workspace_update_node_prompt, workspace_update_node_metadata, workspace_create_node.
+ *     workspace_update_node_prompt, workspace_update_node_metadata,
+ *     workspace_update_node_model_config, workspace_create_node.
  *   - The op's payload is the LAST fenced code block (```json or ```text) before the next heading.
  *     "Last" matters: two ops (11 and 12 in the brand-imagery doc) print a short illustrative "diff"
  *     block first and the actual whole-field replacement last, because workspace.update_node_prompt
@@ -34,6 +35,12 @@
  *   - workspace_update_node_prompt: the block's lines, joined with "\n", ARE the `prompt` argument
  *     value (plain text, one policy paragraph per line — this is how the doc itself writes a prompt
  *     that is stored as a single string with embedded "\n"s).
+ *   - workspace_update_node_model_config: the block is EITHER the whole call argument
+ *     ({"id": "<nodeId>", "patch": {"modelConfig": {...}}}, the shape
+ *     docs/plan/2026-09-budget-node-ops.md prints) OR the bare modelConfig patch object. This op
+ *     MERGES (the verb does): keys the patch omits are preserved, nested plain objects merge key by
+ *     key, anything else replaces. See planApply's model_config branch for why the chain-drift rule
+ *     that governs every other op cannot apply to a merging one.
  *   - workspace_update_node_metadata: the block IS `patch.metadata` (the doc's own table: "The
  *     metadata object goes under `patch.metadata`" — the printed block is that inner object, not the
  *     `{patch:{metadata:...}}` wrapper).
@@ -95,7 +102,7 @@ import type { WorkspaceMutationMeta } from "../src/agent/mcp/workspace/store.js"
 // Parsing
 // ---------------------------------------------------------------------------------------------
 
-export type OpKind = "input_schema" | "output_schema" | "prompt" | "metadata" | "create_node";
+export type OpKind = "input_schema" | "output_schema" | "prompt" | "metadata" | "model_config" | "create_node";
 
 export type ParsedOp = {
   index: number;
@@ -105,6 +112,7 @@ export type ParsedOp = {
   schema?: unknown; // input_schema | output_schema
   prompt?: string; // prompt
   metadataPatch?: Record<string, unknown>; // metadata
+  modelConfigPatch?: Record<string, unknown>; // model_config — the PATCH, not the merged result
   node?: WorkspaceNode; // create_node
 };
 
@@ -113,6 +121,7 @@ const TOOL_KIND: Record<string, OpKind> = {
   workspace_update_node_output_schema: "output_schema",
   workspace_update_node_prompt: "prompt",
   workspace_update_node_metadata: "metadata",
+  workspace_update_node_model_config: "model_config",
   workspace_create_node: "create_node"
 };
 
@@ -187,6 +196,25 @@ export const parseOpsDoc = (markdown: string): ParsedOp[] => {
         op.node = wrapper.node;
       } else if (kind === "metadata") {
         op.metadataPatch = parsed as Record<string, unknown>;
+      } else if (kind === "model_config") {
+        // TWO ACCEPTED SHAPES, because the docs in docs/plan/ write this op both ways and neither is
+        // wrong: docs/plan/2026-09-budget-node-ops.md prints the WHOLE call argument
+        // ({"id": ..., "patch": {"modelConfig": {...}}}), while the metadata ops one heading up print
+        // only the inner object. Accepting the wrapper when it is there — and checking its `id`
+        // against the heading, the same check create_node already makes — is strictly safer than
+        // demanding one shape: the alternative is a doc whose block parses as a modelConfig with an
+        // `id` and a `patch` key in it, silently writing two junk keys onto the node.
+        const wrapper = parsed as { id?: unknown; patch?: { modelConfig?: unknown } };
+        const wrapped = wrapper && typeof wrapper === "object" && wrapper.patch && typeof wrapper.patch === "object" && "modelConfig" in (wrapper.patch as object);
+        if (wrapped) {
+          if (typeof wrapper.id === "string" && wrapper.id !== heading.nodeId) throw new Error(`Op ${heading.index}: heading names node "${heading.nodeId}" but the payload's id is "${String(wrapper.id)}".`);
+          const inner = (wrapper.patch as { modelConfig?: unknown }).modelConfig;
+          if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(`Op ${heading.index}: patch.modelConfig must be an object.`);
+          op.modelConfigPatch = inner as Record<string, unknown>;
+        } else {
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`Op ${heading.index}: workspace_update_node_model_config payload must be an object (the modelConfig patch, or the whole {"id", "patch": {"modelConfig"}} argument).`);
+          op.modelConfigPatch = parsed as Record<string, unknown>;
+        }
       } else {
         op.schema = parsed;
       }
@@ -233,6 +261,20 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
   return aKeys.every((key) => deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
 };
 
+// The EXACT merge semantics workspace.update_node_model_config applies (deepMergeRecords, tools.ts):
+// nested plain objects merge key by key, any other value — including an array — replaces outright.
+// Re-implemented here rather than imported because tools.ts's copy is module-private and pulling it
+// out would drag the whole MCP tool surface into a script that must run with no repositories wired.
+// The two are pinned together by tests/scripts/applyNodeOpsModelConfig.test.ts.
+const deepMergeRecords = (base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> => {
+  const isPlainRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    merged[key] = isPlainRecord(value) && isPlainRecord(base[key]) ? deepMergeRecords(base[key], value) : value;
+  }
+  return merged;
+};
+
 // Same class of check promptAndGateProblems (seedNodesFromWorkspace.ts) runs, reusing the SAME
 // threshold/flag (imported, not redefined): a prompt op past this ceiling refuses rather than lands.
 const promptShrinkProblem = (before: string, after: string, allowShrink: boolean): string | undefined => {
@@ -277,20 +319,30 @@ const fieldOf = (node: WorkspaceNode, kind: OpKind): unknown => {
     case "output_schema": return node.outputSchema;
     case "prompt": return node.prompt;
     case "metadata": return node.metadata;
+    case "model_config": return node.modelConfig;
     default: return undefined;
   }
 };
 
-const fieldName = (kind: OpKind): string => ({ input_schema: "inputSchema", output_schema: "outputSchema", prompt: "prompt", metadata: "metadata", create_node: "node" }[kind]);
+const fieldName = (kind: OpKind): string => ({ input_schema: "inputSchema", output_schema: "outputSchema", prompt: "prompt", metadata: "metadata", model_config: "modelConfig", create_node: "node" }[kind]);
 
 // Fields a create_node op contributes that a LATER op in the same doc can also touch (op 8 -> op 10
 // -> op 12's shape). Every other field a create_node sets (name, kind, riskLevel, allowedTools, ...)
 // is never revisited by this doc's format, so it is compared exactly, with no notion of "position".
-const CHAIN_FIELDS = ["prompt", "inputSchema", "outputSchema", "metadata"] as const;
+const CHAIN_FIELDS = ["prompt", "inputSchema", "outputSchema", "metadata", "modelConfig"] as const;
 type ChainField = typeof CHAIN_FIELDS[number];
 
-const payloadOf = (op: ParsedOp): unknown =>
-  op.kind === "metadata" ? op.metadataPatch : op.kind === "prompt" ? op.prompt : op.kind === "create_node" ? undefined : op.schema;
+// The value the op would WRITE to its field. For model_config that is the MERGE of the doc's patch
+// onto whatever the field currently holds — not the patch itself — because this is the one op whose
+// verb merges rather than replaces. `current` is therefore required for that kind and ignored by the
+// rest; a chain entry computed without it (PASS 1, which has no store) merges onto {} and is
+// corrected in PASS 2, where the working copy is real.
+const payloadOf = (op: ParsedOp, current?: unknown): unknown =>
+  op.kind === "metadata" ? op.metadataPatch
+    : op.kind === "prompt" ? op.prompt
+      : op.kind === "model_config" ? deepMergeRecords((current && typeof current === "object" && !Array.isArray(current) ? current : {}) as Record<string, unknown>, op.modelConfigPatch ?? {})
+        : op.kind === "create_node" ? undefined
+          : op.schema;
 
 export const planApply = (ops: ParsedOp[], storeNodes: WorkspaceNode[], options: { allowPromptShrink?: boolean; allowCapabilityLoss?: boolean } = {}): ApplyPlan => {
   const allowShrink = options.allowPromptShrink ?? false;
@@ -374,8 +426,30 @@ export const planApply = (ops: ParsedOp[], storeNodes: WorkspaceNode[], options:
       continue;
     }
 
-    const payload = payloadOf(op);
     const currentValue = fieldOf(existing, op.kind);
+    const payload = payloadOf(op, currentValue);
+
+    // MODEL_CONFIG IS THE ONE MERGING OP, and the chain machinery below does not describe it.
+    //
+    // Every other op REPLACES its field, so "what the doc expects as its base" is a literal the doc
+    // printed and drift is a mismatch against it. workspace.update_node_model_config merges: it
+    // preserves every key the patch omits, so there is no base to expect — the same patch applied to
+    // two different stores legitimately produces two different results, both correct. A chain-drift
+    // refusal here would fire on exactly the case the merge exists for (a node whose model/timeout/
+    // maxOutputTokens differ from whatever the doc's author had in front of them).
+    //
+    // What IS checked is the only thing that can go wrong with a merge: nothing. It cannot drop a
+    // key (that is what merging means), so the capability-loss guard has nothing to catch, and an
+    // already-applied merge is byte-identical to the current value and reports up to date. A patch
+    // that OVERWRITES an existing key with a different value is the op's entire purpose, and the
+    // dry run prints the before/after so it is reviewed rather than assumed.
+    if (op.kind === "model_config") {
+      if (deepEqual(payload, currentValue)) { upToDate.push({ opIndex: op.index, nodeId: op.nodeId, field }); continue; }
+      writes.push({ opIndex: op.index, nodeId: op.nodeId, field, kind: "update", afterValue: payload, basis: "first_touch" });
+      working.set(op.nodeId, { ...existing, modelConfig: payload as Record<string, unknown> });
+      continue;
+    }
+
     const chain = chainByKey.get(key) ?? [];
     const rest = chain.slice(pos); // this op's own payload, plus every later op's, in order
 
@@ -434,6 +508,7 @@ const eventTypeFor = (kind: OpKind): string => ({
   output_schema: "node.output_schema_updated",
   prompt: "node.prompt_updated",
   metadata: "node.updated",
+  model_config: "node.model_config_updated",
   create_node: "node.created"
 }[kind]);
 

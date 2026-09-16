@@ -94,7 +94,9 @@ describe("W4.2 — capability drift", () => {
 
   it("summarizes by node and by severity, not by raw count alone", () => {
     expect(summarizeDrift(buildDriftRows(audits))).toEqual({
-      total: 3, high: 1, nodes: ["capture_crawl", "visual_standard_materializer"]
+      // W5 T2 — blockedProjects is [] here because these fixtures carry no policy finding; the
+      // populated case is covered below.
+      total: 3, high: 1, nodes: ["capture_crawl", "visual_standard_materializer"], blockedProjects: []
     });
   });
 

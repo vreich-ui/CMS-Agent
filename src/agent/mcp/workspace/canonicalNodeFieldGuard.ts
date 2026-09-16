@@ -73,3 +73,23 @@ export const assertNoCanonicalOwnedFieldWrite = (toolName: string, nodeId: strin
   const offending = canonicalOwnedFieldsIn(patchKeys);
   if (offending.length) throw new CanonicalOwnedFieldWriteError(toolName, nodeId, offending, CANONICAL_OWNED_WRITE_REFUSED_FIELDS);
 };
+
+// K-A9 (2026-09-16) — ONE DOOR TO A NODE'S ROUTE.
+//
+// `executionKind` and `route` are store-owned fields like prompt and modelConfig, so nothing in the
+// canonical-owned guard above covers them — and they must not be reachable through a generic patch
+// either, or the defect K-A9 describes simply moves from `update_node_metadata` to `update_node`.
+// A generic patch that names one is refused and told which verb to use; `workspace.create_node` is
+// deliberately NOT guarded, because a node the store adds has to be able to declare how it runs at
+// the moment it is created.
+//
+// Unlike the canonical guard this applies to EVERY node id, canonical or not: "which engine route
+// does this node take" is never an incidental field on any node.
+export const NODE_EXECUTION_FIELDS: readonly string[] = ["executionKind", "route"];
+
+export const assertNoExecutionFieldWrite = (toolName: string, patchKeys: Iterable<string>): void => {
+  const keys = [...patchKeys];
+  const offending = NODE_EXECUTION_FIELDS.filter((field) => keys.includes(field));
+  if (offending.length === 0) return;
+  throw new Error(`execution_field_write_refused: ${toolName} may not write ${offending.join(", ")}. How a node runs is changed through workspace.update_node_execution, which is the one verb that records it — see docs/KNOWN_ISSUES.md K-A9.`);
+};

@@ -37,6 +37,7 @@
 // verify per node and does not assert a registry-wide "dead tools" count.
 import { resolveExecutionKind, resolveRouteEra, resolveRouteId, routeRequiredToolsFor, type NodeExecutionKind, type RouteRequiredTool } from "./routeRegistry.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
+import { effectiveToolPermission, type ProjectConnectionConfig, type ToolPermission } from "../projects/projectTypes.js";
 
 export type NodeCapabilityFinding =
   // The node's grants can never fire: it terminates in a deterministic route.
@@ -45,7 +46,11 @@ export type NodeCapabilityFinding =
   // accountability gap, not a safety failure in itself — the tenant's own tool policy still applies.
   | { code: "engine_tenant_calls_unlisted"; detail: string; verbs: string[] }
   // A publish- or admin-risk verb reached from a route, on a node whose grants imply it cannot.
-  | { code: "high_risk_engine_verb"; detail: string; verbs: string[] };
+  | { code: "high_risk_engine_verb"; detail: string; verbs: string[] }
+  // W5 T2 — the route needs a tenant verb the TENANT's own policy will not give it. The route cannot
+  // ask for an exception (it has no approval step to enter), so this is a run that will stop at this
+  // node, knowable from config alone — before anyone runs it.
+  | { code: "route_tool_blocked_by_policy"; detail: string; verbs: string[]; projectId: string; issues: string[] };
 
 export type NodeCapabilityAudit = {
   nodeId: string;
@@ -68,10 +73,15 @@ export type NodeCapabilityAudit = {
 
 const HIGH_RISK: ReadonlySet<RouteRequiredTool["risk"]> = new Set(["publish", "admin"]);
 
+// The only part of a project record this audit reads. Narrowed rather than taking the whole config so
+// the audit stays pure and a caller can pass a fixture without building a connection record.
+export type ProjectPolicyView = Pick<ProjectConnectionConfig, "allowedTools" | "defaultToolPolicy" | "toolPolicies"> & { projectId: string };
+export type { ToolPermission };
+
 // Pure and total: any node, including one carrying metadata this build has never seen, yields a
 // well-formed audit. An unmanifested deterministic route reports `engineRequiredTools: []` and says so
 // through the absent routeId rather than asserting the route makes no tenant calls.
-export function auditNodeCapabilities(node: WorkspaceNode): NodeCapabilityAudit {
+export function auditNodeCapabilities(node: WorkspaceNode, projects: readonly ProjectPolicyView[] = []): NodeCapabilityAudit {
   const executionKind = resolveExecutionKind(node);
   const routeId = resolveRouteId(node);
   const grants = [...(node.allowedTools ?? [])];
@@ -116,6 +126,33 @@ export function auditNodeCapabilities(node: WorkspaceNode): NodeCapabilityAudit 
     }
   }
 
+  // W5 T2 — THE ROUTE'S VERBS AGAINST EACH TENANT'S OWN POLICY.
+  //
+  // A deterministic route reaches the tenant through ProjectMcpAdapter, and the adapter refuses a
+  // verb the project blocks or holds BEFORE any transport. There is no approval step for the route to
+  // enter and no grant to widen — the node simply stops, and `release_executor` against a tenant that
+  // holds `deploy_status` is a run that dies at the last step of publishing for a reason recorded in
+  // a config file nobody thought to read.
+  //
+  // `needs_approval` counts, and that is the point rather than an over-reach: for a MODEL turn it
+  // means "a human confirms", which is a working state; for a ROUTE it is refused identically to
+  // `blocked` (tenantInvoke.ts's isTenantApprovalHeld exists because the two arrive the same way).
+  // The detail says which of the two it is, so an operator reading the drift list knows whether to
+  // allow the verb or to accept that this tenant holds it deliberately.
+  for (const project of projects) {
+    const blocked = engineRequiredTools
+      .map((tool) => ({ verb: tool.verb, permission: effectiveToolPermission(project, tool.verb) }))
+      .filter((entry) => entry.permission !== "allowed");
+    if (blocked.length === 0) continue;
+    findings.push({
+      code: "route_tool_blocked_by_policy",
+      projectId: project.projectId,
+      verbs: blocked.map((entry) => entry.verb),
+      issues: blocked.map((entry) => `route_tool_blocked_by_policy:${project.projectId}:${entry.verb}`),
+      detail: `Node "${node.id}"'s route needs ${blocked.length} tenant verb(s) that project "${project.projectId}" does not allow: ${blocked.map((entry) => `${entry.verb} (${entry.permission})`).join(", ")}. A deterministic route has no approval step to enter, so this node stops there rather than waiting — allow the verb for this project, or accept that this tenant cannot run this route.`
+    });
+  }
+
   return {
     nodeId: node.id,
     executionKind,
@@ -138,11 +175,15 @@ export type CapabilityAuditSummary = {
   deadGrantCount: number;
   nodesReachingTenantFromEngine: number;
   nodesReachingHighRiskVerbs: string[];
+  // W5 T2 — every `route_tool_blocked_by_policy:<project>:<verb>` issue across the graph, sorted.
+  // A flat string list on purpose: it is what the Tool Administration drift panel renders and what a
+  // CI check would diff, and both want the issue id rather than a nested object to walk.
+  routeToolsBlockedByPolicy: string[];
 };
 
 // The whole-graph view, for an operator asking "how wide is this" rather than "what about this node".
-export function summarizeCapabilityAudit(nodes: readonly WorkspaceNode[]): CapabilityAuditSummary {
-  const audits = nodes.map(auditNodeCapabilities);
+export function summarizeCapabilityAudit(nodes: readonly WorkspaceNode[], projects: readonly ProjectPolicyView[] = []): CapabilityAuditSummary {
+  const audits = nodes.map((node) => auditNodeCapabilities(node, projects));
   const withDead = audits.filter((audit) => audit.deadGrants.length > 0);
   return {
     nodeCount: audits.length,
@@ -154,6 +195,7 @@ export function summarizeCapabilityAudit(nodes: readonly WorkspaceNode[]): Capab
     nodesReachingHighRiskVerbs: audits
       .filter((audit) => audit.findings.some((finding) => finding.code === "high_risk_engine_verb"))
       .map((audit) => audit.nodeId)
-      .sort()
+      .sort(),
+    routeToolsBlockedByPolicy: [...new Set(audits.flatMap((audit) => audit.findings.flatMap((finding) => finding.code === "route_tool_blocked_by_policy" ? finding.issues : [])))].sort()
   };
 }

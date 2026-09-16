@@ -15,6 +15,7 @@ import type { Run, RunStatus, RunTab, Workflow } from '../../types';
 import { LiveTab } from './LiveTab';
 import { HistoryTab } from './HistoryTab';
 import { GridTab } from './GridTab';
+import { ToolsTab } from './ToolsTab';
 import { stoppedNode } from './helpers';
 
 export interface RunFilters {
@@ -41,12 +42,17 @@ const TABS: Array<{ id: RunTab; label: string }> = [
   { id: 'live', label: 'Live' },
   { id: 'history', label: 'History' },
   { id: 'grid', label: 'Grid' },
+  { id: 'tools', label: 'Tools' },
 ];
 
 export function Runs() {
   const runtab = useStore((s) => s.runtab);
   const setRunTab = useStore((s) => s.setRunTab);
   const bindRun = useStore((s) => s.bindRun);
+  // W5 T4 — the run bound in the workbench is the Tools tab's default subject; `toolsRunId` is the
+  // operator's own override, local to this screen exactly as the filter state is.
+  const boundRunId = useStore((s) => s.runId);
+  const [toolsRunId, setToolsRunId] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<RunFilters>({ wf: '', proj: '', status: '' });
 
@@ -137,12 +143,21 @@ export function Runs() {
   // first, a runsQ that has already failed for good stays hidden behind
   // "Loading runs…" for as long as workflowsQ (or vice versa) is still
   // in flight or retrying, instead of surfacing the real failure.
-  const criticalError = (runtab === 'live' ? liveQ.error : runsQ.error) ?? workflowsQ.error;
+  // ADVERSARIAL REVIEW FIX — the Tools tab is NOT covered by the screen-level critical error either,
+  // for the same reason it is not covered by the skeleton: it fetches its own data for a run it
+  // already has (the bound run), so a failed workflow_list_runs must not replace it with a retry
+  // button for a query it does not read. It renders its own error, below its own run picker.
+  const criticalError = runtab === 'tools' ? undefined : ((runtab === 'live' ? liveQ.error : runsQ.error) ?? workflowsQ.error);
   // REVIEW FIX (round 2) — only skeleton when there is genuinely nothing to show. The filter
   // selects live INSIDE the tab bodies, so treating a filter change as "loading" unmounted the
   // controls the operator was using, for a whole round trip.
   const hasRows = (runtab === 'live' ? (liveQ.data?.runs.length ?? 0) : runs.length) > 0;
+  // W5 T4 — the Tools tab owns its own query and its own loading/empty states, and its run picker is
+  // usable with no runs loaded at all (an operator pastes nothing; the bound run is already there).
+  // Letting the screen-level skeleton cover it would blank that picker for a round trip it does not
+  // depend on — the same defect the filter-change fix above was for, one tab over.
   const loading =
+    runtab !== 'tools' &&
     !criticalError &&
     !hasRows &&
     ((runtab === 'live' ? liveQ.isLoading : runsQ.isLoading) || workflowsQ.isLoading);
@@ -194,6 +209,8 @@ export function Runs() {
         onOpen={onOpen}
       />
     );
+  } else if (runtab === 'tools') {
+    body = <ToolsTab runs={runs} runsLoading={runsQ.isLoading} boundRunId={boundRunId} selectedRunId={toolsRunId} onSelectRun={setToolsRunId} />;
   } else {
     body = (
       <GridTab
@@ -214,7 +231,7 @@ export function Runs() {
         <h1>Runs</h1>
         <span className="sub">
           monitor · history · cross-run analysis
-          {runtab !== 'live' && runs.length > 0 ? ` · showing ${runs.length} of ${matchedCount}` : ''}
+          {runtab !== 'live' && runtab !== 'tools' && runs.length > 0 ? ` · showing ${runs.length} of ${matchedCount}` : ''}
         </span>
       </div>
       <TabBar className="subtabs" idPrefix="run-tab" active={runtab} onSelect={setRunTab} tabs={TABS} />

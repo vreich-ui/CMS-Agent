@@ -493,6 +493,12 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     };
   },
   tool_list: () => ({ tools: mockStore.getTools() }),
+  // W5 T4 — fixture mode has no captured tool ledger (no fixtures/toolExecutions.json exists, and
+  // inventing one would put fabricated publishes and releases in front of an operator who cannot
+  // tell fixture mode from live at a glance). An empty list is the honest answer, and it is a REAL
+  // state the screen already handles: every run that finished before the durable ledger began
+  // recording returns exactly this.
+  tool_list_executions: () => ({ executions: [] }),
   skill_list: () => ({ skills: mockStore.getSkills() }),
   skill_resolve_for_node: (a) => skillsFor(mockStore.getNode(str(a, 'nodeId'))),
   agent_list: () => ({ agents: mockStore.getAgents() }),

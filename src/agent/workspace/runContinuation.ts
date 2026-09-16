@@ -165,7 +165,26 @@ export const DEPLOYED_TICK_DEFAULTS = {
 // finest granularity is one minute, so a sub-minute tick is not expressible; the deployed cadence is
 // every two minutes.
 export const CONTINUATION_TICK_CRON = DEPLOYED_TICK_DEFAULTS.cron;
-export const CONTINUATION_TICK_INTERVAL_MS = 120_000;
+
+// W5 T6 — DERIVED from the cron rather than written out a second time.
+//
+// This was a literal 120_000 sitting beside a cron that says every two minutes, and the only thing
+// keeping the two honest was one hand-written assertion in runContinuationSelector.test.ts that
+// restated BOTH numbers ("*/2 * * * *" and 120_000) — a pin in a unit test, which is the wrong place
+// for it: it proves the constants equal the literals the test also hardcodes, not that either
+// matches the deployed schedule. scripts/twoPlaneDrift.ts already compares the cron against
+// deploy-continuation-tick-schedule.sh, and now compares this derivation too, so the pin lives with
+// the deploy scripts it is about and the second literal is gone.
+//
+// Deliberately narrow: only the `*/N * * * *` shape every cadence this job has ever used takes. An
+// expression outside it falls back to the previous value rather than guessing, which keeps this
+// fail-open — and the drift check refuses an unparseable cron out loud, so "fell back" can never be
+// mistaken for "agreed".
+export const continuationTickIntervalMs = (cron: string = CONTINUATION_TICK_CRON): number | undefined => {
+  const minutes = /^\*\/(\d+) \* \* \* \*$/.exec(cron.trim())?.[1];
+  return minutes ? Number(minutes) * 60_000 : undefined;
+};
+export const CONTINUATION_TICK_INTERVAL_MS = continuationTickIntervalMs() ?? 120_000;
 
 // Wall-clock budget for ONE tick's advance loop, checked BETWEEN node advances (a dispatch already in
 // progress is never cut short — the budget stops the loop starting another node, exactly as

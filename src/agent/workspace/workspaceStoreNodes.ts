@@ -1,4 +1,5 @@
 import { listWorkspaceNodes } from "./nodes.js";
+import { deriveStoredExecutionFields } from "./nodeExecution.js";
 import { captureConductorNodes } from "./captureConductorNodes.js";
 import { cloneConductorNodes } from "./cloneConductorNodes.js";
 import { visualIdentityNodes } from "./visualIdentityNodes.js";
@@ -77,7 +78,15 @@ export function workspaceStoreSeedNodes(): WorkspaceNode[] {
   for (const node of workspaceStoreSources()) {
     if (seen.has(node.id)) continue;
     seen.add(node.id);
-    merged.push(cloneNode(node));
+    // K-A9 (2026-09-16) — a seeded row states HOW IT RUNS as a field, derived from the canonical
+    // literal's own route metadata. This is derive-on-load applied at the seam nodes ENTER the store
+    // through, and it has to be here rather than only in the document parse: a fresh workspace builds
+    // its document from these literals directly (createDefaultWorkspaceDocument), never through a
+    // parse, so a row seeded today would otherwise carry no field until something happened to
+    // re-read it — and the first `update_node_metadata` in between would take its route with it,
+    // which is the whole defect. Derived, never hand-written: nodes.ts stays the source of the route
+    // and `npm run nodes:update` is what eventually writes the fields into it.
+    merged.push({ ...cloneNode(node), ...deriveStoredExecutionFields(node) });
   }
   return merged;
 }

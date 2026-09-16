@@ -25,6 +25,7 @@
 import { callVerb } from './client';
 import { confirmAction } from './confirmAction';
 import { WORKFLOW_CATALOG } from './workflowCatalog';
+import type { ToolExecutionRow } from '../screens/Runs/toolTimeline';
 import * as adapters from './adapters';
 import type {
   Agent,
@@ -1215,6 +1216,20 @@ export const projectTestConnection = (args: { projectId: string }) =>
 export const toolList = async (): Promise<ToolDef[]> => {
   const raw = await callVerb<{ tools: adapters.RawToolDef[] }>('tool_list');
   return raw.tools.map(adapters.toToolDef);
+};
+
+/**
+ * W5 T4 — `tool_list_executions`, scoped to one run.
+ *
+ * NO ADAPTER, deliberately: the timeline renders the ledger record's own fields, and every one of
+ * them (caller, routeId, projectId, engineVerbUnlisted) is optional precisely because rows written
+ * before W3.2.1 do not have it. Mapping through a to<Entity>() would have to invent a default for
+ * each, and "this row did not say" is the fact the screen is there to show. The cast is the same
+ * honest boundary-trust cast this file uses for verbs whose item shape is the live shape.
+ */
+export const toolListExecutions = async (args: { runId: string }): Promise<ToolExecutionRow[]> => {
+  const raw = await callVerb<{ executions: unknown[] }>('tool_list_executions', args);
+  return (raw.executions ?? []) as ToolExecutionRow[];
 };
 
 /**

@@ -33,7 +33,7 @@ import path from "node:path";
 import { handler as netlifyMcpHandler } from "../netlify/functions/mcp.mjs";
 import { routeControlPlaneRequest } from "../src/agent/mcp/http/controlPlaneRouter.js";
 import { DEPRECATED_TOOL_ALIASES } from "../src/agent/mcp/workspace/server.js";
-import { DEPLOYED_TICK_DEFAULTS } from "../src/agent/workspace/runContinuation.js";
+import { CONTINUATION_TICK_INTERVAL_MS, DEPLOYED_TICK_DEFAULTS, continuationTickIntervalMs } from "../src/agent/workspace/runContinuation.js";
 
 const DRIFT_TOKEN = "two-plane-drift-detector-token";
 const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../docs/mcp-tool-manifest.json", import.meta.url)));
@@ -274,6 +274,16 @@ export function checkTickConstants(): string[] {
 
   const cron = shellDefault(scheduleScript, "CRON");
   if (cron !== DEPLOYED_TICK_DEFAULTS.cron) failures.push(`deploy-continuation-tick-schedule.sh CRON default is ${JSON.stringify(cron)}, code says ${JSON.stringify(DEPLOYED_TICK_DEFAULTS.cron)} (runContinuation.DEPLOYED_TICK_DEFAULTS.cron)`);
+
+  // W5 T6 — the published cadence, against the DEPLOYED cron rather than against a literal in a unit
+  // test. CONTINUATION_TICK_INTERVAL_MS has no runtime consumer; it exists so a reader knows how often
+  // the tick fires, which makes a value that disagrees with the schedule simply false. It is derived
+  // from the cron now, so the only two ways it can be wrong are checked here: the deployed cron is a
+  // shape the derivation does not understand (it then silently keeps the old value), or the derivation
+  // and the deployed cron disagree.
+  const derivedFromDeployed = cron === undefined ? undefined : continuationTickIntervalMs(cron);
+  if (cron !== undefined && derivedFromDeployed === undefined) failures.push(`deploy-continuation-tick-schedule.sh CRON default ${JSON.stringify(cron)} is not the "*/N * * * *" shape runContinuation.continuationTickIntervalMs understands, so CONTINUATION_TICK_INTERVAL_MS silently kept its previous value and no longer describes the deployed cadence`);
+  else if (derivedFromDeployed !== undefined && derivedFromDeployed !== CONTINUATION_TICK_INTERVAL_MS) failures.push(`deployed cron ${JSON.stringify(cron)} is every ${derivedFromDeployed / 60_000} minute(s), but CONTINUATION_TICK_INTERVAL_MS is ${CONTINUATION_TICK_INTERVAL_MS}ms`);
 
   const taskTimeoutSeconds = shellDefault(jobScript, "TASK_TIMEOUT_SECONDS");
   if (Number(taskTimeoutSeconds) !== DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds) failures.push(`deploy-continuation-tick.sh TASK_TIMEOUT_SECONDS default is ${taskTimeoutSeconds}, code says ${DEPLOYED_TICK_DEFAULTS.taskTimeoutSeconds}`);

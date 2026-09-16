@@ -84,7 +84,11 @@ export type ToolDefinition<I = unknown, O = unknown> = {
 //              consulted and no risk level is checked; the route manifest is the only statement of
 //              what it is entitled to call.
 // A controlled tool that never leaves this process (workspace.*, files.*, ...) carries no caller.
-export type ToolCaller = "model" | "engine";
+// W5 T3 (2026-09-16) — "operator" is the wire surface: project.call_tool / project.call_read_tool,
+// called by a person or a script holding a full bearer, outside any run. A third value rather than a
+// relabelling of the other two, because "a human did this by hand" is exactly the distinction an
+// operator reading the ledger after an incident needs and could not previously make.
+export type ToolCaller = "model" | "engine" | "operator";
 
 export type ToolExecutionRecord = {
   toolExecutionId: string;

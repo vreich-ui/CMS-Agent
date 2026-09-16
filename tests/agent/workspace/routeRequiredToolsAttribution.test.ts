@@ -53,7 +53,7 @@ describe("W3.2.0 — no route stage is left unattributed", () => {
         if (!seen.has(resolved.id)) seen.set(resolved.id, resolved);
       }
     }
-    const unverified = [...seen.values()].map(auditNodeCapabilities).filter((audit) => audit.engineToolsUnverified).map((audit) => audit.nodeId);
+    const unverified = [...seen.values()].map((node) => auditNodeCapabilities(node)).filter((audit) => audit.engineToolsUnverified).map((audit) => audit.nodeId);
     expect(unverified).toEqual([]);
     // The rest of the graph is unmoved: the same 51 nodes, the same 23 deterministic ones. W3.2.0
     // changed what is KNOWN about four stages, not what any node is or does.

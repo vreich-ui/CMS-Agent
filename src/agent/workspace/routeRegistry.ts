@@ -33,6 +33,7 @@
 import { MAX_ENGINE_REVALIDATION_CYCLES } from "./articleBodyValidation.js";
 import { MODEL_ROUTE_ERA } from "./nodeTimings.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
+import { resolveNodeExecution, routeEraOf, type NodeExecutionKind } from "./nodeExecution.js";
 
 // Grace period past a dispatched node's own timeout before the dispatch is considered dead. The
 // runner's Promise.race timeout ends a live node at timeoutMs, so a "running" claim older than
@@ -71,81 +72,32 @@ export const deterministicStageTimeoutMs = (node: WorkspaceNode): number => Math
 // dispatch and claims a model-sized window instead.
 export const ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS = (MAX_ENGINE_REVALIDATION_CYCLES + 2) * 15_000;
 
-// The metadata keys that declare a node terminates in a deterministic route rather than a model
-// dispatch. Order matters: a node in a COMPOSED workflow can carry more than one (the shared
-// publishing tail inherits the DTC keys while also declaring its own capture/clone stage), and
-// resolveRouteEra reads this list in order so such a node resolves to the SAME era on every sample
-// rather than to whichever key an unordered iteration reached first.
-export const DETERMINISTIC_ROUTE_METADATA_KEYS = [
-  "contractIntelligenceDeterministic",
-  "placementResolverDeterministic",
-  "publishPayloadDeterministic",
-  "publicationControllerDeterministic",
-  "publishExecutorDeterministic",
-  "releaseExecutorDeterministic",
-  "learningRecorderDeterministic",
-  // T12.9: the capture_conductor stages (captureConductorRoutes.ts). String-valued ("crawl", ...),
-  // which declaresDeterministicRoute below already treats as declared.
-  "captureStageDeterministic",
-  // T13.1: the clone_conductor stages (cloneConductorRoutes.ts). Same string-valued declaration.
-  "cloneStageDeterministic",
-  // C5: visual_identity's second node (visualStandardMaterialization.ts). Boolean-valued, like
-  // artifact_materializer's own route flag.
-  "visualStandardMaterializerDeterministic",
-  // W1.4 (2026-09-09) — artifact_materializer, which had been missing from this list since it was
-  // written while every one of its siblings was in it.
-  //
-  // The list has exactly two consumers, and the materializer needed both:
-  //   - plannedNodeTimeoutMs: it was planned at the 120s MODEL default, not the 300s deterministic
-  //     stage floor its own serial dispatch already claims (executor.ts stamps
-  //     deterministicStageTimeoutMs for it explicitly, so the two disagreed about the same node).
-  //   - isConcurrentDispatchEligible: it was the ONE deterministic route eligible for concurrent
-  //     batching, and the batch path claims once at nodeTimeoutMs with claim=false — so a batched
-  //     materializer ran a whole multi-slot adopt/create/poll walk under a 120s + 90s deadline with
-  //     no per-slot re-stamping, while the same node dispatched serially gets 390s PER SLOT. The
-  //     tick then reclaimed a live materialization and re-dispatched it: recoverable (job ids are
-  //     persisted before polling and adoption is tried first, so no duplicate tenant artifact), but
-  //     it burns the node's maxPollDispatches budget and reads as a stall.
-  //
-  // Reachable in practice: artifact_materializer's dependencies (artifact_plan,
-  // contract_intelligence, brief_architect) and review_aggregator's (the review quartet) are disjoint
-  // chains, so both become runnable in the same advance and the canonical prefix takes them together.
-  //
-  // The cost is parallelism, not money: the materializer no longer overlaps with the review chain on
-  // runs where it would have. That is the same trade every other deterministic route already makes,
-  // and it is the trade the batch path's single-claim design requires — one claim stamped for four
-  // nodes at once cannot be re-stamped per phase by one of them without racing its siblings.
-  "artifactMaterializerDeterministic"
-] as const;
+// K-A9 (2026-09-16) — the route VOCABULARY (which metadata keys declare a route, how a route maps to
+// an era string, and how a node's execution kind is resolved) moved to nodeExecution.ts, so the store
+// can derive the stored `executionKind`/`route` fields at parse time without importing this module
+// (this module reaches nodeTimings -> the repository manager -> the store). Re-exported here under
+// their historical names: every existing import of these from routeRegistry.js still resolves, and
+// this file remains where a reader is sent for what each route actually IS.
+export { DETERMINISTIC_ROUTE_METADATA_KEYS, ROUTE_ERA_METADATA_KEYS, deriveRouteFromMetadata, deriveStoredExecutionFields, resolveNodeExecution, routeEraOf, routeFromEra } from "./nodeExecution.js";
+export type { NodeExecutionKind, NodeRoute } from "./nodeExecution.js";
 
 export const declaresDeterministicRoute = (node: WorkspaceNode): boolean =>
-  DETERMINISTIC_ROUTE_METADATA_KEYS.some((key) => {
-    const declared = node.metadata?.[key];
-    return declared !== undefined && declared !== false;
-  });
-
-// Attribution and dispatch ask different questions — "what program produced this sample" and "how is
-// this node dispatched" — and they briefly had different answers: artifact_materializer runs a
-// deterministic bridge route but was missing from the dispatch list, so its samples were filed under
-// the MODEL era. That was fixed by adding it to the list above rather than by splitting the two, since
-// on inspection it belonged in both. This alias exists so the distinction stays visible: if a route
-// ever needs attributing without changing how it is dispatched, it goes here and not above.
-export const ROUTE_ERA_METADATA_KEYS = DETERMINISTIC_ROUTE_METADATA_KEYS;
+  resolveNodeExecution(node).executionKind === "deterministic";
 
 // W0.1 — WHICH PROGRAM a timing sample describes, as a stable string. A nodeId is not a program:
 // contract_intelligence was a model dispatch and is now a deterministic mapping, and publish_executor
-// is a gate on one workflow and an execute route on another. The era string is the declaring metadata
-// key plus its value when the declaration is string-valued (captureStageDeterministic:"crawl" and
-// :"emit_live" are separate stages sharing a key, and separate programs). A node declaring none is a
-// model dispatch, which is a KNOWN era rather than an unknown one. Reads ROUTE_ERA_METADATA_KEYS, not
-// the dispatch list — see that constant for why the two differ.
+// is a gate on one workflow and an execute route on another. The era string is the route's declaring
+// key plus its mode when the declaration is string-valued (captureStageDeterministic:"crawl" and
+// :"emit_live" are separate stages sharing a key, and separate programs). A node with no route is a
+// model dispatch, which is a KNOWN era rather than an unknown one.
+//
+// K-A9: reads the node's resolved execution (stored field first, metadata second) rather than
+// scanning metadata directly. For a row with no stored field that is the identical scan it always
+// was — which is the property tests/agent/workspace/storedNodeExecution.test.ts pins across every
+// canonical node.
 export const resolveRouteEra = (node: WorkspaceNode): string => {
-  for (const key of ROUTE_ERA_METADATA_KEYS) {
-    const declared = node.metadata?.[key];
-    if (declared === undefined || declared === false) continue;
-    return typeof declared === "string" ? `${key}:${declared}` : key;
-  }
-  return MODEL_ROUTE_ERA;
+  const route = resolveNodeExecution(node).route;
+  return route ? routeEraOf(route) : MODEL_ROUTE_ERA;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -428,17 +380,14 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
 // The engine already answers this, but only by asking `declaresDeterministicRoute` at four separate
 // points in the dispatch block. Naming it makes the question askable from outside the executor —
 // which is what an audit, a validator and (next wave) a choke point all need.
-export type NodeExecutionKind = "model" | "deterministic";
-
-export const resolveExecutionKind = (node: WorkspaceNode): NodeExecutionKind =>
-  declaresDeterministicRoute(node) ? "deterministic" : "model";
+export const resolveExecutionKind = (node: WorkspaceNode): NodeExecutionKind => resolveNodeExecution(node).executionKind;
 
 // Which manifest a node's route belongs to. Returns undefined for a model dispatch, and for a
 // deterministic node whose route has no manifest yet — the two are distinguished by executionKind.
 export const resolveRouteId = (node: WorkspaceNode): string | undefined => {
-  const era = resolveRouteEra(node);
-  if (era === MODEL_ROUTE_ERA) return undefined;
-  const key = era.split(":")[0];
+  const route = resolveNodeExecution(node).route;
+  if (!route) return undefined;
+  const key = route.id;
   const byKey: Record<string, string> = {
     captureStageDeterministic: "capture_stage",
     cloneStageDeterministic: "clone_stage",

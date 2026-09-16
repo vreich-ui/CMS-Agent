@@ -34,7 +34,8 @@ export type NodeTab =
   | 'history'
   | 'learn';
 
-export type RunTab = 'live' | 'history' | 'grid';
+// W5 T4 — 'tools' is the run's tool-execution ledger (Runs/ToolsTab.tsx).
+export type RunTab = 'live' | 'history' | 'grid' | 'tools';
 
 export type RegTab = 'projects' | 'keys' | 'tools' | 'skills' | 'agents' | 'usage';
 
