@@ -22,6 +22,7 @@ export function toProjectSummary(config: ProjectConnectionConfig, env: NodeJS.Pr
     allowedTools: [...config.allowedTools],
     defaultToolPolicy: config.defaultToolPolicy ?? "blocked",
     toolPolicies: toToolPolicyMap(config),
+    operatorToolPolicies: { ...(config.operatorToolPolicies ?? {}) },
     contentContract: { ...config.contentContract },
     capturePolicy: resolveProjectCapturePolicy(config),
     publishingPolicy: { ...config.publishingPolicy },

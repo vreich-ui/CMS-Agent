@@ -149,6 +149,10 @@ export function genesisParityDivergences(config: ProjectConnectionConfig, option
   // map, and the maps therefore look nothing alike while the EFFECTIVE answers must match.
   for (const verb of declaredRouteVerbs()) {
     if (GENESIS_WITHHELD_ROUTE_VERBS.includes(verb)) continue;
+    // OPERATOR OVERLAY (2026-09-16) — a verb this tenant's operator pinned is a DECISION, not drift.
+    // Reporting it would hand reconcile a divergence it can never close: reconcile patches
+    // `toolPolicies`, and the overlay outranks it, so the same finding would come back on every run.
+    if (config.operatorToolPolicies && verb in config.operatorToolPolicies) continue;
     const expected = effectiveToolPermission(reference, verb);
     const actual = effectiveToolPermission(config, verb);
     if (actual !== expected) {
