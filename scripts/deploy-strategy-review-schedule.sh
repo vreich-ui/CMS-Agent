@@ -26,6 +26,17 @@
 # WHAT FIRES: the Cloud Run Jobs v1 namespaces "run" endpoint, the same shape continuation-tick and
 # tracking-ingest already use, authenticated as SCHEDULER_SA via Cloud Scheduler's own OAuth token
 # minting, so no credential is stored in the scheduler job's configuration.
+#
+# THE IAM PERMISSION THIS NEEDS IS run.jobs.run — this request is a BARE run with no
+# overrides.containerOverrides body (unlike deploy-site-credential-reconciler-schedule.sh's --apply
+# call), so roles/run.invoker genuinely does carry it. But #329 found that this repo had been
+# ADVISING that permission rather than VERIFYING it, in the one schedule script whose call shape
+# actually needed a different permission (run.jobs.runWithOverrides) — an operator followed the
+# advice, granted the named role, and every fire still 403'd for five days before anyone read Logs
+# Explorer. This script previously carried that same advisory-only footer. It no longer does: it
+# verifies run.jobs.run via scripts/lib/assert-scheduler-run-permission.sh before configuring the
+# schedule, so a scheduler that cannot possibly fire is never silently put in place — whatever the
+# reason (wrong role, typo'd service account, a binding that never took).
 
 set -euo pipefail
 
@@ -46,6 +57,15 @@ command -v gcloud >/dev/null || die "gcloud is not on PATH."
 
 gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1 \
   || die "Cloud Run Job $JOB does not exist in $PROJECT/$REGION; run scripts/deploy-strategy-review.sh first."
+
+# shellcheck source=lib/assert-scheduler-run-permission.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/assert-scheduler-run-permission.sh"
+
+REQUIRED_PERMISSION="run.jobs.run"
+GRANT_COMMAND="gcloud run jobs add-iam-policy-binding $JOB --project $PROJECT --region $REGION --member \"serviceAccount:$SCHEDULER_SA\" --role roles/run.invoker"
+assert_scheduler_run_permission "$PROJECT" "$REGION" "$JOB" "$SCHEDULER_SA" "$REQUIRED_PERMISSION" \
+  "roles/run.invoker carries it — this call is a bare run with no overrides" \
+  "$GRANT_COMMAND"
 
 RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${JOB}:run"
 
@@ -70,6 +90,6 @@ else
 fi
 
 say "Configured $SCHEDULER_JOB to fire $JOB (project $PROJECT, region $REGION) on schedule \"$CRON\" (UTC)."
-say "Verify $SCHEDULER_SA has run.jobs.run on $JOB (roles/run.invoker) before the first scheduled fire — this script does not widen IAM."
+scheduler_permission_footer "$REQUIRED_PERMISSION" "$JOB" "$SCHEDULER_SA"
 say "Before the first real fire, confirm an editor is expecting the thread: this is the only job in the system whose output lands in a human's queue."
 say "Fire once immediately with: gcloud scheduler jobs run $SCHEDULER_JOB --project $PROJECT --location $REGION"
