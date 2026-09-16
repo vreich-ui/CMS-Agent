@@ -29,7 +29,7 @@
 // OWN tool manifest (mirroring scripts/twoPlaneDrift.ts's approach) for cms-agent to read
 // mechanically instead of re-capturing by hand.
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────────────────────────────
 // STALENESS GUARD METADATA (read by tests/agent/capture/mcpBoundaryConformance.test.ts).
 //
 // CAPTURED:     2026-08-24
@@ -225,7 +225,7 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
     type: "object"
   },
 
-  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────────────────────────
   // SECOND CAPTURE — 2026-09-15, same provenance as the block above: the live platform MCP
   // connector's own tools/list (connector "Kugel-Platform"), pasted verbatim, not retyped from
   // memory and not paraphrased. These four are the verbs Milestone A remainder runner 3a's
@@ -300,6 +300,57 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
       template_id: { minLength: 1, type: "string" }
     },
     required: ["site_id", "owner_object_type", "owner_object_id"],
+    type: "object"
+  },
+  // T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio's three bridge verbs, captured
+  // VERBATIM from the live per-tenant bridge's tools/list on 2026-09-16 (connector "Dr Lurie
+  // Skincare", the same Platform bridge shape every tenant exposes). PLATFORM_TOOL_SCHEMAS_CAPTURED_AT
+  // above is left untouched: these three entries were captured on 2026-09-16, the entries above were
+  // not re-captured then, and stamping today's date over all of them would claim a freshness the rest
+  // of this fixture does not have — the same note the T15.34 block above makes for its own additions.
+  analyze_image_layout: {
+    additionalProperties: false,
+    properties: {
+      public_path: { pattern: "^/(img|pdf)/[^/]+/[0-9a-fA-F]{64}\\.[a-z]+$", type: "string" },
+      request_id: { minLength: 1, type: "string" },
+      sha256: { pattern: "^[a-fA-F0-9]{64}$", type: "string" },
+      site_id: { minLength: 1, type: "string" }
+    },
+    required: ["site_id", "request_id"],
+    type: "object"
+  },
+  annotate_image: {
+    additionalProperties: false,
+    properties: {
+      device_scale_factor: { type: "integer" },
+      filename: { minLength: 1, type: "string" },
+      format: { minLength: 1, type: "string" },
+      idempotency_key: { minLength: 1, type: "string" },
+      label: { minLength: 1, type: "string" },
+      public_path: { pattern: "^/(img|pdf)/[^/]+/[0-9a-fA-F]{64}\\.[a-z]+$", type: "string" },
+      quality: { type: "integer" },
+      request_id: { minLength: 1, type: "string" },
+      sha256: { pattern: "^[a-fA-F0-9]{64}$", type: "string" },
+      site_id: { minLength: 1, type: "string" },
+      slot: { minLength: 1, type: "string" },
+      spec: { additionalProperties: true, type: "object" },
+      tags: { items: { minLength: 1, type: "string" }, type: "array" }
+    },
+    required: ["site_id", "request_id", "spec"],
+    type: "object"
+  },
+  check_image_text: {
+    additionalProperties: false,
+    properties: {
+      expect: { items: { minLength: 1, type: "string" }, type: "array" },
+      languages: { items: { minLength: 1, type: "string" }, type: "array" },
+      mode: { enum: ["expect_none", "expect"], type: "string" },
+      public_path: { pattern: "^/(img|pdf)/[^/]+/[0-9a-fA-F]{64}\\.[a-z]+$", type: "string" },
+      request_id: { minLength: 1, type: "string" },
+      sha256: { pattern: "^[a-fA-F0-9]{64}$", type: "string" },
+      site_id: { minLength: 1, type: "string" }
+    },
+    required: ["site_id", "request_id", "mode"],
     type: "object"
   }
 };
