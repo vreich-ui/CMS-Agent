@@ -43,6 +43,40 @@
 // pinned unfiltered, `source` stays `node_assignment`, and `degradedReason` says so — because an
 // unreadable store is not evidence that a skill is out of scope, and silently dropping a node's
 // craft skills on a transient read failure is a worse outcome than running with a wider set.
+//
+// C3 — A RECIPE CAN NARROW A NODE'S CANDIDATES, FOR ONE DISPATCH, NEVER WIDEN THEM.
+//
+// THE DEFECT THIS CLOSES. `reference_content_writer` is assigned several task skills —
+// `faq_help_process`, `policy_explanation`, `localization`, `evidence_story` — that are different
+// JOBS sharing one node, not variants of one job. The scope vocabulary's `task` dimension is the
+// nodeId, so it cannot tell those four apart: every one of them is "in scope" for this node on every
+// dispatch. Only the operation recipe invoking the node knows which job this dispatch actually is.
+// Before this, `pinSkillSelection`'s candidates were always exactly `node.assignedSkills` — there was
+// no way for a caller to say "for this dispatch, the candidate is just `policy_explanation`" without
+// mutating the node's assignment itself, which is the same race #358 and C2 part 2 already closed.
+//
+// `options.candidateSkillIds` is that narrower list, supplied per call. It goes through EXACTLY the
+// same two stages as `node.assignedSkills` always has: it is intersected against the assignment
+// (below), then the survivors go through `selectScopedSkills` unchanged. A recipe cannot grant a
+// node a skill nobody assigned it — the assignment stays the sole authority, and this is a filter on
+// top of it, never a second source of truth. An id the recipe asks for that the node was never
+// assigned is refused and recorded as `not_assigned`, not silently dropped and not silently admitted.
+//
+// `source` gets a third value, `recipe_candidates`, set whenever `candidateSkillIds` was supplied —
+// even when scope narrowing also ran afterward — because "a recipe chose this dispatch's job" is the
+// more informative fact for a later reader than "scope was applied", and the `dropped` list and the
+// recorded `candidateSkillIds` already carry the scope detail for anyone who wants it.
+//
+// PRESENCE, NOT LENGTH. `candidateSkillIds: []` is a real answer — "this dispatch uses no skills" —
+// distinguished from "no subset supplied" by `!== undefined`, the same discipline `pinnedSkillIds`
+// already uses in skillResolver.ts. Checking `.length` instead would make an intentionally empty
+// dispatch indistinguishable from one that forgot to narrow.
+//
+// DEGRADED PATH: the recipe's narrowing is a fact the CALLER supplied, not something read from the
+// skill repository, so a store read failure does not touch it — the assignment intersection above
+// runs with no store involved. What the store read would have added is versions and scope narrowing,
+// and those still degrade exactly as before: `skillIds` stays at the recipe-narrowed (but not
+// scope-narrowed) set, and `degradedReason` says scope narrowing was not applied.
 import { compareScopeSpecificity, scopeApplies, scopeLabel, type ScopeContext } from "../scope/policyScope.js";
 import type { SkillRepository } from "../repository/interfaces/SkillRepository.js";
 import type { SkillDefinition } from "./skillTypes.js";
@@ -66,14 +100,22 @@ export type RunSkillSelection = {
   /**
    * Where the set came from. `scoped_selection` means the scope vocabulary was applied to the node's
    * candidates; `node_assignment` means it was not — either because nothing was assigned, or because
-   * the skill read failed and `degradedReason` says which.
+   * the skill read failed and `degradedReason` says which. `recipe_candidates` means the caller
+   * supplied `candidateSkillIds` for this dispatch — see C3 above — regardless of whether scope
+   * narrowing also ran afterward.
    */
-  source: "node_assignment" | "scoped_selection";
+  source: "node_assignment" | "scoped_selection" | "recipe_candidates";
   /**
    * The situation the selection was made against, recorded so a later reader can re-derive the same
    * answer instead of re-deriving the situation. Absent on a pin made before this field existed.
    */
   context?: ScopeContext;
+  /**
+   * The subset the caller supplied to narrow candidates for this one dispatch, when it did — see C3.
+   * Recorded so a later reader can see what the recipe ASKED for, not only what SURVIVED the
+   * assignment check and scope narrowing; the difference between the two is itself diagnostic.
+   */
+  candidateSkillIds?: string[];
   /**
    * The candidates that did NOT survive, each with the reason. This is the difference between "this
    * node has no SEO skill" and "this node's SEO skill is scoped to another site" — one is a gap to
@@ -90,8 +132,11 @@ export type DroppedSkill = {
   /**
    * `out_of_scope` — the skill declares a scope this run is not in.
    * `superseded` — a narrower member of the same family applies here, named in `detail`.
+   * `not_assigned` — a recipe asked for this id as a candidate, but the node was never assigned it;
+   *   the assignment is the sole authority and a recipe can only narrow it, never grant a skill the
+   *   node does not have. See C3.
    */
-  reason: "out_of_scope" | "superseded";
+  reason: "out_of_scope" | "superseded" | "not_assigned";
   detail: string;
 };
 
@@ -182,23 +227,55 @@ export const selectedSkillsFor = (run: Pick<WorkflowExecutionRecord, "skillSelec
  * pinned and `versions` is left empty — losing the version stamp degrades the evidence, whereas
  * refusing to pin would put the dispatch back on the racing global read this module replaces. The
  * ids are what stop the race; the versions are what explain it afterwards.
+ *
+ * `options.candidateSkillIds`, when supplied, narrows the candidates for THIS call only — see C3
+ * above for what it is for and what it refuses. It does not change WRITE-ONCE: an existing entry
+ * still wins over a second call's candidates, exactly as it already wins over a second call's
+ * `node.assignedSkills`.
  */
 export async function pinSkillSelection(
   run: WorkflowExecutionRecord,
   node: Pick<WorkspaceNode, "id" | "assignedSkills">,
   repository: SkillRepository,
-  options: { now?: () => Date; context?: ScopeContext } = {}
+  options: { now?: () => Date; context?: ScopeContext; candidateSkillIds?: string[] } = {}
 ): Promise<RunSkillSelection> {
   const now = options.now ?? (() => new Date());
   const existing = run.skillSelection?.[node.id];
   if (existing) return existing;
 
-  const candidates = unique(node.assignedSkills ?? []);
+  const assigned = unique(node.assignedSkills ?? []);
+  // PRESENCE, not length — see C3. `[]` means "this dispatch uses no skills"; only `undefined` means
+  // no recipe narrowing was requested at all, so the full assignment is the candidate list.
+  const recipeNarrowed = options.candidateSkillIds !== undefined;
+  const dropped: DroppedSkill[] = [];
+
+  let candidates: string[];
+  if (recipeNarrowed) {
+    const requested = new Set(unique(options.candidateSkillIds!));
+    // A recipe can only SUBTRACT from the assignment, never add to it — see C3. Refusing here, with
+    // a reason, is what stops a recipe from handing a node a skill nobody assigned it; silently
+    // dropping the id instead would look identical to the id simply not applying to this run, which
+    // is a different and far less alarming fact than "a recipe tried to grant an unassigned skill".
+    for (const id of requested) {
+      if (!assigned.includes(id)) {
+        dropped.push({
+          skillId: id,
+          reason: "not_assigned",
+          detail: `The recipe asked for "${id}" as a candidate, but node "${node.id}" was never assigned it.`
+        });
+      }
+    }
+    // Kept in the node's own assignment order, matching `skillIds`'s documented contract above — the
+    // recipe's candidate order is not itself meaningful, only which ids it named.
+    candidates = assigned.filter((id) => requested.has(id));
+  } else {
+    candidates = assigned;
+  }
+
   const context = options.context ?? runScopeContext(run, node.id);
   let skillIds = candidates;
   let versions: Record<string, string> = {};
-  let dropped: DroppedSkill[] = [];
-  let source: RunSkillSelection["source"] = "node_assignment";
+  let source: RunSkillSelection["source"] = recipeNarrowed ? "recipe_candidates" : "node_assignment";
   let degradedReason: string | undefined;
   if (candidates.length) {
     try {
@@ -208,12 +285,15 @@ export async function pinSkillSelection(
       // no extra round trip on any dispatch.
       const scoped = selectScopedSkills(candidates, defined, context);
       skillIds = scoped.skillIds;
-      dropped = scoped.dropped;
-      source = "scoped_selection";
+      dropped.push(...scoped.dropped);
+      // `source` stays `recipe_candidates` even when scope also narrowed the set afterward — see C3.
+      if (!recipeNarrowed) source = "scoped_selection";
     } catch (error) {
       // Deliberately swallowed for the VERSION stamp — see the doc comment above. For the SCOPE
       // filter it is recorded rather than swallowed: the pin is wider than the vocabulary would have
-      // made it, and every reader of this record has to be able to see that.
+      // made it, and every reader of this record has to be able to see that. The assignment
+      // intersection above never touched the repository, so a recipe's narrowing survives this
+      // failure untouched — see C3's DEGRADED PATH paragraph.
       degradedReason = `Skill repository unreadable at dispatch; scope narrowing was not applied. ${error instanceof Error ? error.message : String(error)}`;
     }
   }
@@ -225,6 +305,7 @@ export async function pinSkillSelection(
     selectedAt: now().toISOString(),
     source,
     context,
+    ...(recipeNarrowed ? { candidateSkillIds: unique(options.candidateSkillIds!) } : {}),
     ...(dropped.length ? { dropped } : {}),
     ...(degradedReason ? { degradedReason } : {})
   };
