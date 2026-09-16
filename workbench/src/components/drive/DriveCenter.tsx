@@ -27,13 +27,13 @@ import * as verbs from '../../api/verbs';
 import { ActionCancelledError } from '../../api/confirmAction';
 import { IS_READ_ONLY } from '../../api/client';
 import {
-  useNodes,
+  useWorkflowNodes,
+  useWorkflowRecentRuns,
   useRetryNode,
   useRun,
   useRunCost,
   useRunNextNode,
   useRunNode,
-  useRuns,
   useWorkflowGraph,
   useWorkflows,
 } from '../../api/hooks';
@@ -55,6 +55,7 @@ import {
   normalizeValidationIssues,
   runNodeProvenance,
   suppliedOutputMarker,
+  type NodeOutputEntry,
 } from './overrideStatus';
 
 /** Same defensive per-node cost read the trace waterfall uses (its own copy
@@ -94,7 +95,7 @@ function DriveEmptyState({ wf }: { wf: string }) {
   const bindRunForDrive = useStore((s) => s.bindRunForDrive);
   const workflowsQ = useWorkflows();
   // W1 — the bind-run picker lists recent runs for this workflow; five rows is enough.
-  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
+  const wfRunsQ = useWorkflowRecentRuns(wf);
   const workflow = workflowsQ.data?.find((w) => w.id === wf);
   const recent = (wfRunsQ.data ?? []).slice(0, 6);
 
@@ -148,6 +149,33 @@ function DriveEmptyState({ wf }: { wf: string }) {
 // suppliedOutputMarker), and only falls back to the legacy
 // node_list_outputs query when the run carries no provenance for this
 // dependency at all (a run recorded before outputProvenance existed).
+/**
+ * W3 — ONE run-scoped legacy read for the whole grid, instead of one per node.
+ *
+ * The `operator_override` marker moved onto the run record's `outputProvenance` (overrideStatus.ts),
+ * so this query is only ever needed for a run written before that field existed. But it fired PER
+ * NODE and per upstream dependency: a Drive-mode bind on such a run measured `node_list_outputs`
+ * x 24 on 2026-09-16, one request per row, each one asking the same question about the same run.
+ *
+ * `node_list_outputs` takes `runId` on its own, so the answer for every node in the run is a single
+ * call. Rows filter it by nodeId in memory. The query is keyed by run, so React Query dedupes all
+ * of them into that one request no matter how many rows mount.
+ */
+function useRunLegacyOutputs(runId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['runOutputs', runId],
+    queryFn: () => verbs.nodeListOutputs({ runId }),
+    enabled: enabled && Boolean(runId),
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** The legacy override entry for one node, out of the run-wide list above. */
+function legacyOverrideFor(raw: unknown, nodeId: string): NodeOutputEntry | undefined {
+  return findOverride(extractOutputList(raw as { outputs?: unknown[] } | undefined).filter((entry) => !entry.nodeId || entry.nodeId === nodeId));
+}
+
 function UpstreamDep({
   depId,
   runId,
@@ -158,14 +186,8 @@ function UpstreamDep({
   provenance: 'default_output' | 'operator_override' | null;
 }) {
   const needsLegacyCheck = provenance === null;
-  const q = useQuery({
-    queryKey: ['nodeOutputs', depId, runId],
-    queryFn: () => verbs.nodeListOutputs({ nodeId: depId, runId }),
-    enabled: needsLegacyCheck,
-    staleTime: 15_000,
-    retry: false,
-  });
-  const legacyOverride = needsLegacyCheck ? findOverride(extractOutputList(q.data)) : undefined;
+  const q = useRunLegacyOutputs(runId, needsLegacyCheck);
+  const legacyOverride = needsLegacyCheck ? legacyOverrideFor(q.data, depId) : undefined;
   const hasOverride = provenance === 'operator_override' || Boolean(legacyOverride);
   const hasDefault = provenance === 'default_output';
   return (
@@ -229,14 +251,8 @@ function GridRow({
   // this node (see overrideStatus.ts's header on suppliedOutputMarker).
   const provenance = suppliedOutputMarker(run, nid);
   const needsLegacyCheck = provenance === null;
-  const overrideQ = useQuery({
-    queryKey: ['nodeOutputs', nid, run.id],
-    queryFn: () => verbs.nodeListOutputs({ nodeId: nid, runId: run.id }),
-    enabled: needsLegacyCheck && status === 'completed',
-    staleTime: 30_000,
-    retry: false,
-  });
-  const hasOverride = provenance === 'operator_override' || (needsLegacyCheck && overrideQ.isSuccess && Boolean(findOverride(extractOutputList(overrideQ.data))));
+  const overrideQ = useRunLegacyOutputs(run.id, needsLegacyCheck && status === 'completed');
+  const hasOverride = provenance === 'operator_override' || (needsLegacyCheck && overrideQ.isSuccess && Boolean(legacyOverrideFor(overrideQ.data, nid)));
   const hasDefault = provenance === 'default_output';
 
   return (
@@ -297,7 +313,7 @@ function StepResultCard({
   const openModal = useStore((s) => s.openModal);
   const retryM = useRetryNode();
   const costQ = useRunCost(run.id);
-  const nodesQ = useNodes(wf);
+  const nodesQ = useWorkflowNodes(wf);
   const node = nodesQ.data?.find((n) => n.id === nodeId);
 
   const [retryOpen, setRetryOpen] = useState(false);
@@ -487,7 +503,7 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
 
   const runQ = useRun(runId);
   const workflowsQ = useWorkflows();
-  const nodesQ = useNodes(wf);
+  const nodesQ = useWorkflowNodes(wf);
   const graphQ = useWorkflowGraph(wf);
   const runNextM = useRunNextNode();
   const runNodeM = useRunNode();
@@ -512,6 +528,11 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
 
   const nextNodeId = run?.cur ?? null;
   const nextNode = nextNodeId ? nodesById.get(nextNodeId) : undefined;
+  // W3 — the rail's node rows are the `detail: "summary"` projection now, which reports WHETHER a
+  // standing default exists (`hasDefaultOutput`) without carrying the value. A summary row's
+  // absent `defaultOutput` means "not in this projection", never "no default is set" — reading it
+  // as the latter would disable push-through on every node that has one.
+  const nextNodeHasDefault = nextNode?.summary ? nextNode.hasDefaultOutput === true : Boolean(nextNode?.defaultOutput);
   const nextDeps = useMemo(() => {
     if (!nextNodeId) return [];
     const raw = graphQ.data?.nodes.find((n) => n.id === nextNodeId);
@@ -653,13 +674,13 @@ function DriveSession({ runId, wf }: { runId: string; wf: string }) {
               {stepping ? 'Stepping…' : `▸ Step (run ${run.cur})`}
             </Btn>
             <Btn
-              disabled={pushingDefault || IS_READ_ONLY || !nextNode?.defaultOutput || refusedAsPublishNode}
+              disabled={pushingDefault || IS_READ_ONLY || !nextNodeHasDefault || refusedAsPublishNode}
               title={
                 IS_READ_ONLY
                   ? READONLY_REASON_DRIVE
                   : refusedAsPublishNode
                     ? `${run.cur} writes to a live client (${nextNode?.kind ?? nextNode?.risk} risk) and this is a live run — its output can never be supplied instead of produced (defaulted_publish_node_refused).`
-                    : !nextNode?.defaultOutput
+                    : !nextNodeHasDefault
                       ? `${run.cur} has no standing default output set — give it one on its Default output tab first.`
                       : "Complete this node from its standing default — no model turn, no cost. This run can never publish live while it stands."
               }

@@ -32,6 +32,15 @@ async function goToWorkflows(page: Page) {
   await expect(page.locator('.pagewrap .pagehead h1')).toHaveText('Workflows');
 }
 
+/**
+ * W3 — the attention strip is a COUNT badge until expanded; the count comes off the run index via
+ * `workbench.bootstrap` (no run record opened), and the evidence-citing list is the expensive verb
+ * that runs when the operator actually asks. Everything below still holds one click later.
+ */
+async function expandAttention(page: import('@playwright/test').Page) {
+  await page.locator('.attn-strip button').first().click();
+}
+
 test.describe('attention strip', () => {
   test('lists items ranked most-severe-first, each with its evidence string visible with no click', async ({
     page,
@@ -39,6 +48,7 @@ test.describe('attention strip', () => {
     await page.goto('/');
     await goToWorkflows(page);
 
+    await expandAttention(page);
     const strip = page.locator('.attn-strip');
     await expect(strip).toHaveClass(/attn-strip--items/, { timeout: 10_000 });
 
@@ -76,6 +86,7 @@ test.describe('attention strip', () => {
     await page.goto('/');
     await goToWorkflows(page);
 
+    await expandAttention(page);
     const strip = page.locator('.attn-strip');
     await expect(strip).toHaveClass(/attn-strip--items/, { timeout: 10_000 });
 
@@ -110,6 +121,7 @@ test.describe('attention strip', () => {
     await page.goto('/');
     await goToWorkflows(page);
 
+    await expandAttention(page);
     const strip = page.locator('.attn-strip');
     await expect(strip).toHaveClass(/attn-strip--error/, { timeout: 10_000 });
     await expect(strip).toContainText('The attention check could not run');

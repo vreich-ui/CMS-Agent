@@ -35,6 +35,10 @@ import { routeControlPlaneRequest } from "../src/agent/mcp/http/controlPlaneRout
 import { DEPRECATED_TOOL_ALIASES } from "../src/agent/mcp/workspace/server.js";
 import { CONTINUATION_TICK_INTERVAL_MS, DEPLOYED_TICK_DEFAULTS, continuationTickIntervalMs } from "../src/agent/workspace/runContinuation.js";
 
+// This checker dispatches every tool on both planes; W1's per-dispatch log line would bury its
+// own report. The service keeps logging — only this script opts out.
+process.env.MCP_TOOL_LOG ??= "off";
+
 const DRIFT_TOKEN = "two-plane-drift-detector-token";
 const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../docs/mcp-tool-manifest.json", import.meta.url)));
 

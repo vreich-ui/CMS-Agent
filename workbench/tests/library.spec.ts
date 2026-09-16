@@ -33,12 +33,21 @@ test('library screen renders workflow cards from live data, both themes', async 
   );
 
   // Mock verbs carry an artificial delay, so poll rather than one-shot count.
+  // W3 — five cards now: the catalog's three conductors, its planned card, and `visual_identity`,
+  // which the SERVER registers and WORKFLOW_CATALOG has never heard of. The deck is driven by
+  // `workbench.bootstrap`'s `registeredWorkflowIds`, so a workflow the workspace actually runs can
+  // no longer be invisible here just because a presentation constant in this repo went stale — the
+  // live registry has five such workflows today.
   await expect(async () => {
-    expect(await page.locator('.cards .wfcard').count()).toBe(4);
+    expect(await page.locator('.cards .wfcard').count()).toBe(5);
   }).toPass({ timeout: 10_000 });
 
-  // 3 real workflow cards + the planned card.
-  await expect(page.locator('.cards .wfcard:not(.planned)')).toHaveCount(3);
+  // 3 catalog conductors + 1 live-only card + the planned card.
+  await expect(page.locator('.cards .wfcard:not(.planned)')).toHaveCount(4);
+
+  const liveOnly = cardFor(page, 'Visual identity');
+  await expect(liveOnly).toHaveCount(1);
+  await expect(liveOnly.locator('.lbl')).toHaveText('Registered workflow — no presentation config');
   const planned = page.locator('.cards .wfcard.planned');
   await expect(planned).toHaveCount(1);
   await expect(planned.locator('h3')).toHaveText('Foundation-charity conductor');
@@ -92,7 +101,7 @@ test('library screen renders workflow cards from live data, both themes', async 
 
   // Back to the library for the theme screenshots.
   await page.locator('nav.main button', { hasText: 'Workflows' }).click();
-  await expect(page.locator('.cards .wfcard')).toHaveCount(4);
+  await expect(page.locator('.cards .wfcard')).toHaveCount(5);
 
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
   await page.emulateMedia({ colorScheme: 'light' });

@@ -79,18 +79,31 @@ export async function handleNodeRequest(req: IncomingMessage, res: ServerRespons
     return;
   }
 
+  // W1 — the client's own disconnect, surfaced to the dispatcher. `res` "close" fires for both a
+  // completed response and an abandoned one, so the abort is raised only while the response has
+  // not been written.
+  const aborted = new AbortController();
+  let settled = false;
+  res.on("close", () => { if (!settled) aborted.abort(); });
+
   try {
     const request: RouterRequest = {
       method: req.method ?? "GET",
       path: url.pathname,
       query: Object.fromEntries(url.searchParams.entries()),
       headers: normalizeHeaders(req.headers),
-      body: await readBody(req)
+      body: await readBody(req),
+      signal: aborted.signal
     };
     const response = await routeControlPlaneRequest(request);
+    settled = true;
+    // 499 is this server's "client closed request": there is nobody left to write to, so end the
+    // socket without pretending an answer was produced.
+    if (response.statusCode === 499) { res.destroy(); return; }
     res.writeHead(response.statusCode, { ...response.headers, ...corsResponseHeaders(origin, allowedOrigins) });
     res.end(response.body);
   } catch (error) {
+    settled = true;
     const tooLarge = error instanceof Error && error.message === "payload_too_large";
     res.writeHead(tooLarge ? 413 : 500, { "content-type": "application/json", ...corsResponseHeaders(origin, allowedOrigins) });
     res.end(JSON.stringify({ error: { code: tooLarge ? "payload_too_large" : "internal_error", message: tooLarge ? "Request body exceeds the limit." : "Unhandled server error." } }));

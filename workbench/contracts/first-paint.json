@@ -1,0 +1,224 @@
+{
+  "$comment": "W0 — the Workbench's first-paint verb set, and the budget W3 has to bring it inside. Machine-readable so scripts/perf/workbench-load.mjs can replay exactly this burst against a live plane, and so workbench/tests/firstPaintBudget.spec.ts can assert the call count and transfer size against the same source of truth instead of a number typed twice.",
+  "capturedAt": "2026-09-16",
+  "capturedFrom": "static trace of every TanStack query mounted on a cold load of the deployed build (cms-agent.netlify.app/workbench/), cross-checked against the operator's browser waterfall of the same date (15 verbs). Re-derive with: grep the hooks mounted by App.tsx's always-on subtree plus the active screen.",
+  "appState": {
+    "screen": "bench",
+    "mode": "build",
+    "runId": null,
+    "node": "(empty until Rail.adoptFirstNode)",
+    "tab": "prompt",
+    "wf": "publishing_conductor"
+  },
+  "budget": {
+    "maxVerbCalls": 2,
+    "maxTransferredBytes": 40960,
+    "appliesTo": "everything issued before the rail is interactive",
+    "rationale": "Design decision 3 of the runner plan. A verb whose p95 exceeds 3s gets a projection or an index, never a longer timeout."
+  },
+  "before": {
+    "verbCalls": 15,
+    "distinctVerbs": 9,
+    "calls": [
+      {
+        "verb": "workspace_get_nodes",
+        "args": {},
+        "origin": "components/CommandPalette.tsx:187 useNodes(undefined)",
+        "why": "⌘K's node index. The palette is mounted for the app's whole lifetime (App.tsx) and this query is not gated on paletteOpen, so every cold load pays the flat 48-node workspace list whether or not the palette is ever opened.",
+        "bytes": 310000,
+        "note": "310 KB; prompt 53%, outputSchema 17%, deprecated `schema` alias 12% (38 KB pure duplicate)"
+      },
+      {
+        "verb": "workflow_list_runs",
+        "args": {
+          "limit": 20
+        },
+        "origin": "components/CommandPalette.tsx:188 useRuns({})",
+        "why": "⌘K's run index. Same ungated-mount problem.",
+        "bytes": 24000
+      },
+      {
+        "verb": "project_list",
+        "args": {},
+        "origin": "components/CommandPalette.tsx:189 + components/StartRunModal.tsx:50 useProjects() (one network call, two observers)",
+        "why": "Project picker options. Genuinely needed on first paint — the only one of the palette's three that survives the budget.",
+        "bytes": 4000
+      },
+      {
+        "verb": "workspace_get_graph",
+        "args": {
+          "workflowId": "publishing_conductor"
+        },
+        "origin": "components/TopBar.tsx:71 workflowCountsQ",
+        "why": "Node COUNT for the workflow menu. Downloads a whole graph to read `.nodes.length`.",
+        "bytes": 120000
+      },
+      {
+        "verb": "workspace_get_graph",
+        "args": {
+          "workflowId": "clone_conductor"
+        },
+        "origin": "components/TopBar.tsx:71 workflowCountsQ",
+        "why": "Same, second catalog workflow.",
+        "bytes": 95000
+      },
+      {
+        "verb": "workspace_get_graph",
+        "args": {
+          "workflowId": "capture_conductor"
+        },
+        "origin": "components/TopBar.tsx:71 workflowCountsQ",
+        "why": "Same, third catalog workflow. The catalog lists 3; the live registry has 6, so this fan-out grows with the registry.",
+        "bytes": 85000
+      },
+      {
+        "verb": "workspace_get_graph",
+        "args": {
+          "workflowId": "publishing_conductor"
+        },
+        "origin": "screens/Workbench/Rail.tsx:194 useNodes(wf) (Dock.tsx:175 shares the key)",
+        "why": "The rail's real topology. Distinct query key from workflowCountsQ's identical call — the same graph is fetched twice on one paint.",
+        "bytes": 120000
+      },
+      {
+        "verb": "workflow_list_runs",
+        "args": {
+          "workflowId": "publishing_conductor",
+          "limit": 5
+        },
+        "origin": "screens/Workbench/Rail.tsx:206 + Dock.tsx:64 useRuns({workflowId, limit:5})",
+        "why": "Recent runs for the rail's run chips.",
+        "bytes": 6000
+      },
+      {
+        "verb": "evaluation_list_rubrics",
+        "args": {},
+        "origin": "screens/Workbench/Rail.tsx:208 useRubrics()",
+        "why": "Per-node score glyphs. Nothing above the fold needs it — leaves first paint in W3.",
+        "bytes": 12000,
+        "measuredMs": null
+      },
+      {
+        "verb": "changes_list",
+        "args": {
+          "actorKind": "agent",
+          "source": "learning"
+        },
+        "origin": "screens/Workbench/Rail.tsx:214 learningChangesQ",
+        "why": "\"Learned since your last visit\" badges. Degrades to no badges on failure — must not be on the critical path.",
+        "bytes": 40000
+      },
+      {
+        "verb": "workspace_get_node",
+        "args": {
+          "id": "<first node>"
+        },
+        "origin": "screens/Workbench/Center.tsx:46 useNode(nodeId)",
+        "why": "Inspector header. Seeded from the ['nodes'] cache, so this is a background refresh — but it is still a request in the burst.",
+        "bytes": 9000
+      },
+      {
+        "verb": "node_get_effective_prompt",
+        "args": {
+          "nodeId": "<first node>"
+        },
+        "origin": "screens/Workbench/tabs/PromptTab.tsx:40 useEffectivePrompt",
+        "why": "Default inspector tab is `prompt`, so this fires on every cold load.",
+        "bytes": 7000,
+        "measuredMs": 16000
+      },
+      {
+        "verb": "playbook_get",
+        "args": {
+          "nodeId": "<first node>"
+        },
+        "origin": "screens/Workbench/tabs/PromptTab.tsx:41 usePlaybook",
+        "why": "Learned prompt material for the same tab.",
+        "bytes": 3000
+      },
+      {
+        "verb": "skill_list",
+        "args": {},
+        "origin": "screens/Workbench/tabs/PromptTab.tsx:42 useSkills()",
+        "why": "Skill names for the prompt's skill chips. The whole skill catalogue, for a chip row.",
+        "bytes": 63000,
+        "measuredMs": 20000
+      },
+      {
+        "verb": "node_get_latest_output",
+        "args": {
+          "nodeId": "<first node>"
+        },
+        "origin": "screens/Workbench/tabs/DefaultOutputTab.tsx:92",
+        "why": "Fires when the operator's persisted tab is `default` rather than `prompt` — one of the two tab-dependent members of the burst.",
+        "bytes": 4000,
+        "measuredMs": 13000,
+        "conditional": "tab === 'default'"
+      }
+    ]
+  },
+  "after": {
+    "verbCalls": 2,
+    "calls": [
+      {
+        "verb": "workbench_bootstrap",
+        "args": {
+          "workflowId": "publishing_conductor"
+        },
+        "why": "W3 — registeredWorkflowIds + summary graph + 5 summary run rows + attention counts + workspaceVersion, all from W1's cached reads.",
+        "maxBytes": 32768
+      },
+      {
+        "verb": "project_list",
+        "args": {},
+        "why": "Project picker options; small, and needed by the run-start path the operator reaches first.",
+        "maxBytes": 8192
+      }
+    ],
+    "movedOffFirstPaint": [
+      {
+        "verb": "skill_list",
+        "to": "Skills tab, on open"
+      },
+      {
+        "verb": "evaluation_list_rubrics",
+        "to": "Learning tab, on open"
+      },
+      {
+        "verb": "changes_list",
+        "to": "rail badges, after paint, idle-scheduled"
+      },
+      {
+        "verb": "node_get_effective_prompt",
+        "to": "Prompt tab, on open (hover-prefetched)"
+      },
+      {
+        "verb": "playbook_get",
+        "to": "Prompt tab, on open"
+      },
+      {
+        "verb": "node_get_latest_output",
+        "to": "Default output tab, on open"
+      },
+      {
+        "verb": "workspace_get_nodes",
+        "to": "⌘K, gated on paletteOpen"
+      },
+      {
+        "verb": "workflow_list_runs",
+        "to": "⌘K (gated) and the rail (served from bootstrap)"
+      },
+      {
+        "verb": "workspace_get_graph",
+        "to": "served from bootstrap; TopBar reads counts off the summary graph instead of fetching one graph per workflow"
+      }
+    ],
+    "verifiedBy": "workbench/tests/firstPaintBudget.spec.ts — asserts this file's budget against window.__verbCalls (api/client.ts) filtered to calls started strictly before window.__railInteractiveAt (Rail.tsx). Both seams are DEV-only.",
+    "boundaryCases": [
+      {
+        "verb": "workspace_get_node",
+        "note": "Issued in the SAME React commit the rail becomes interactive in: the rail adopts a first node, and the inspector reads it. It is a consequence of first paint, not a precondition for it, so it is outside the budget by the strict-inequality rule in the spec — but it is still one call for one node, not a 310 KB list."
+      }
+    ]
+  }
+}

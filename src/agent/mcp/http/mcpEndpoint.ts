@@ -18,7 +18,12 @@ import { getExecutionRepository } from "../../runtime/repositories.js";
 const SESSION_HEADER = "mcp-session-id";
 const PROTOCOL_HEADER = "mcp-protocol-version";
 
-export type McpHttpRequest = { httpMethod: string; body: string | null; headers: HeaderMap };
+export type McpHttpRequest = { httpMethod: string; body: string | null; headers: HeaderMap; signal?: AbortSignal };
+
+// A client that has hung up gets no further work. This does not abort a blob read already in
+// flight — the store client's SDK calls take no signal — so it is a floor, not a ceiling: what it
+// reliably stops is the REST of a batch, and any dispatch not yet started.
+const clientGone = { statusCode: 499, headers: {}, body: "" } satisfies McpHttpResponse;
 export type McpHttpResponse = { statusCode: number; headers: Record<string, string>; body: string };
 
 const json = (statusCode: number, body: unknown, headers: Record<string, string> = {}): McpHttpResponse => ({
@@ -263,14 +268,22 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
 
     const responseHeaders: Record<string, string> = negotiatedProtocol ? { [PROTOCOL_HEADER]: negotiatedProtocol } : {};
 
+    if (request.signal?.aborted) return clientGone;
+
     if (Array.isArray(rawBody)) {
       const calls = rawBody.filter((message) => !isMcpNotification(message));
       if (calls.length === 0) return empty(202, responseHeaders);
+      // Still dispatched in parallel: batching exists precisely so independent calls overlap, and
+      // serializing them to gain a mid-batch abort check would be a real regression to buy a small
+      // saving. The abort checks bracket the batch instead.
       const responses = await Promise.all(calls.map((message) => handleMcpJsonRpc(message, context)));
+      if (request.signal?.aborted) return clientGone;
       return json(200, responses, responseHeaders);
     }
     if (isMcpNotification(rawBody)) return empty(202, responseHeaders);
-    return json(200, await handleMcpJsonRpc(rawBody, context), responseHeaders);
+    const result = await handleMcpJsonRpc(rawBody, context);
+    if (request.signal?.aborted) return clientGone;
+    return json(200, result, responseHeaders);
   } catch (error) {
     if (error instanceof SyntaxError) return json(400, { error: { code: "invalid_json", message: "Request body must be valid JSON." } });
     return json(500, { error: { code: "internal_error", message: error instanceof Error ? error.message : "Unknown error" } });

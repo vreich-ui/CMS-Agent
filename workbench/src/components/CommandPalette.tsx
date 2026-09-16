@@ -184,9 +184,15 @@ export function CommandPalette() {
   const screen = useStore((s) => s.screen);
 
   const workflowsQ = useWorkflows();
-  const nodesQ = useNodes(undefined); // every node, across every workflow
-  const runsQ = useRuns({});
-  const projectsQ = useProjects();
+  // W3 — ⌘K is mounted for the app's whole lifetime (App.tsx), and its three index queries were
+  // not gated on `open`. Every cold load therefore paid for the flat 310 KB node list, a 20-row
+  // run page and the project list to populate a palette nobody had opened — three of the fifteen
+  // verbs on the measured first paint. They now load when the palette does; the index is ready
+  // well before anyone can finish typing, and the first paint never pays for it.
+  // Summary rows: ⌘K indexes ids and names, and never renders a prompt or a schema.
+  const nodesQ = useNodes(undefined, { enabled: open, detail: 'summary' }); // every node, across every workflow
+  const runsQ = useRuns({}, { enabled: open });
+  const projectsQ = useProjects({ enabled: open });
   const boundRunQ = useRun(runId);
   const queryClient = useQueryClient();
 
@@ -391,7 +397,13 @@ export function CommandPalette() {
       // (defaulted_publish_node_refused: a live run can't supply the
       // output of a node that writes to a live client).
       const wouldBeRefused = isLiveRun(boundRun) && isPublishTailNode(currentNodeData);
-      if (runId && currentNodeData?.defaultOutput && !wouldBeRefused) {
+      // W7 — this read `defaultOutput`, and the palette's node list became a `detail: "summary"`
+      // read in W6. A summary row carries `hasDefaultOutput` and never the value itself, so this
+      // action silently disappeared from ⌘K for every node. DriveCenter and Rail were both updated
+      // for the same change; this one was missed. Either shape answers the only question asked
+      // here — does this node have a standing default to push through.
+      const hasDefault = Boolean(currentNodeData?.defaultOutput ?? currentNodeData?.hasDefaultOutput);
+      if (runId && hasDefault && !wouldBeRefused) {
         out.push({
           kind: 'action',
           label: `push through ${node} with default`,

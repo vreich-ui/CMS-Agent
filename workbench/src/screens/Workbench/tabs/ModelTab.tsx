@@ -113,6 +113,27 @@ function validateField(spec: FieldSpec, raw: string): string | null {
   return null;
 }
 
+/**
+ * W6 — the Model tab's UNSAVED draft, as a modelConfig patch in server wire units, or null when
+ * there is no draft or it matches what is stored. Exported so the Prompt tab's replay can honour
+ * "modelConfig: tab edits" without the operator having to save a config change to the node first
+ * (saving is a workspace mutation on every future run; a replay should not require one). It reuses
+ * this file's own formToRaw/diffRawPatch rather than restating the unit conversion, because the
+ * seconds-to-milliseconds step on `timeout` is exactly the sort of thing a second copy gets wrong.
+ */
+export function unsavedModelConfigPatch(node: WorkflowNode): Record<string, unknown> | null {
+  const draft = getLocalDraft<DraftForm>(node.id, 'model');
+  if (!draft) return null;
+  // W7 — the draft is written to local storage on EVERY keystroke, unvalidated: `handleSave` below
+  // is what validates, and this path does not go through it. A half-typed field therefore reached
+  // `formToRaw` as `Number("") === NaN` and serialised to JSON `null`, so a replay could send
+  // `{ budgetUsd: null }` to a real model call. A draft that this tab would refuse to save is not a
+  // draft to run against; an invalid one is treated as no override at all.
+  if (FIELDS.some((spec) => validateField(spec, draft[spec.key]) !== null)) return null;
+  const patch = diffRawPatch(formToRaw(formToDraft(node.model ?? DEFAULT_MODEL)), formToRaw(draft));
+  return Object.keys(patch).length ? (patch as Record<string, unknown>) : null;
+}
+
 export function ModelTab({ node }: { node: WorkflowNode }) {
   const nodeId = node.id;
   const qc = useQueryClient();

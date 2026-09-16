@@ -33,6 +33,13 @@ export type ToolExecutionRow = {
   routeId?: string;
   projectId?: string;
   engineVerbUnlisted?: true;
+  /** REBASE RECONCILIATION — read by the per-node I/O tab (workbench-v2 W4), which shows what a
+   *  call was given and what came back. Optional and meant to stay that way: not every ledger row
+   *  carries a payload, and the fixture plane synthesises these where the server records none, so a
+   *  surface must render their absence rather than assume them. */
+  args?: unknown;
+  result?: unknown;
+  error?: string;
 };
 
 export type TimelineFilters = { caller?: string; routeId?: string };

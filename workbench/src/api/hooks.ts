@@ -7,6 +7,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import { getSession, type SessionInfo } from './client';
 import * as verbs from './verbs';
+import { useStore } from '../store';
 import type {
   Agent,
   Dataset,
@@ -27,15 +28,79 @@ type Options<T> = Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>;
 
 // ================================== reads =====================================
 
-export function useWorkflows(options?: Options<Workflow[]>) {
-  return useQuery({ queryKey: ['workflows'], queryFn: verbs.workflowList, ...options });
+/**
+ * W3 — the first-paint read. ONE call for the registry, the workflow's summary graph, its recent
+ * runs, the attention counts and the workspace version.
+ *
+ * Its `staleTime` is deliberately long: this is the query a persisted cache paints from on the
+ * second visit, and `workspaceVersion` is what tells the client whether that paint is still true.
+ */
+export function useBootstrap(workflowId: string | null | undefined, options?: Options<verbs.BootstrapEnvelope>) {
+  return useQuery({
+    queryKey: ['bootstrap', workflowId ?? 'none'],
+    queryFn: () => verbs.workbenchBootstrap(workflowId ? { workflowId } : {}),
+    ...options,
+  });
 }
 
-export function useNodes(workflowId?: string, options?: Options<WorkflowNode[]>) {
+/**
+ * The workflow deck. WORKFLOW_CATALOG supplies presentation config (phase names, icon, blurb);
+ * the SERVER supplies which workflows exist. A registered workflow the catalog has never heard of
+ * gets a generic card and a single "ungrouped (live)" phase rather than being invisible — which is
+ * what it was: the catalog lists three, the registry runs eight.
+ */
+export function useWorkflows(options?: Options<Workflow[]>) {
+  // Reads the SAME bootstrap the rail does, keyed on the same workflow, so the deck and the rail
+  // are one request rather than two. Keying it on anything else (`null`, say) would have made the
+  // first paint fire two bootstraps and blown the two-call budget this verb exists to hit.
+  const wf = useStore((s) => s.wf);
+  const bootstrapQ = useBootstrap(wf);
+  const registered = bootstrapQ.data?.registeredWorkflowIds;
   return useQuery({
-    queryKey: ['nodes', workflowId ?? 'all'],
-    queryFn: () => verbs.workspaceGetNodes({ workflowId }),
+    queryKey: ['workflows', registered ?? 'catalog-only'],
+    queryFn: () => verbs.workflowList(registered),
     ...options,
+  });
+}
+
+/**
+ * W3 — the node set a WORKFLOW SURFACE draws, served from the bootstrap.
+ *
+ * Rows are the `detail: "summary"` projection: identity, shape, status, executionKind, and a
+ * promptSha — 19 KB for 51 nodes against 310 KB for the same set in full. Anything needing a
+ * prompt, a schema, tools or skills fetches that ONE node (`useNode`), which is what an inspector
+ * does anyway. `WorkflowNode.summary` marks the rows so nothing mistakes an empty `tools` array
+ * for a node that grants none.
+ *
+ * Same query key as the rest of the app's bootstrap, so this costs no request of its own.
+ */
+export function useWorkflowNodes(workflowId: string | null | undefined) {
+  const query = useBootstrap(workflowId);
+  return { ...query, data: query.data?.graph?.nodes };
+}
+
+/**
+ * The rail / dock / drive "recent runs" strip, served from the same bootstrap. These three
+ * surfaces used to pass a byte-identical filter object so react-query would dedupe them into one
+ * request — a coincidence maintained by a comment. They now read one query by construction.
+ */
+export function useWorkflowRecentRuns(workflowId: string | null | undefined) {
+  const query = useBootstrap(workflowId);
+  return { ...query, data: query.data?.recentRuns };
+}
+
+/**
+ * The FLAT node list — every node across every workflow. `detail: "summary"` is the projection
+ * (W2): identity, shape, status, executionKind, promptSha, ~19 KB for 51 nodes against ~310 KB in
+ * full. A caller that only needs ids and names (⌘K's index, the activity feed's node→workflow map)
+ * asks for it; the rows are marked `summary` so nothing mistakes their empty `tools` for a fact.
+ */
+export function useNodes(workflowId?: string, options?: Options<WorkflowNode[]> & { detail?: 'summary' | 'full' }) {
+  const { detail, ...queryOptions } = options ?? {};
+  return useQuery({
+    queryKey: ['nodes', workflowId ?? 'all', detail ?? 'full'],
+    queryFn: () => verbs.workspaceGetNodes({ workflowId, detail }),
+    ...queryOptions,
   });
 }
 
@@ -58,7 +123,10 @@ export function useNode(nodeId: string | null | undefined, options?: Options<Wor
       if (!nodeId) return undefined;
       for (const [, data] of qc.getQueriesData<WorkflowNode[]>({ queryKey: ['nodes'] })) {
         const hit = data?.find((n) => n.id === nodeId);
-        if (hit) return hit;
+        // W3 — a SUMMARY row must never seed the inspector. It carries no prompt, tools, skills
+        // or description, and seeding one would paint an inspector claiming this node grants no
+        // tools and has no prompt until the real read landed. Only a full node seeds.
+        if (hit && !hit.summary) return hit;
       }
       return undefined;
     },
@@ -218,8 +286,21 @@ export function useSkills(options?: Options<Skill[]>) {
   return useQuery({
     queryKey: ['skills'],
     queryFn: () => {
-      const cached = qc.getQueryData<WorkflowNode[]>(['nodes', 'all']);
-      return verbs.skillList(cached);
+      // W7 — TWO BUGS IN ONE LINE, both introduced by W3's node-list changes.
+      //
+      // The key moved: `useNodes` now keys as `['nodes', workflowId ?? 'all', detail ?? 'full']`,
+      // so this exact-key lookup always missed and `skillList` fell back to a second, FULL,
+      // unfiltered `workspace_get_nodes` — the ~310 KB download W3 exists to have removed — on
+      // every skill list.
+      //
+      // And the cached list is now usually a SUMMARY one, whose `skills` array is empty because the
+      // projection drops it, not because the node grants none. Handing those rows to
+      // `assignedSkillsByNode` would have reported every skill as assigned to nothing, which is
+      // worse than the extra call: a wrong answer instead of a slow one. So only a FULL list is
+      // reused, and a summary one falls through to the fetch.
+      const cached = qc.getQueryData<WorkflowNode[]>(['nodes', 'all', 'full']);
+      const usable = cached?.length && !cached.some((node) => node.summary) ? cached : undefined;
+      return verbs.skillList(usable);
     },
     ...options,
   });
@@ -296,6 +377,11 @@ export function useSession(options?: Options<SessionInfo>) {
  */
 export function invalidateRunLists(qc: ReturnType<typeof useQueryClient>): void {
   qc.invalidateQueries({ queryKey: ['runs'] });
+  // W3 — the rail's run strip, the attention badge and the workflow deck's counts all read the
+  // bootstrap now, so a run-control mutation that did not invalidate it would leave every one of
+  // them showing the state from before the operator's own action. Same defect as the ['runsPage']
+  // omission below, one wave later.
+  qc.invalidateQueries({ queryKey: ['bootstrap'] });
   // REVIEW FIX — TanStack matches a query key prefix ELEMENT BY ELEMENT, so ['runs'] matches
   // neither ['runsPage', …] nor ['runsPages', …]. W1 introduced both and nothing invalidated
   // them: under the app-wide 5-minute staleTime with no focus refetch, an operator who paused a

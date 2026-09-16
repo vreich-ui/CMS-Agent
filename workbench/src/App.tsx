@@ -2,12 +2,14 @@ import {
   MutationCache,
   QueryCache,
   QueryClient,
-  QueryClientProvider,
   keepPreviousData,
 } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
+import { QueryClientProvider } from '@tanstack/react-query';
 import './styles/tokens.css';
 import './styles/base.css';
-import { AuthError, IS_MOCK } from './api/client';
+import { AuthError, IS_MOCK, WORKSPACE_CACHE_KEY } from './api/client';
 import { setConfirmHandler } from './api/confirmAction';
 import { IconSprite } from './components/Icons';
 import { TopBar } from './components/TopBar';
@@ -75,6 +77,80 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// P2-02 / W3 — stale-while-revalidate across SESSIONS.
+//
+// Everything above makes a cold paint cheap. This makes the SECOND visit free: the query cache is
+// written to localStorage and restored on boot, so the Workbench paints from the last session's
+// answer immediately and refreshes in place behind it, instead of showing skeletons for the length
+// of a round trip every single time the operator opens the tab.
+//
+// What is persisted, and what is deliberately not:
+//   * Keyed by WORKSPACE_CACHE_KEY, so a browser pointed at a different control plane (staging,
+//     a local broker, fixtures) never paints from another one's cache.
+//   * `buster` is the app build id, so a deploy that changes an adapter's output shape cannot
+//     restore data shaped for the previous one.
+//   * `maxAge` 24h. Prompts and schemas are workspace content on the operator's own machine, which
+//     is the trade this accepts; a token is NOT — it lives in sessionStorage and is never written
+//     here, and `shouldDehydrateQuery` keeps the session query out regardless.
+//   * Never in fixture mode: fixtures are supposed to be reproducible from a cold start, and a
+//     persisted fixture cache would make one Playwright run's state visible to the next.
+//
+// `workspaceVersion` off `workbench.bootstrap` is the invalidation key the UI reads (TopBar shows
+// "updated Ns ago"): a restored cache whose version still matches the server's is current, and one
+// that does not is replaced by the refetch that is already in flight behind it.
+const PERSISTED_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Query roots that must never reach the disk, whatever their status.
+ *
+ * `session` was the original entry — the bearer lives in sessionStorage and nothing about the
+ * session belongs in a 24-hour cache.
+ *
+ * W7 adds `agentConversations`. W5's Client Manager page reads CMS-Agent's audit mirror of what
+ * editors have actually been saying to their admin chat: assistant text previews, actor ids,
+ * per-turn token counts and cost estimates, for a TENANT. The trade this persistence accepts is
+ * stated one comment up as "prompts and schemas are workspace content on the operator's own
+ * machine" — other people's conversation transcripts are a different category, and opening that
+ * page once should not leave a day's worth of them unencrypted on whatever laptop it was opened on.
+ * The page refetches them in well under a second; there was never much to save.
+ */
+const NEVER_PERSISTED = new Set(['session', 'agentConversations']);
+
+// The fixture suite opts in through `window.__PERSIST_IN_FIXTURES__` (set by an addInitScript,
+// which runs before this module), because the second-visit assertion is about the persistence
+// layer itself and there is no other plane the Playwright suite runs against.
+const persistenceForced = typeof window !== 'undefined'
+  && (window as unknown as { __PERSIST_IN_FIXTURES__?: boolean }).__PERSIST_IN_FIXTURES__ === true;
+
+const persister = (IS_MOCK && !persistenceForced) || typeof window === 'undefined'
+  ? null
+  : (() => {
+      try {
+        return createSyncStoragePersister({
+          storage: window.localStorage,
+          key: `conductor-workbench:${WORKSPACE_CACHE_KEY}`,
+          throttleTime: 2000,
+        });
+      } catch {
+        // Private windows, blocked site data, and storage quota all throw here. A Workbench that
+        // cannot persist is a Workbench that paints from the network, which is exactly what it did
+        // before this existed — never a broken one.
+        return null;
+      }
+    })();
+
+const persistOptions = persister
+  ? {
+      persister,
+      maxAge: PERSISTED_CACHE_MAX_AGE_MS,
+      buster: (import.meta.env.VITE_BUILD_ID as string | undefined) ?? 'dev',
+      dehydrateOptions: {
+        shouldDehydrateQuery: (query: { queryKey: readonly unknown[]; state: { status: string } }) =>
+          query.state.status === 'success' && !NEVER_PERSISTED.has(String(query.queryKey[0])),
+      },
+    }
+  : null;
 
 // Test/inspection hook only — no runtime behaviour depends on this. Exposes
 // the one QueryClient instance so the Playwright suite can assert on real
@@ -154,8 +230,8 @@ function ModeBadge() {
 // overlay/useOverlayUrl.ts. Mounted inside LoginGate for the same reason
 // the other overlays are: nothing should be deep-linkable past the gate.
 function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
+  const shell = (
+    <>
       <IconSprite />
       {/* WP-44 — gates everything below: in fixture mode this renders
           children immediately (the app must stay demonstrable with no
@@ -190,7 +266,16 @@ function App() {
         <OverlayHost />
         <ModeBadge />
       </LoginGate>
-    </QueryClientProvider>
+    </>
+  );
+  // No persister (fixture mode, or a browser that refuses storage) means the plain provider and
+  // exactly the pre-W3 behaviour.
+  return persistOptions ? (
+    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+      {shell}
+    </PersistQueryClientProvider>
+  ) : (
+    <QueryClientProvider client={queryClient}>{shell}</QueryClientProvider>
   );
 }
 

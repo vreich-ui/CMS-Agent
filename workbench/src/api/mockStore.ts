@@ -150,6 +150,9 @@ class MockStore {
   private regressionReports: RawRegressionReport[];
   private datasets: RawDataset[];
   private comparePairs: ComparePair[];
+  /** W6 — monotonic id source for `executeNode`'s synthetic execution/run ids, so a fixture
+   *  replay is distinguishable from the one before it without reaching for a clock. */
+  private executionCounter = 1;
   private usageOverall: RawUsageSummary;
   private usageByWorkflowId: Record<string, RawUsageSummary>;
   private readiness: RawFinetuneReadiness;
@@ -428,6 +431,55 @@ class MockStore {
     if (validation.valid) return undefined;
     const first = validation.issues[0];
     return `supplied_output_schema_invalid:${first ? `${first.path}: ${first.message}` : 'value does not match the declared output schema'}`;
+  }
+
+  /**
+   * W4 — the controlled tool calls a node made inside a run, for the I/O tab.
+   *
+   * The captured fixture set records none (a real capture of a mock run makes none either — a mock
+   * dispatch produces schema-shaped output without calling anything). Rather than invent a ledger
+   * for every node, this synthesizes calls only for nodes whose grants say they could have made
+   * them, so the panel's empty state is exercised as much as its populated one.
+   */
+  listToolExecutions(runId: string, nodeId: string): Array<Record<string, unknown>> {
+    const run = this.runs.find((r) => r.runId === runId);
+    const state = run?.nodes?.find((n) => n.nodeId === nodeId);
+    if (!run || !state || state.status !== 'completed') return [];
+    const node = this.getNode(nodeId);
+    const grants = node?.allowedTools ?? [];
+    if (!grants.length) return [];
+    return grants.slice(0, 2).map((toolId, i) => ({
+      toolExecutionId: `${runId}_${nodeId}_${i}`,
+      runId,
+      nodeId,
+      toolId,
+      caller: 'model',
+      status: 'ok',
+      durationMs: 400 + i * 250,
+      startedAt: run.startedAt,
+      args: { nodeId, note: 'fixture tool call' },
+      result: { ok: true },
+    }));
+  }
+
+  /** W5 — the Client Manager's editable prompt, for the Client Manager page. */
+  updateAgent(agentId: string, patch: { prompt?: string }): Record<string, unknown> | undefined {
+    const agent = this.agents.find((entry) => (entry as { id?: string }).id === agentId) as Record<string, unknown> | undefined;
+    if (!agent) return undefined;
+    if (patch.prompt !== undefined) {
+      agent.prompt = patch.prompt;
+      // Editing the prompt diverges it from the shipped canonical text and bumps the revision,
+      // exactly as the live store does — the badge on the page is reading a real state change.
+      agent.promptState = 'diverged';
+      agent.rev = ((agent.rev as number) ?? 0) + 1;
+      agent.updatedAt = new Date().toISOString();
+    }
+    return agent;
+  }
+
+  /** W5 — no captured conversations in this fixture set; see the handler's own note. */
+  listAgentConversations(_agentId: string): Array<Record<string, unknown>> {
+    return [];
   }
 
   /** U3 — writes an operator override into the run's stage outputs.
@@ -825,6 +877,69 @@ class MockStore {
 
   getReadiness(): RawFinetuneReadiness {
     return this.readiness;
+  }
+
+  /**
+   * W6 — `node_execute` in fixture mode.
+   *
+   * The live tool (nodeRuntime.executeNode) writes a WHOLE synthetic run record — workflowId
+   * "independent_node", projectId "workspace" — and returns `{ execution, executionId }`. This
+   * returns the same envelope and nothing more generous:
+   *   - an unknown node throws, exactly as `Unknown node: x` does live;
+   *   - the output is a placeholder built from the node's own declared outputSchema, which is
+   *     precisely what the live server's MOCK runner produces (schema-shaped, content-free);
+   *   - fixture mode has no model, so it never claims `executionMode: "openai"`.
+   * The record is NOT added to `this.runs`: an independent execution is not a workflow run, and a
+   * fixture that listed it in the Runs screen would be lying about the live plane.
+   */
+  executeNode(nodeId: string, opts: { runId?: string; dependencyOutputs?: Record<string, unknown> } = {}) {
+    const node = this.getNode(nodeId);
+    if (!node) throw new Error(`Unknown node: ${nodeId}`);
+    const schema = (node.outputSchema ?? null) as null | {
+      required?: string[];
+      properties?: Record<string, { type?: string; enum?: unknown[] }>;
+    };
+    const placeholder: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(schema?.properties ?? {})) {
+      const type = prop?.type;
+      if (Array.isArray(prop?.enum) && prop.enum.length) placeholder[key] = prop.enum[0];
+      else if (type === 'number' || type === 'integer') placeholder[key] = 0;
+      else if (type === 'boolean') placeholder[key] = false;
+      else if (type === 'array') placeholder[key] = [];
+      else if (type === 'object') placeholder[key] = {};
+      else placeholder[key] = `[mock ${nodeId}.${key}]`;
+    }
+    // A schema with no declared properties still has to return SOMETHING an operator can compare,
+    // and the live mock runner has the same problem; it answers with the node's `produces` type.
+    if (!Object.keys(placeholder).length) placeholder.result = `[mock output of ${nodeId}]`;
+    const executionId = `exec_mock_${nodeId}_${this.executionCounter++}`;
+    const runId = `run_independent_${this.executionCounter}`;
+    const now = new Date().toISOString();
+    return {
+      executionId,
+      execution: {
+        runId,
+        workflowId: 'independent_node',
+        projectId: 'workspace',
+        status: 'completed',
+        executionMode: 'mock',
+        startedAt: now,
+        completedAt: now,
+        errors: [],
+        stageOutputs: { ...(opts.dependencyOutputs ?? {}), [nodeId]: placeholder },
+        nodes: [
+          {
+            nodeId,
+            status: 'completed',
+            startedAt: now,
+            completedAt: now,
+            durationMs: 0,
+            input: { input: undefined, dependencies: opts.dependencyOutputs ?? {} },
+            output: placeholder,
+          },
+        ],
+      },
+    };
   }
 
   /** Compare (A/B) verdicts nudge finetune readiness — Phase 5 wires the UI. */

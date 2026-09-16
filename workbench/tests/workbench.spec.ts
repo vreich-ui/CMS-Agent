@@ -87,8 +87,11 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), 'light');
   await page.emulateMedia({ colorScheme: 'light' });
 
-  // All 9 tabs render without error for publish_executor (blocked, publish risk).
-  await expect(page.locator('.tabs button')).toHaveCount(10);
+  // Every tab renders without error for publish_executor (blocked, publish risk). W4 added I/O,
+  // which is the only tab a DETERMINISTIC node like this one has anything to say on: its prompt and
+  // its grants are both empty by construction.
+  await expect(page.locator('.tabs button')).toHaveCount(11);
+  await expect(page.locator('.tabs button', { hasText: 'I/O' })).toHaveCount(1);
   await cycleAllTabs(page);
   // Blocked status surfaces a gate card on "This run".
   await page.locator('.tabs button', { hasText: 'This run' }).click();
@@ -119,7 +122,7 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   // --- draft_writer: real live prompt + model config ---
   await page.locator('.rail .nrow', { hasText: 'draft_writer' }).click();
   await expect(page.locator('.nhead h2')).toHaveText('Full Draft Writer');
-  await expect(page.locator('.tabs button')).toHaveCount(10); // run still bound
+  await expect(page.locator('.tabs button')).toHaveCount(11); // run still bound
   await cycleAllTabs(page);
 
   await page.locator('.tabs button', { hasText: 'Prompt' }).click();
@@ -158,7 +161,7 @@ test('workbench: rail, tabs, dock render correctly across nodes, themes and mode
   await expect(page.locator('.nhead h2')).toHaveText('Theme Bind (deterministic site-token write)');
   await expect(page.locator('.nhead .id')).toHaveText('theme_bind');
   await expect(page.locator('.nhead .risk')).toHaveText('write');
-  await expect(page.locator('.tabs button')).toHaveCount(10);
+  await expect(page.locator('.tabs button')).toHaveCount(11);
   await expect(page.locator('.center .lbl', { hasText: 'not found' })).toHaveCount(0);
 
   // --- Build mode: the dock's "▸ Start run…" opens the start-run modal

@@ -286,6 +286,14 @@ test('Runs: an unscoped runs query is ONE windowed call, and paging still reache
   page,
 }) => {
   await page.goto('/');
+  // W3 — let the app's own first paint settle before the counter below is installed. The counter
+  // patches `mockStore.getRuns`, which is shared: `workbench.bootstrap` reads runs through it too,
+  // so a still-in-flight bootstrap would be counted against `workflowListRunsPage` and the
+  // assertion would be measuring the wrong thing. The bootstrap fires once per load (5-minute
+  // staleTime) and is long finished by here.
+  await expect(page.locator('.topbar')).toBeVisible();
+  await page.waitForTimeout(1200);
+
   const result = await page.evaluate(async () => {
     const verbs = await import('/src/api/verbs.ts');
     const client = await import('/src/api/client.ts');

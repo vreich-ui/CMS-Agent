@@ -53,8 +53,9 @@ describe("workflow.list_runs detail modes (W4)", () => {
     expect(row.runId).toBe("run_0024");
     expect(row.nodes).toBeUndefined();
     expect(row).toMatchObject({ nodeCount: 2, completedCount: 2, failedCount: 0, errorCount: 0, artifactCount: 0, dryRun: true });
-    // The mode block every row has always carried, unchanged.
-    expect(row.mode).toMatchObject({ executionMode: "mock", live: false, declared: true });
+    // W2 — the mode block is interned in the response-level `modes` map and the row points at it.
+    expect(row.mode).toBeUndefined();
+    expect((result.modes as Record<string, unknown>)[row.modeRef as string]).toMatchObject({ executionMode: "mock", live: false, declared: true });
 
     const failedRow = (result.runs as Array<Record<string, unknown>>).find((r) => r.status === "failed");
     expect(failedRow).toMatchObject({ failedCount: 1, completedCount: 1, errorCount: 1 });
@@ -114,5 +115,54 @@ describe("workflow.list_runs detail modes (W4)", () => {
     // Each row comfortably inside the ~1KB target, on a fixture whose rows are already modest —
     // a real run's nodes[] carries two dozen nodes with timings, warnings and attempt history.
     for (const row of summary.runs as unknown[]) expect(bytes(row)).toBeLessThan(1_024);
+  });
+});
+
+// W2 — the envelope. Measured live 2026-09-16: a `{limit:50, summary}` page was 60 KB, of which
+// `mode` was 24 KB (repeated verbatim on every row, two distinct values across the fleet) and
+// `nodeStatuses` 18 KB (rendered by exactly one surface, discarded by every other caller).
+describe("workflow.list_runs payload projections (W2)", () => {
+  beforeEach(async () => {
+    process.env.MCP_API_TOKEN = "test-token";
+    resetRepositoryManager();
+    const repository = repositoryManager.getExecutionRepository();
+    for (let n = 1; n <= 50; n++) await repository.createRun(makeRun(n));
+  });
+
+  it("interns the mode block once per distinct value instead of repeating it per row", async () => {
+    const page = await data("workflow.list_runs", { limit: 50 });
+    expect(page.runs).toHaveLength(50);
+    // Two distinct modes across fifty rows — one entry each, and every row points at one.
+    expect(Object.keys(page.modes).length).toBeLessThanOrEqual(2);
+    for (const row of page.runs) {
+      expect(row).not.toHaveProperty("mode");
+      expect(page.modes[row.modeRef]).toBeDefined();
+    }
+  });
+
+  it("leaves the per-node chips off unless a caller asks for them", async () => {
+    const withoutChips = await data("workflow.list_runs", { limit: 50 });
+    for (const row of withoutChips.runs) {
+      expect(row).not.toHaveProperty("nodeStatuses");
+      expect(row).not.toHaveProperty("failedNodeIds");
+    }
+    // ...and the counts a row has always carried are still there, so "how many failed" needs no
+    // opt-in — only "which ones" does.
+    expect(withoutChips.runs[0]).toHaveProperty("nodeCount");
+
+    const withChips = await data("workflow.list_runs", { limit: 50, include: ["nodeStatuses"] });
+    expect(withChips.runs.some((row: { nodeStatuses?: unknown }) => row.nodeStatuses)).toBe(true);
+
+    // The saving, asserted rather than asserted-about.
+    const lean = JSON.stringify(withoutChips).length;
+    const fat = JSON.stringify(withChips).length;
+    expect(lean).toBeLessThan(fat);
+    expect(lean).toBeLessThanOrEqual(20 * 1024);
+  });
+
+  it("keeps the chips available to the one surface that draws them", async () => {
+    const page = await data("workflow.list_runs", { limit: 5, include: ["nodeStatuses"] });
+    const failed = page.runs.find((row: { failedNodeIds?: string[] }) => row.failedNodeIds?.length);
+    expect(failed?.nodeStatuses).toMatchObject({ draft_writer: "f" });
   });
 });

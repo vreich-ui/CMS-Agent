@@ -1007,12 +1007,64 @@ function withRunLock<T>(runId: string, task: () => Promise<T>): Promise<T> {
 // changed — so it is deliberately narrow: it bypasses the PRE-DISPATCH refusal for exactly one
 // dispatch, never the underlying classified retry budget (nodeRetryPolicy.ts, untouched) and never any
 // gate this module does not own (a publish gate, an approval, a budget ceiling).
-export type RunAdvanceOptions = { executionRepository?: ExecutionRepository; workspaceRepository?: WorkspaceRepository; approved?: boolean; driver?: RunDriver; retryJustification?: string };
+export type RunAdvanceOptions = {
+  executionRepository?: ExecutionRepository;
+  workspaceRepository?: WorkspaceRepository;
+  approved?: boolean;
+  driver?: RunDriver;
+  retryJustification?: string;
+  /**
+   * W4 — the output mode to decide THIS advance by, overriding the run's own.
+   *
+   * "Run to here on defaults, live from here" is one operator gesture and has to be one call
+   * (`workflow.run_until { nodeId, outputMode: "defaults_where_set" }`). The obvious implementation
+   * — write the mode onto the run, drive, write it back — is wrong twice over: a crash mid-loop
+   * leaves a run permanently in a mode nobody chose, and a concurrent driver picking the run up
+   * would silently inherit it. This is per-call and never persisted, so the run's own outputMode
+   * keeps meaning what the operator set at start, and the override dies with the request.
+   */
+  outputMode?: RunOutputMode;
+};
 
 // node-default-output — the operator's own push-through, carried separately from RunAdvanceOptions
 // because it addresses ONE node by name and must never leak onto whatever node an advance happens to
 // pick next.
-export type PushThroughOptions = RunAdvanceOptions & { note?: string };
+export type PushThroughOptions = RunAdvanceOptions & {
+  note?: string;
+  /**
+   * W4 — push through a node whose upstream is NOT complete, by defaulting the chain that leads to
+   * it. Off by default, because defaulting several nodes at once is a bigger act than defaulting
+   * one and must be asked for.
+   */
+  defaultUpstream?: boolean;
+};
+
+/**
+ * W4 — every incomplete ancestor of `nodeId`, in dependency order (deepest first), so a chain can
+ * be defaulted in an order where each node's own dependencies are already satisfied.
+ *
+ * "Incomplete" is any state other than completed: queued, failed, blocked, skipped. Cycles cannot
+ * occur in a validated graph, and the visited set makes this safe even if one ever did.
+ */
+export function incompleteAncestorsOf(run: WorkflowExecutionRecord, nodes: WorkspaceNode[], nodeId: string): WorkspaceNode[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const statusOf = (id: string) => run.nodes.find((state) => state.nodeId === id)?.status;
+  const ordered: WorkspaceNode[] = [];
+  const visited = new Set<string>([nodeId]);
+  const visit = (id: string): void => {
+    const node = byId.get(id);
+    if (!node) return;
+    for (const dependency of node.dependsOn) {
+      if (visited.has(dependency)) continue;
+      visited.add(dependency);
+      visit(dependency);
+      const dependencyNode = byId.get(dependency);
+      if (dependencyNode && statusOf(dependency) !== "completed") ordered.push(dependencyNode);
+    }
+  };
+  visit(nodeId);
+  return ordered;
+}
 
 // S1 — dispatch provenance. Resolves, for THIS process, whether the run's project MCP endpoint env var
 // is set (never its value), so the claim written at dispatch says what the dispatching driver could
@@ -2348,7 +2400,7 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
       return { run };
     }
 
-    const decision = decideDefaultOutput({ node: nextNode, outputMode: run.outputMode ?? DEFAULT_RUN_OUTPUT_MODE, overridden: state.defaultOutputOverride });
+    const decision = decideDefaultOutput({ node: nextNode, outputMode: options.outputMode ?? run.outputMode ?? DEFAULT_RUN_OUTPUT_MODE, overridden: state.defaultOutputOverride });
     if (decision.action === "apply") {
       applyRunOutputFromDefault({
         run,
@@ -4328,6 +4380,63 @@ export async function pushNodeThroughWithDefault(runId: string, nodeId: string, 
       const state = run.nodes.find((candidate) => candidate.nodeId === nodeId);
       if (!state) throw new WorkspaceToolError("unknown_node", `Run ${runId} carries no execution state for node "${nodeId}".`, { runId, nodeId });
       if (!node.defaultOutput) throw defaultOutputMissingError(nodeId, { runId });
+
+      // W4 — "get me TO this node", as opposed to "write this node's output".
+      //
+      // Pushing one node through has always worked whatever state its upstream is in: the write
+      // lands and the run then advances through the upstream it still owes. That is deliberate and
+      // stays exactly as it was — several gates are tested through it. What is new is the OTHER
+      // intention, which had no expression at all: default the chain that leads to this node so the
+      // run is actually AT it.
+      //
+      // It has to be asked for (`defaultUpstream`), and the run's own outputMode has to allow
+      // supplied outputs: defaulting one node is an operator's fixture, defaulting six is a
+      // different act, and a run started in "live" never quietly becomes a defaulted one. Every
+      // refusal names the FIRST node in the way, because that is the one thing to act on.
+      const incompleteUpstream = options.defaultUpstream ? incompleteAncestorsOf(run, nodes, nodeId) : [];
+      if (incompleteUpstream.length) {
+        const modeAllowsDefaults = (run.outputMode ?? DEFAULT_RUN_OUTPUT_MODE) !== DEFAULT_RUN_OUTPUT_MODE;
+        if (!modeAllowsDefaults) {
+          const blocking = incompleteUpstream[0];
+          throw new WorkspaceToolError(
+            "upstream_incomplete",
+            `Node ${nodeId} depends on ${incompleteUpstream.length} node${incompleteUpstream.length === 1 ? "" : "s"} that ${incompleteUpstream.length === 1 ? "has" : "have"} not completed on this run — the first is ${blocking.id} — and this run's outputMode is "${run.outputMode ?? DEFAULT_RUN_OUTPUT_MODE}", which does not allow supplied outputs. Start a run in "defaults_where_set" to push a chain through, or push ${nodeId} alone (without defaultUpstream), which writes only that node and leaves the run to advance through its upstream as usual.`,
+            { runId, nodeId, blockingNodeId: blocking.id, incompleteNodeIds: incompleteUpstream.map((upstream) => upstream.id), outputMode: run.outputMode ?? DEFAULT_RUN_OUTPUT_MODE }
+          );
+        }
+        // Every node in the chain must be defaultable, and every one of them faces the SAME gates
+        // the target does. Checked before anything is written, so the run is never left half-pushed.
+        const chainLiveRun = ((run.executionMode ?? DEFAULT_EXECUTION_MODE) as ExecutionMode) !== "mock";
+        for (const upstream of incompleteUpstream) {
+          if (!upstream.defaultOutput) throw defaultOutputMissingError(upstream.id, { runId, requestedNodeId: nodeId, reason: "upstream_chain" });
+          if (writesToLiveClient(upstream) && chainLiveRun) {
+            throw new WorkspaceToolError(
+              "defaulted_publish_node_refused",
+              `${DEFAULTED_UPSTREAM_GATE_ID}: ${nodeId} cannot be reached by defaulting its chain, because ${upstream.id} writes to a live client (riskLevel ${upstream.riskLevel}, kind ${upstream.kind}) on a live run. Use a mock run to exercise it.`,
+              { runId, nodeId, blockingNodeId: upstream.id, gateId: DEFAULTED_UPSTREAM_GATE_ID }
+            );
+          }
+        }
+        for (const upstream of incompleteUpstream) {
+          const upstreamState = run.nodes.find((candidate) => candidate.nodeId === upstream.id);
+          if (!upstreamState) throw new WorkspaceToolError("unknown_node", `Run ${runId} carries no execution state for node "${upstream.id}".`, { runId, nodeId: upstream.id });
+          if (upstreamState.status === "skipped") upstreamState.skipOverride = true;
+          delete upstreamState.skip;
+          delete upstreamState.retry;
+          delete upstreamState.defaultOutputOverride;
+          run.errors = dropUnretriedNodeErrors(run.errors, upstream.id);
+          run.approvalsRequired = run.approvalsRequired.filter((approval) => approval.nodeId !== upstream.id);
+          applyRunOutputFromDefault({
+            run,
+            state: upstreamState,
+            node: upstream,
+            value: upstream.defaultOutput!.value,
+            source: "default_output",
+            updatedAt: upstream.defaultOutput!.updatedAt,
+            note: upstream.defaultOutput!.note
+          });
+        }
+      }
       if (state.status === "running" && state.dispatch && Date.now() <= Date.parse(state.dispatch.dispatchedAt) + state.dispatch.timeoutMs + STALL_MARGIN_MS) {
         throw new WorkspaceToolError(
           "node_dispatch_in_flight",

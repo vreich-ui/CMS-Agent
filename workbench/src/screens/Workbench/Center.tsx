@@ -13,6 +13,7 @@ import { nodeStatusFromRun, runCurrentNodeCopy } from './helpers';
 import { DefaultOutputTab } from './tabs/DefaultOutputTab';
 import { DepsTab } from './tabs/DepsTab';
 import { HistoryTab } from './tabs/HistoryTab';
+import { IOTab } from './tabs/IOTab';
 import { LearningTab } from './tabs/LearningTab';
 import { ModelTab } from './tabs/ModelTab';
 import { PromptTab } from './tabs/PromptTab';
@@ -23,6 +24,10 @@ import { ToolsTab } from './tabs/ToolsTab';
 
 const TABDEFS: Array<[NodeTab, string]> = [
   ['thisrun', 'This run'],
+  // W4 — next to This-run deliberately: they answer adjacent questions ("what happened to this
+  // node" and "what went in, what came out, what did it call"), and an operator debugging a bad
+  // output moves between them.
+  ['io', 'I/O'],
   ['prompt', 'Prompt'],
   ['tools', 'Tools'],
   ['skills', 'Skills'],
@@ -88,7 +93,18 @@ export function Center() {
     );
   }
 
-  if (workflowsQ.isLoading || nodeQ.isLoading || !workflow) {
+  // W3 — the inspector must never render one node's configuration under another node's header.
+  //
+  // The app-wide `placeholderData: keepPreviousData` (App.tsx) keeps the PREVIOUS node's record on
+  // screen while the newly selected one loads. That was invisible while `useNode` seeded itself
+  // from the cached node list, because the seed was always the right node. It is visible now that
+  // the list is a summary projection and cannot seed: for one round trip the tabs rendered the
+  // last node's prompt, tools and model config under the new node's name — and an edit started in
+  // that window was silently discarded the moment the real record arrived.
+  //
+  // Placeholder data for a DIFFERENT node is not data about this node. Treat it as loading.
+  const settled = nodeQ.data && nodeQ.data.id === nodeId;
+  if (workflowsQ.isLoading || nodeQ.isLoading || (nodeQ.data && !settled) || !workflow) {
     return (
       <main className="center">
         <Skeleton lines={5} />
@@ -162,7 +178,8 @@ export function Center() {
           )}
         </>
       )}
-      {tab === 'prompt' && <PromptTab node={node} nodeId={nodeId} wfName={workflow.name} />}
+      {tab === 'io' && <IOTab node={node} nodeId={nodeId} run={run} />}
+      {tab === 'prompt' && <PromptTab node={node} nodeId={nodeId} wfName={workflow.name} run={run} />}
       {tab === 'tools' && <ToolsTab node={node} />}
       {tab === 'skills' && <SkillsTab node={node} nodeId={nodeId} />}
       {tab === 'schemas' && <SchemasTab nodeId={nodeId} />}

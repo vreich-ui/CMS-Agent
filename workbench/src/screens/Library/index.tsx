@@ -13,7 +13,7 @@
 // capture_conductor's 16 vs. 11). New CSS for the strip/chip lives in
 // styles/base.css's appended `/* U1 */` block.
 
-import { useRunsPage, useWorkflowGraph, useWorkflows } from '../../api/hooks';
+import { useBootstrap, useRunsPage, useWorkflowGraph, useWorkflows } from '../../api/hooks';
 import { AttentionStrip } from '../../components/AttentionStrip';
 import { Ic } from '../../components/Icons';
 import { Btn, Lbl } from '../../components/primitives';
@@ -87,10 +87,17 @@ function WorkflowCard({ wf }: { wf: Workflow }) {
   // contracts/README.md). `nodeCountGap`/the tooltip below are dead in
   // this fixture but stay in place as the honest fallback for any
   // workflow the live query can't resolve.
-  const graphQ = useWorkflowGraph(wf.id);
+  // W3 — the COUNT comes off `workbench.bootstrap`, which carries one integer per registered
+  // workflow. This card used to fetch a whole graph per workflow to read `.nodes.length`; with the
+  // deck now driven by the server registry (eight workflows, not the catalog's three) that would
+  // have been eight graph downloads to print eight numbers. The graph itself is still fetched —
+  // lazily, and only to answer "which node does 'Open' land on" — so a card renders its stats
+  // without it.
+  const bootstrapQ = useBootstrap(useStore((s) => s.wf));
   const catalogNodeIds = orderedNodeIds(wf);
+  const nodeCount = bootstrapQ.data?.nodeCounts?.[wf.id];
+  const graphQ = useWorkflowGraph(wf.id, { enabled: false });
   const liveNodeIds = graphQ.data?.nodes.map((n) => n.id);
-  const nodeCount = liveNodeIds?.length;
   const nodeCountGap = nodeCount === 0 && catalogNodeIds.length > 0;
 
   // W1 — the card asks two SCOPED, windowed questions instead of slicing one
@@ -111,9 +118,14 @@ function WorkflowCard({ wf }: { wf: Workflow }) {
   const last = recentQ.data?.runs[0];
 
   function openWorkbench() {
+    // W7 — `liveNodeIds` is undefined (its query is disabled) and a registry-only card has no
+    // catalog ids, so `firstNode` was undefined and the Workbench opened on whatever node was
+    // selected last — belonging to a DIFFERENT workflow — until the rail's adoption effect
+    // happened to fire. Clearing the selection lets that effect adopt this workflow's first node,
+    // which is the behaviour it exists for.
     const firstNode = (liveNodeIds && liveNodeIds.length > 0 ? liveNodeIds : catalogNodeIds)[0];
     setWf(wf.id);
-    if (firstNode) setNode(firstNode);
+    setNode(firstNode ?? '');
     unbindRun(); // clears runId, mode -> 'build', tab -> 'prompt'
     setScreen('bench');
   }
@@ -134,7 +146,17 @@ function WorkflowCard({ wf }: { wf: Workflow }) {
               : undefined
           }
         >
-          {nodeCount != null ? `${nodeCount} nodes` : graphQ.isError ? 'nodes: unavailable' : '… nodes'}
+          {/* W7 — the error branch read `graphQ.isError`, and that query is `enabled: false`, so it
+              can never be true: a failed bootstrap left every card reading "… nodes" forever, and a
+              catalog workflow the registry does not list did the same. The count comes from
+              BOOTSTRAP now, so bootstrap is what has to answer for it. */}
+          {nodeCount != null
+            ? `${nodeCount} nodes`
+            : bootstrapQ.isError
+              ? 'nodes: unavailable'
+              : bootstrapQ.isLoading
+                ? '… nodes'
+                : 'nodes: not reported'}
         </span>
         <span>{runCount != null ? `${runCount} runs` : recentQ.isError ? 'runs: unavailable' : '… runs'}</span>
         <span>

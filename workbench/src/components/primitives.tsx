@@ -43,13 +43,16 @@ export function Card({
   label,
   children,
   style,
+  id,
 }: {
   label?: ReactNode;
   children?: ReactNode;
   style?: CSSProperties;
+  /** An addressable handle for a card whose label is composed of several nodes — see IOTab. */
+  id?: string;
 }) {
   return (
-    <div className="card" style={style}>
+    <div className="card" style={style} id={id}>
       {label !== undefined && <span className="lbl">{label}</span>}
       {children}
     </div>

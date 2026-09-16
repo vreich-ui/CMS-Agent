@@ -4,6 +4,7 @@ import { createWorkspaceTools, toolError, type WorkspaceTool, type WorkspaceTool
 import { toolErrorSummary } from "./toolKit.js";
 import { canonicalToolName } from "./toolKit.js";
 import { repositoryManager } from "../../runtime/repositories.js";
+import { clearReadMemo, isMemoizableRead, withReadMemo } from "./readVerbMemo.js";
 
 // Optional catalog scoping for connectors. The full workspace catalog is 100+ tools, which is a
 // heavy context load for MCP clients; MCP_EXPOSED_TOOL_PREFIXES (comma-separated namespace list,
@@ -100,6 +101,15 @@ export type HandleMcpOptions = {
   sessionId?: string;
 };
 
+// One log name for every tool dispatch, so a log-based latency breakdown is a single filter.
+export const MCP_TOOL_LOG = "mcp.tool_call";
+
+// On by default — this line is the whole point of W1's observability half, and Cloud Run's request
+// log cannot name the verb. Off under vitest and for any caller that sets MCP_TOOL_LOG=off (the
+// drift checker dispatches hundreds of tools and wants its own output readable).
+const toolLoggingEnabled = (): boolean => (process.env.MCP_TOOL_LOG ?? (process.env.VITEST ? "off" : "on")) !== "off";
+const logToolCall = (fields: Record<string, unknown>): void => { if (toolLoggingEnabled()) console.info(MCP_TOOL_LOG, JSON.stringify(fields)); };
+
 export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolContext = {}, options: HandleMcpOptions = {}) {
   const request = message as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
   const id = request.id ?? null;
@@ -122,8 +132,26 @@ export async function handleMcpJsonRpc(message: unknown, context: WorkspaceToolC
         const name = String(request.params?.name ?? "");
         const tool = byName.get(name);
         if (!tool) return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
-        const result = await tool.execute(request.params?.arguments ?? {});
-        return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } };
+        const args = request.params?.arguments ?? {};
+        // Anything that is not a known read may have changed what the reads answer. Dropping the
+        // memo around it keeps read-after-write honest — see clearReadMemo's own comment.
+        if (!isMemoizableRead(name)) clearReadMemo();
+        // W1 — one line per dispatch, naming the TOOL and its duration. Cloud Run's request log
+        // knows only that something POSTed /mcp, so "which verb is slow" was unanswerable from
+        // production telemetry; every latency claim about this service had to be made from a
+        // browser's network panel. Never logs arguments or results — those carry tenant content.
+        const startedAt = Date.now();
+        try {
+          const { result, memoized } = await withReadMemo(name, args, context, () => tool.execute(args));
+          if (!isMemoizableRead(name)) clearReadMemo();
+          const bytes = JSON.stringify(result)?.length ?? 0;
+          logToolCall({ tool: name, ms: Date.now() - startedAt, bytes, memoized, ok: true, ...(context.requestId ? { requestId: context.requestId } : {}) });
+          return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } };
+        } catch (error) {
+          if (!isMemoizableRead(name)) clearReadMemo();
+          logToolCall({ tool: name, ms: Date.now() - startedAt, ok: false, ...(context.requestId ? { requestId: context.requestId } : {}) });
+          throw error;
+        }
       }
       case "prompts/list":
         return { jsonrpc: "2.0", id, result: { prompts: (await repositoryManager.getWorkspaceRepository().getNodes()).map((node) => ({ name: node.id, description: node.name, arguments: [] })) } };

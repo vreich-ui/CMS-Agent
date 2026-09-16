@@ -17,9 +17,9 @@
 // mistaken for — an all-clear: loading, error+retry, a real empty state,
 // and the item list.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useRuns, useWorkflows } from '../api/hooks';
+import { useBootstrap, useRuns, useWorkflows } from '../api/hooks';
 import { constellationGetAttention, type AttentionItem } from '../api/verbs';
 import { useStore } from '../store';
 import { Btn } from './primitives';
@@ -153,16 +153,28 @@ export function AttentionStrip() {
   //   verb, but on one that can take 25s to fail it means the operator waits out TWO
   //   timeouts before the error card appears. One honest failure, shown immediately,
   //   with a Retry button they can press themselves.
+  //   W3 — and a third: it does not run at all until the operator asks for it. The COUNT of runs
+  //   needing attention is free (it is read off the run index by `workbench.bootstrap`, opening no
+  //   run records); the LIST is the expensive verb, because citing evidence means reading the runs
+  //   it is citing. So the strip is a badge until it is expanded, which is the moment the operator
+  //   has actually asked the question.
+  const [expanded, setExpanded] = useState(false);
+  const wf = useStore((s) => s.wf);
+  const bootstrapQ = useBootstrap(wf);
+  const counts = bootstrapQ.data?.attentionCounts;
+  const waiting = counts ? counts.failed + counts.blocked + counts.paused : 0;
+
   const attnQ = useQuery({
     queryKey: ['attention-strip'],
     queryFn: fetchAttention,
     staleTime: 5 * 60_000,
     retry: 0,
+    enabled: expanded,
   });
   // Only used to resolve an attention item's runId -> its workflow for the jump target.
   // Attention items are about non-terminal and recently-failed runs, so a newest-50
   // window covers them; an item whose run falls outside it still jumps by nodeId.
-  const runsQ = useRuns({ limit: 50 });
+  const runsQ = useRuns({ limit: 50 }, { enabled: expanded });
   const workflowsQ = useWorkflows();
 
   const bindRun = useStore((s) => s.bindRun);
@@ -203,6 +215,26 @@ export function AttentionStrip() {
       unbindRun();
       setScreen('bench');
     }
+  }
+
+  // The badge. `waiting` is an honest count off the index — never a count of rows a page happened
+  // to return, which is the mistake this surface has made before.
+  if (!expanded) {
+    return (
+      <section className="card attn-strip attn-strip--collapsed" aria-label="Attention">
+        <span className="lbl">attention{counts ? ` · ${waiting}` : ''}</span>
+        <p className="note">
+          {!counts
+            ? 'counting…'
+            : waiting === 0
+              ? `✓ nothing is waiting on you${counts.running ? ` · ${counts.running} running` : ''}`
+              : `${waiting} run${waiting === 1 ? '' : 's'} waiting${counts.running ? ` · ${counts.running} running` : ''}`}
+        </p>
+        <Btn onClick={() => setExpanded(true)}>
+          {waiting === 0 ? 'Check anyway' : 'Show what needs a human'}
+        </Btn>
+      </section>
+    );
   }
 
   if (attnQ.isLoading) {

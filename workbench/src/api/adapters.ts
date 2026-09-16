@@ -162,10 +162,57 @@ export function toNode(raw: RawWorkflowNode): WorkflowNode {
     model: raw.modelConfig ? toModelConfig(raw.modelConfig) : undefined,
     prompt: raw.prompt,
     produces: raw.produces,
+    dependsOn: raw.dependsOn,
     requiredInputs: raw.requiredInputs,
     status: raw.status,
     updatedAt: raw.updatedAt,
     defaultOutput: raw.defaultOutput,
+  };
+}
+
+/**
+ * W3 — the `detail: "summary"` projection of a node (src/agent/workspace/nodeProjection.ts).
+ *
+ * `tools`, `skills` and `desc` are filled with empties because `WorkflowNode` requires them, and
+ * `summary: true` is what stops a caller reading an empty array as a fact about the node. Anything
+ * that needs those fields fetches the node itself — which is the entire point: a cold paint used
+ * to download 310 KB of prompts and schemas to draw a list of names.
+ */
+export interface RawWorkflowNodeSummary {
+  id: string;
+  name: string;
+  kind: string;
+  executionKind: 'model' | 'deterministic';
+  status: string;
+  riskLevel: string;
+  dependsOn?: string[];
+  requiredInputs?: string[];
+  produces?: string[];
+  position?: { x: number; y: number };
+  hasDefaultOutput?: boolean;
+  promptSha: string;
+  updatedAt: string;
+}
+
+export function toNodeSummary(raw: RawWorkflowNodeSummary): WorkflowNode {
+  return {
+    id: raw.id,
+    name: raw.name,
+    kind: raw.kind,
+    risk: asRisk(raw.riskLevel),
+    fan: raw.dependsOn?.length ?? 0,
+    tools: [],
+    skills: [],
+    desc: '',
+    produces: raw.produces,
+    dependsOn: raw.dependsOn,
+    requiredInputs: raw.requiredInputs,
+    status: raw.status,
+    updatedAt: raw.updatedAt,
+    summary: true,
+    executionKind: raw.executionKind,
+    hasDefaultOutput: raw.hasDefaultOutput ?? false,
+    promptSha: raw.promptSha,
   };
 }
 
@@ -210,8 +257,15 @@ export interface RawRun {
    *  caller (verbs.ts) normalizes that before calling toRun(), so this
    *  adapter only ever sees it in one place. */
   mode?: { executionMode?: string };
+  /** W2 — a key into the response-level `modes` map; the inline `mode` block above is the pre-W2 shape. */
+  modeRef?: string;
   /** Only ever populated on a `status: "running"` row. */
   stall?: unknown;
+  /** W4 — `workflow_get_run` only; absent on every list row. */
+  stageOutputs?: Record<string, unknown>;
+  initialInput?: unknown;
+  /** W5 — only on a row that asked for it (`include: ["scores"]`). */
+  scores?: Record<string, number | string>;
   /** W5 — per-node status as one letter each, carried on a `detail: "summary"` row straight off the
    *  run index (RUN_INDEX_NODE_STATUS_CODES, server-side). This is what lets the rail's failure chips
    *  read a summary listing instead of pulling five whole run records. Absent on a `detail: "full"`
@@ -294,6 +348,9 @@ export function toRun(raw: RawRun, cost?: RawRunCostLedger): Run {
     dry: raw.dryRun,
     err: raw.errorCount ?? raw.errors?.length ?? 0,
     done: raw.completedCount ?? nodes.filter((n) => n.status === 'completed').length,
+    ...(raw.stageOutputs ? { stageOutputs: raw.stageOutputs } : {}),
+    ...(raw.initialInput !== undefined ? { input: raw.initialInput } : {}),
+    ...(raw.scores ? { scores: raw.scores } : {}),
     // How many nodes the run HAS, which a summary row states and a full row implies. Surfaces
     // that show "x/y nodes" need the denominator even when the array is absent.
     total: raw.nodeCount ?? nodes.length,
@@ -341,8 +398,11 @@ export interface RunPageView {
  * alongside the server's own `hasMore`, so a stale token can never be presented as more
  * pages that do not exist.
  */
-export function toRunPage(raw: { runs: RawRun[]; page?: RawRunPage }): RunPageView {
-  const runs = (raw.runs ?? []).map((r) => toRun(r));
+export function toRunPage(raw: { runs: RawRun[]; page?: RawRunPage; modes?: Record<string, { executionMode?: string }> }): RunPageView {
+  // W2 — the server interns the mode block once per distinct value and rows carry `modeRef`. The
+  // inline `mode` block is still read first, so a page from a pre-W2 server (or a fixture captured
+  // against one) adapts exactly as it always did.
+  const runs = (raw.runs ?? []).map((r) => toRun(r.modeRef && raw.modes?.[r.modeRef] ? { ...r, mode: raw.modes[r.modeRef] } : r));
   const hasMore = raw.page?.hasMore ?? false;
   return {
     runs,

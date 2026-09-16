@@ -12,12 +12,15 @@ export type { JsonSchema, WorkspaceTool } from "./toolKit.js";
 import { assertNoCanonicalOwnedFieldWrite, assertNoExecutionFieldWrite, CANONICAL_OWNED_WRITE_REFUSED_FIELDS } from "./canonicalNodeFieldGuard.js";
 import { createChangesTools } from "./changesTools.js";
 import { createConstellationTools } from "./constellationTools.js";
+import { createWorkbenchTools } from "./workbenchTools.js";
 import { createImprovementTools } from "./improvementTools.js";
 import { createAgentTools } from "./agentTools.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { collectRunBlockages, type Blockage } from "../../execution/blockage.js";
 import { DEFAULT_EXECUTION_MODE, DISPATCH_DEADLINE_MARGIN_MS, type DispatchClaimKind, MAX_LIST_RUNS_LIMIT, assessRunStall, assessRunStallFrom, type RunStallTimingContext, getRun, isApprovalGateOnlyBlock, listRuns, listRunsPage, listRunSummariesPage, nextDispatchPlan, overrideRunNodeOutput, pushNodeThroughWithDefault, resetRun, retryNode, resolveConductorNodes, runModeSummary, runNextNode, setNodeBudgetOverride, setOperatorPublishDecision, startDryRun, summarizeRunForList, updateRunStatus } from "../../workspace/executor.js";
 import { DETERMINISTIC_STAGE_MIN_TIMEOUT_MS, STALL_MARGIN_MS } from "../../workspace/routeRegistry.js";
+import { summarizeWorkspaceNodes, type NodeDetail } from "../../workspace/nodeProjection.js";
+import { algorithmFor } from "../../workspace/nodeAlgorithms.js";
 import { listRegisteredWorkflowIds } from "../../workspace/workflowRegistry.js";
 import { resolvePublishAuthority } from "../../workspace/publishDecision.js";
 import { conductorCache, getRunContext, planRun, summarizeRunCost, RUN_CONTEXT_KEY } from "../../workspace/conductor.js";
@@ -135,8 +138,31 @@ export type CompactRunView = {
   // Empty array on a healthy run — never omitted, so a caller can trust `blockages.length === 0`.
   blockages: Blockage[];
   nodes: Array<{ nodeId: string; status: string; warnings?: string[]; errors?: string[]; durationMs?: number; dispatch?: unknown; lastDispatch?: unknown; blockage?: Blockage }>;
+  // W7 — present ONLY when the caller asked for them (`include: ["stageOutputs"]`). Absent means
+  // "this view does not carry them", never "this run produced nothing". See the note on compactRun.
+  stageOutputs?: Record<string, unknown>;
+  initialInput?: unknown;
 };
-export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
+
+/** W7 — what `compactRun` will add on request. Kept as a named list so the tool schema and this
+ *  projection cannot drift apart. */
+export const RUN_INCLUDES = ["stageOutputs"] as const;
+export type RunInclude = (typeof RUN_INCLUDES)[number];
+
+// W7 — THE FIELDS THE I/O TAB AND THE REPLAY ACTUALLY NEED, and why they are opt-in.
+//
+// `detail: "compact"` is the DEFAULT and is what the Workbench binds to. It carries per-node
+// provenance (added by #351's follow-up) but has never carried `stageOutputs` — so W4's I/O tab,
+// which answers "what was this node handed and what did it produce" out of the run record, and W6's
+// replay, which sends those same outputs back as `dependencyOutputs`, both read an empty map against
+// the live plane while the fixture synthesised one. Two features that worked in fixtures and could
+// not work in production, found by an adversarial review of the squashed diff rather than by a test:
+// no test on either plane could see it, because the fixture was the thing that was wrong.
+//
+// Carried on request rather than always, because `stageOutputs` IS the bulk of a run record — the
+// whole reason the compact view exists. `include` is the same opt-in shape W2 gave
+// `workflow.list_runs`, so a caller that wants the cheap view keeps getting it.
+export const compactRun = (run: WorkflowExecutionRecord, include: readonly RunInclude[] = []): CompactRunView => ({
   runId: run.runId,
   ...(run.requestId !== undefined ? { requestId: run.requestId } : {}),
   ...(run.publishRequestId !== undefined && run.publishRequestId !== null ? { publishRequestId: run.publishRequestId } : {}),
@@ -186,7 +212,13 @@ export const compactRun = (run: WorkflowExecutionRecord): CompactRunView => ({
   // Run-level companions, same reasoning: the Workbench reads both and could otherwise learn them
   // only from a `detail: "full"` read of the whole record.
   ...((run.defaultedNodeIds ?? []).length ? { defaultedNodeIds: [...(run.defaultedNodeIds ?? [])] } : {}),
-  ...(run.outputMode !== undefined ? { outputMode: run.outputMode } : {})
+  ...(run.outputMode !== undefined ? { outputMode: run.outputMode } : {}),
+  ...(include.includes("stageOutputs")
+    ? {
+        stageOutputs: run.stageOutputs ?? {},
+        ...(run.initialInput !== undefined ? { initialInput: run.initialInput } : {}),
+      }
+    : {})
 });
 const RUN_LIVE_STATUSES: string[] = ["queued", "running"];
 
@@ -397,7 +429,9 @@ const optionalNodeIdJsonSchema = objectSchema({ id: { type: "string", minLength:
 // per workflow, store-overlaid prompt/schema/tools/metadata), so a capture/clone-bound edge like
 // capture_emit_live -> publish_payload — invisible in the flat store view, since the tail's stored
 // row carries publishing_conductor's own dependsOn — is visible when asked for by workflow.
-const graphInput = z.object({ workflowId: z.string().min(1).optional() }).strict();
+// W2 — `detail` defaults to "full", so every existing MCP client keeps the exact response shape it
+// has today. Only a caller that ASKS for "summary" gets the projection.
+const graphInput = z.object({ workflowId: z.string().min(1).optional(), detail: z.enum(["summary", "full"]).optional() }).strict();
 const updatePrompt = z.object({ id: z.string().min(1), prompt: z.string().min(1), ...mutationMeta }).strict();
 const updateSchema = z.object({ id: z.string().min(1), schema: z.unknown(), ...mutationMeta }).strict();
 // node-default-output (2026-09-15). `value: null` CLEARS the default; any other value sets it. The
@@ -603,11 +637,11 @@ async function resolvePublishRequestId(projectId: string, publishRequestId: stri
 // ignores it (shared schema) because it never re-dispatches a "failed" node in the first place
 // (findRunnableNodes only ever selects queued/dependency-ready nodes) — see executor.ts's
 // RunAdvanceOptions doc comment for what supplying it does and does not do.
-const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional(), retryJustification: z.string().min(1).optional(), useDefaultOutput: z.boolean().optional(), defaultOutputNote: z.string().max(2000).optional() }).strict();
-const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional() }).strict();
+const runNodeInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1).optional(), approved: z.boolean().optional(), retryJustification: z.string().min(1).optional(), useDefaultOutput: z.boolean().optional(), defaultOutputNote: z.string().max(2000).optional(), defaultUpstream: z.boolean().optional() }).strict();
+const runUntilInput = z.object({ runId: z.string().min(1), nodeId: z.string().min(1), approved: z.boolean().optional(), outputMode: z.enum(RUN_OUTPUT_MODES).optional() }).strict();
 const runIdInput = z.object({ runId: z.string().min(1) }).strict();
 // T7: get_run defaults to the compact view; "full" is the old raw-record behaviour, opted into.
-const getRunInput = z.object({ runId: z.string().min(1), detail: z.enum(["compact", "full"]).default("compact") }).strict();
+const getRunInput = z.object({ runId: z.string().min(1), detail: z.enum(["compact", "full"]).default("compact"), include: z.array(z.enum(RUN_INCLUDES)).optional() }).strict();
 // F3 (T-2, run_1785352838155_l544ye): budgetUsd is optional so plain resume (no ceiling change)
 // keeps working exactly as before; supplying it raises (or sets) the run's ceiling in the same call.
 const resumeRunInput = z.object({ runId: z.string().min(1), budgetUsd: z.number().nonnegative().optional() }).strict();
@@ -624,7 +658,11 @@ const listRunsInput = z.object({
   to: z.string().datetime().optional(),
   limit: z.number().int().min(1).max(MAX_LIST_RUNS_LIMIT).optional(),
   cursor: z.string().min(1).optional(),
-  detail: z.enum(["summary", "full"]).optional()
+  detail: z.enum(["summary", "full"]).optional(),
+  // W2 — per-node status chips are 18 KB of a 50-row page and exactly one surface renders them
+  // (the rail, for its five rows). Everything else — the attention strip, the run table, the
+  // workflow deck — was paying for them and throwing them away.
+  include: z.array(z.enum(["nodeStatuses", "scores"])).optional()
 }).strict();
 const runContextInput = z.object({ runId: z.string().min(1), projectId: z.string().min(1) }).strict();
 const readinessInputSchema = z.object({
@@ -684,7 +722,8 @@ const nodeRetryInput = z.object({ runId: z.string().min(1), nodeId: z.string().m
 
 const emptyJsonSchema = objectSchema();
 const nodeIdJsonSchema = objectSchema({ id: { type: "string", minLength: 1 } }, ["id"]);
-const graphJsonSchema = objectSchema({ workflowId: { type: "string", minLength: 1, description: "Optional. A registered workflow id (\"publishing_conductor\", \"capture_conductor\", \"clone_conductor\") to get that workflow's ACTUAL run topology (canonical dependsOn, store-overlaid prompt/schema/tools) instead of the flat store view. Omit for the flat store view of every governance-visible node." } });
+const NODE_DETAIL_DESCRIPTION = "Row shape. \"full\" (DEFAULT) returns each node's complete definition — prompt, inputSchema, outputSchema, allowedTools, modelConfig, metadata, defaultOutput and the deprecated `schema` alias. \"summary\" returns the LIST projection: id, name, kind, executionKind (model | deterministic), status, riskLevel, dependsOn, requiredInputs, produces, position, hasDefaultOutput, promptSha and updatedAt — about 11 KB for 51 nodes against roughly 310 KB for the same set in full. Use \"summary\" for anything that draws a list or a graph and workspace.get_node for the one node a user actually opened; `promptSha` changes whenever the prompt does, so a client can cache prompts across reads and still know when one went stale.";
+const graphJsonSchema = objectSchema({ workflowId: { type: "string", minLength: 1, description: "Optional. A registered workflow id (\"publishing_conductor\", \"capture_conductor\", \"clone_conductor\") to get that workflow's ACTUAL run topology (canonical dependsOn, store-overlaid prompt/schema/tools) instead of the flat store view. Omit for the flat store view of every governance-visible node." }, detail: { type: "string", enum: ["summary", "full"], description: NODE_DETAIL_DESCRIPTION } });
 const updatePromptJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, prompt: { type: "string", minLength: 1 }, ...metaJson }, ["id", "prompt"]);
 // `schema` is advertised as object-or-boolean (the two legal JSON Schema shapes) rather than the
 // previous permit-anything `{}`, so a client has the type information it needs not to stringify it.
@@ -724,7 +763,7 @@ const publishPayloadJsonSchema = objectSchema({ articleBody: articleBodyArgJsonS
 const publishValidateJsonSchema = objectSchema({ payload: publishPayloadJsonSchema }, ["payload"]);
 const startDryRunJsonSchema = objectSchema({ projectId: { type: "string", minLength: 1 }, input: {}, workflowId: { type: "string", minLength: 1 }, executionMode: { type: "string", enum: ["mock", "openai"], default: DEFAULT_EXECUTION_MODE, description: EXECUTION_MODE_DESCRIPTION }, entrypoint: { type: "string", enum: ["article_body"], description: "Late-stage entrypoint. With a supplied valid articleBody the run enters at article_body -> publish_payload -> publication_controller and earlier ideation/research/draft nodes are seeded as completed (not re-run)." }, articleBody: { type: "object", description: "Output to seed as the article_body node's result for a late-stage entrypoint run. Validated against the article_body node's OWN outputSchema (see node.get_output_schema) — not against a workspace-local article shape, which the node rejects. Rejected before the run is created, with the failing fields named." }, budgetUsd: { type: "number", minimum: 0, description: "Optional per-run cost ceiling in USD. Default OFF (omit = no gate). When set, the conductor halts the run (status blocked, paused for budget) before dispatching any node once the run's accrued estimated model cost reaches this ceiling; the pending node is not executed. Inspect via workflow.get_run_cost (ledger.budget)." }, requestId: { type: "string", minLength: 1, description: "Caller-supplied request id for this run. REQUIRED for a live (openai) run when the project declares objectDialect.requestIdPattern (platform, dr-lurie, fernwell: req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case) — the tool refuses with request_id_required/invalid_request_id naming the pattern; request ids are never auto-generated for such a run. Optional (auto-minted) for a mock dry-run or a project without a pattern; a supplied id is always validated." }, publishRequestId: { type: "string", minLength: 1, description: "Operator-supplied PUBLISH request id (req_<flow>_<topic>_<yyyymmdd>_<nn>, lowercase snake_case), stored on the run and lifted into every node's run context. A DIFFERENT identifier from `requestId`, which is the platform/workspace join key — neither ever substitutes for the other. This id is normally authored by the artifact_plan node; supply it here for a late-stage entrypoint run, whose artifact_plan is seeded as skipped and therefore authors none (without it such a run reaches the publish gate and is refused with publish_request_id_absent). Always OPTIONAL and never generated: omit it and the run simply has no publish id and that refusal stands. A supplied id is validated before the run is created against the project's objectDialect.requestIdPattern where declared (platform, dr-lurie, fernwell), otherwise the publisher's shared contract pattern, refusing with invalid_publish_request_id. An id authored by a real artifact_plan run always takes precedence over this one. Survives workflow.reset_run." }, objective: { type: "string", minLength: 1, description: "Optional NAMED GOAL for this run (scope vocabulary dimension `objective`; see skill.scope). Stored on the run, carried across workflow.reset_run, and used to select objective-scoped skills and playbooks. Never derived from the topic or the request id — a run that does not name one is in no objective, and objective-scoped policy does not apply to it." }, outputMode: { type: "string", enum: [...RUN_OUTPUT_MODES], default: "live", description: "TEST MODE for this run, chosen once at start and honoured by every advance including the scheduled continuation tick. \"live\" (default): today's behaviour — every node runs. \"defaults_where_set\": any node carrying a DEFAULT OUTPUT is passed through for free (durationMs 0, no model turn); the rest run live. \"defaults_only\": defaults are used where present and a node WITHOUT one FAILS with default_output_missing — one run exercises a whole conductor's topology and contracts in seconds and names every gap. Any run that used a default is refused at its publishing tail (gate.publishing.defaulted_upstream) unless it is a mock run: fixture content never publishes." } }, ["projectId", "input"]);
 const runIdJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 } }, ["runId"]);
-const getRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, detail: { type: "string", enum: ["compact", "full"], default: "compact", description: "compact (default): the compact run view. full: the complete record including node inputs/outputs, stageOutputs and artifacts." } }, ["runId"]);
+const getRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, detail: { type: "string", enum: ["compact", "full"], default: "compact", description: "compact (default): the compact run view. full: the complete record including node inputs/outputs, stageOutputs and artifacts." }, include: { type: "array", items: { type: "string", enum: [...RUN_INCLUDES] }, description: "Extra fields to carry on the COMPACT view. \"stageOutputs\" adds what each completed node produced on this run plus the run's initial input — what a surface needs to answer \"what was this node handed, and what did it produce\" without pulling the whole record. Absent means the view does not carry them, never that the run produced nothing." } }, ["runId"]);
 const resumeRunJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, budgetUsd: { type: "number", minimum: 0, description: "Optional: raise (or set) the run's per-run cost ceiling in the same call that resumes it. Omit to resume unchanged — this is what makes the budget gate's own remedy (\"raise budgetUsd and resume\") actually reachable; previously resume_run took only runId and there was no way to raise the ceiling that blocked the run." } }, ["runId"]);
 const runNextNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId"]);
 const operatorPublishDecisionJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, decision: { type: "string", enum: ["approved", "withheld"], description: "\"withheld\" is a durable operator veto: it blocks workflow.publish_run and every publish-risk node for this run regardless of approved/live flags, until replaced. \"approved\" records explicit, durable operator approval — the record an executed publish_execution.v1's approvalMatched must match." } }, ["runId", "decision"]);
@@ -737,8 +776,8 @@ const setNodeBudgetOverrideJsonSchema = objectSchema({ runId: { type: "string", 
 // which is every strict client, and is why T6.6 could not be executed — was locked out of run_node,
 // run_until, run_all and retry_node. Verified live: the served workflow_run_all schema still shows
 // required: [] with no runId. Each tool now advertises exactly its own Zod shape.
-const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, useDefaultOutput: { type: "boolean", description: "Push the named node through from its DEFAULT OUTPUT instead of running it: the node completes with the stored value, durationMs 0, no model turn and no cost. Requires nodeId. Refused with default_output_missing when the node has no default, and refused on a live run's publishing tail (gate.publishing.defaulted_upstream) — fixture content never publishes." }, defaultOutputNote: { type: "string", maxLength: 2000, description: "Optional note recorded on this run's provenance stamp for the pushed-through node; falls back to the default's own note." }, retryJustification: { type: "string", minLength: 1, description: "workflow.retry_node only. Required to retry a node the no-progress gate has refused (unchanged input/node-definition/capability-state since its last terminal failure — see the node's own blockage/noProgress fields on workflow.get_run). Recorded verbatim for audit; never verified against anything real." } }, ["runId"]);
-const runUntilJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" } }, ["runId", "nodeId"]);
+const runNodeJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, useDefaultOutput: { type: "boolean", description: "Push the named node through from its DEFAULT OUTPUT instead of running it: the node completes with the stored value, durationMs 0, no model turn and no cost. Requires nodeId. Refused with default_output_missing when the node has no default, and refused on a live run's publishing tail (gate.publishing.defaulted_upstream) — fixture content never publishes." }, defaultOutputNote: { type: "string", maxLength: 2000, description: "Optional note recorded on this run's provenance stamp for the pushed-through node; falls back to the default's own note." }, defaultUpstream: { type: "boolean", description: "\"Get me TO this node\", as opposed to \"write this node's output\". With useDefaultOutput, also push through every node this one depends on that has not completed on this run, in dependency order, before the named node itself — so the run is actually AT it rather than owing its upstream. OFF BY DEFAULT, and without it the single-node push-through behaves exactly as it always has: the named node's output is written whatever state its upstream is in, and the run advances through that upstream as usual. Requires a run whose outputMode allows supplied outputs (\"defaults_where_set\" or \"defaults_only\"); refused with upstream_incomplete naming `blockingNodeId` otherwise, and with default_output_missing naming the first node in the chain that has no default. Nothing is written in either refusal." }, retryJustification: { type: "string", minLength: 1, description: "workflow.retry_node only. Required to retry a node the no-progress gate has refused (unchanged input/node-definition/capability-state since its last terminal failure — see the node's own blockage/noProgress fields on workflow.get_run). Recorded verbatim for audit; never verified against anything real." } }, ["runId"]);
+const runUntilJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, outputMode: { type: "string", enum: [...RUN_OUTPUT_MODES], description: "Decide THIS call's nodes by this output mode instead of the run's own — \"run to here on defaults, live from here\" in one call. Never persisted onto the run: the run's own outputMode keeps meaning what it was started with, and a concurrent driver picking the run up is unaffected. \"defaults_where_set\" supplies a node's stored default where it has one and dispatches it where it does not; \"defaults_only\" fails a node with no default rather than dispatching it." } }, ["runId", "nodeId"]);
 const runAllJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, approved: { type: "boolean" }, budgetMs: { type: "number", minimum: RUN_DRIVER_TIME_BUDGET_FLOOR_MS, maximum: RUN_DRIVER_TIME_BUDGET_CEILING_MS, description: `Wall-clock budget for THIS call in ms (${RUN_DRIVER_TIME_BUDGET_FLOOR_MS}..${RUN_DRIVER_TIME_BUDGET_CEILING_MS}); default ${RUN_DRIVER_TIME_BUDGET_MS}. The loop stops dispatching when it is reached and the run continues on the scheduled continuation tick.` } }, ["runId"]);
 const runAllInput = z.object({ runId: z.string().min(1), approved: z.boolean().optional(), budgetMs: z.number().min(RUN_DRIVER_TIME_BUDGET_FLOOR_MS).max(RUN_DRIVER_TIME_BUDGET_CEILING_MS).optional() }).strict();
 
@@ -782,6 +821,7 @@ const listRunsJsonSchema = objectSchema({
   to: { type: "string", format: "date-time", description: "Only runs with startedAt <= this ISO timestamp." },
   limit: { type: "integer", minimum: 1, maximum: 100, description: "Page size; default 20, max 100." },
   cursor: { type: "string", minLength: 1, description: "Opaque nextCursor from the previous page; omit for the first page." },
+  include: { type: "array", items: { type: "string", enum: ["nodeStatuses", "scores"] }, description: "Opt-in row fields, omitted by default because most callers discard them. \"nodeStatuses\" adds each row's per-node status map and failedNodeIds — 18 KB across a 50-row page, and useful only to a surface that draws a chip per node. \"scores\" adds what this run's scoring and judgement nodes recorded, keyed by node id (the four editorial reviews and their aggregator, the contract verdict, capture's fidelity score and gap adjudication, clone's fit adjudication). A run that recorded none carries no `scores` field at all — never an empty object, and never a zero, because \"not scored\" and \"scored zero\" are different facts." },
   detail: { type: "string", enum: ["summary", "full"], default: "summary", description: "\"summary\" (DEFAULT) returns compact rows read straight from the run index — no run record is opened, so a page costs the same whether it holds 1 row or 100. Carries per-node COUNTS (nodeCount/completedCount/failedCount) rather than a nodes[] array, and errorCount rather than the run-level errors[] strings; every other field of the \"full\" row — including approvalsRequired, budgetBlock and operatorPublishDecision — is present unchanged. \"full\" returns the previous shape, including nodes[] with each node's status, timings, bounded errors/warnings and attempt history — one run-record read per row, so ask for it only when you need per-node detail for a whole page (for ONE run, workflow.get_run is the cheaper read)." }
 });
 const usageFiltersJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 }, workflowId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" }, status: { type: "string", enum: ["estimated", "actual"], description: "Only records of this kind: \"actual\" = measured model usage (the population budgets meter), \"estimated\" = mock/dry-run deterministic estimates (never accrue against budgetUsd)." } });
@@ -963,6 +1003,21 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
   };
 
   const workspaceRepository = repositoryManager.getWorkspaceRepository();
+
+  // W2 — one resolution, two projections. `workspace.get_nodes` and `workspace.get_graph` answered
+  // the same question in two hand-copied expressions; they now share this, so `detail` cannot mean
+  // one thing on one verb and another on its sibling.
+  const resolveNodesForRead = async (workflowId?: string): Promise<WorkspaceNode[]> => {
+    if (workflowId) return resolveConductorNodes(workspaceRepository, workflowId);
+    await workspaceRepository.ensureWorkspaceNodeSeeds();
+    return workspaceRepository.getNodes();
+  };
+  // The deprecated `schema` alias survives in "full" ONLY: ui/ still reads node.schema in four
+  // places (Inspector, WorkspaceGraph, NodeInspector, useWorkspace), so dropping it outright would
+  // break a live consumer. It is 12 % of the full payload and pure duplication of outputSchema;
+  // "summary" simply does not carry it, which is where the saving actually matters.
+  const projectNodes = (nodes: WorkspaceNode[], detail: NodeDetail | undefined) =>
+    detail === "summary" ? summarizeWorkspaceNodes(nodes) : nodes;
   const changeRepository = repositoryManager.getChangeRepository();
   const meta = <T extends Partial<WorkspaceMutationMeta>>(data: T): T & WorkspaceMutationMeta => ({
     ...data,
@@ -1008,7 +1063,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // workspace.update_node_schema below.
     tool({ name: "node.get", description: "Get a safe complete node inspection record with compact summaries of this node's actual revisions; use changes tools for full historical snapshots.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => ok({ node: await getNodeDetails(nodeToolInput.parse(input).nodeId, { workspaceRepository, executionRepository }) }) }),
     tool({ name: "node.get_effective_prompt", description: "Resolve the effective prompt for one node without secrets.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => { await skillRepository.ensureSkillSeeds(); return ok(await getEffectivePrompt(nodeToolInput.parse(input).nodeId, workspaceRepository)); } }),
-    tool({ name: "node.get_effective_tools", description: "Resolve what a node can actually do, in BOTH senses: `tools` are the controlled registry tools a model turn may call, and `engine` are the tenant MCP verbs the node's own deterministic route calls directly — which pass no grant and no risk check, and which no grant list has ever shown. With `runId`, resolves against the SAME authorization that run's dispatch uses (the node's risk cap, the run's authorized tools, the platform's allowed tools) — so the answer is what dispatch would actually allow, not a context-free reading of the node's grant list. Without `runId`, reports the node's own declaration.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => {
+    tool({ name: "node.get_effective_tools", description: "Resolve what a node can actually do, in BOTH senses: `tools` are the controlled registry tools a model turn may call, and `engine` are the tenant MCP verbs the node's own deterministic route calls directly — which pass no grant and no risk check, and which no grant list has ever shown. With `runId`, resolves against the SAME authorization that run's dispatch uses (the node's risk cap, the run's authorized tools, the platform's allowed tools) — so the answer is what dispatch would actually allow, not a context-free reading of the node's grant list. Without `runId`, reports the node's own declaration. For a DETERMINISTIC node, `algorithm` carries the canonical account of what it does — numbered plain-language steps, what it reads, the module that implements it, and the route phase it belongs to — because such a node has no prompt and no grants to read: its behaviour is engine code. Null for a model node, whose explanation is its prompt.", zodSchema: nodeToolInput, inputSchema: nodeToolJsonSchema, execute: async (input) => {
       const data = nodeToolInput.parse(input);
       const run = data.runId ? await getRun(data.runId, executionRepository) : undefined;
       const node = await resolveNodeForExecution(data.nodeId, undefined, run?.workflowId);
@@ -1025,8 +1080,14 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
         ? { executionKind: audit.executionKind, ...(audit.routeId ? { routeId: audit.routeId } : {}), deadGrants: audit.deadGrants, findings: audit.findings }
         : null;
       const engine = audit?.engineRequiredTools ?? [];
-      if (!run || !node) return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId), engine, capability, resolvedAgainst: "node_declaration" });
-      return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, dispatchToolContext({ run, node })), engine, capability, resolvedAgainst: "run_dispatch" });
+      // W4 — `algorithm` is the THIRD half, for a deterministic node: what it actually does, in
+      // numbered steps, with what it reads and which module implements it. A deterministic node's
+      // prompt tab is empty by construction and its grant list is empty by construction, so before
+      // this an operator opening one saw a node that crawls a site or publishes a template and was
+      // told nothing at all about it. Null for a model node — its explanation is its prompt.
+      const algorithm = node ? algorithmFor(node) : null;
+      if (!run || !node) return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId), engine, capability, algorithm, resolvedAgainst: "node_declaration" });
+      return ok({ tools: await resolveEffectiveToolsForNode(data.nodeId, dispatchToolContext({ run, node })), engine, capability, algorithm, resolvedAgainst: "run_dispatch" });
     } }),
     // C2 — WITH a runId this answers "what did that run dispatch this node with"; WITHOUT one it
     // answers "what would this node dispatch with if it ran now". Those are different questions and
@@ -1188,8 +1249,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // exact same optional filter and resolution path so the two tools stay consistent — omit
     // workflowId for the unchanged flat store view, pass one of the registered workflow ids
     // ("publishing_conductor", "capture_conductor", "clone_conductor") to scope to that conductor.
-    tool({ name: "workspace.get_nodes", description: "List workspace nodes. Omit workflowId for every governance-visible node across every registered workflow (publishing_conductor, capture_conductor, clone_conductor); pass a registered workflowId to scope to that ONE conductor's actual node set instead (same resolution as workspace.get_graph's workflowId — canonical dependsOn overlaid with store-edited prompt/schema/tools).", zodSchema: graphInput, inputSchema: graphJsonSchema, execute: async (input) => { const data = graphInput.parse(input); if (data.workflowId) return ok({ nodes: await resolveConductorNodes(workspaceRepository, data.workflowId) }); await workspaceRepository.ensureWorkspaceNodeSeeds(); return ok({ nodes: await workspaceRepository.getNodes() }); } }),
-    tool({ name: "workspace.get_graph", description: "Get workflow graph nodes and edges. Omit workflowId for the flat store view of every registered workflow's nodes merged together (publishing_conductor, capture_conductor, clone_conductor); pass a registered workflowId to get that ONE workflow's actual run topology instead (canonical dependsOn — e.g. capture_conductor's publish_payload bound to capture_emit_live/capture_score — overlaid with store-edited prompt/schema/tools, exactly what resolveConductorNodes hands the executor).", zodSchema: graphInput, inputSchema: graphJsonSchema, execute: async (input) => { const data = graphInput.parse(input); const nodes = data.workflowId ? await resolveConductorNodes(workspaceRepository, data.workflowId) : await (async () => { await workspaceRepository.ensureWorkspaceNodeSeeds(); return workspaceRepository.getNodes(); })(); return ok({ nodes, edges: nodes.flatMap((node) => node.dependsOn.map((dependency) => ({ from: dependency, to: node.id }))), workflowId: data.workflowId, registeredWorkflowIds: listRegisteredWorkflowIds() }); } }),
+    tool({ name: "workspace.get_nodes", description: `List workspace nodes. Omit workflowId for every governance-visible node across every registered workflow (publishing_conductor, capture_conductor, clone_conductor); pass a registered workflowId to scope to that ONE conductor's actual node set instead (same resolution as workspace.get_graph's workflowId — canonical dependsOn overlaid with store-edited prompt/schema/tools). ${NODE_DETAIL_DESCRIPTION}`, zodSchema: graphInput, inputSchema: graphJsonSchema, execute: async (input) => { const data = graphInput.parse(input); const nodes = await resolveNodesForRead(data.workflowId); return ok({ nodes: projectNodes(nodes, data.detail), detail: data.detail ?? "full" }); } }),
+    tool({ name: "workspace.get_graph", description: `Get workflow graph nodes and edges. Omit workflowId for the flat store view of every registered workflow's nodes merged together (publishing_conductor, capture_conductor, clone_conductor); pass a registered workflowId to get that ONE workflow's actual run topology instead (canonical dependsOn — e.g. capture_conductor's publish_payload bound to capture_emit_live/capture_score — overlaid with store-edited prompt/schema/tools, exactly what resolveConductorNodes hands the executor). ${NODE_DETAIL_DESCRIPTION}`, zodSchema: graphInput, inputSchema: graphJsonSchema, execute: async (input) => { const data = graphInput.parse(input); const nodes = await resolveNodesForRead(data.workflowId); return ok({ nodes: projectNodes(nodes, data.detail), edges: nodes.flatMap((node) => node.dependsOn.map((dependency) => ({ from: dependency, to: node.id }))), workflowId: data.workflowId, registeredWorkflowIds: listRegisteredWorkflowIds(), detail: data.detail ?? "full" }); } }),
     tool({ name: "workspace.get_node", description: "Get one workspace node.", zodSchema: nodeId, inputSchema: nodeIdJsonSchema, execute: async (input) => { await workspaceRepository.ensureWorkspaceNodeSeeds(); return ok({ node: await workspaceRepository.getNode(nodeId.parse(input).id) ?? null }); } }),
     tool({ name: "workspace.create_node", description: "Create a workspace node. An id canonical defines is refused — that row is code-owned and is re-seeded automatically.", zodSchema: createNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = createNodeInput.parse(input); const node = data.node as WorkspaceNode; if (isPlainRecord(node) && typeof node.id === "string") assertNoCanonicalOwnedFieldWrite("workspace.create_node", node.id, CANONICAL_OWNED_WRITE_REFUSED_FIELDS); return ok(await workspaceRepository.createNode(node, meta(data))); } }),
     tool({ name: "workspace.delete_node", description: "Delete an unreferenced workspace node.", zodSchema: deleteNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = deleteNodeInput.parse(input); return ok(await workspaceRepository.deleteNode(data.id, meta(data))); } }),
@@ -1221,10 +1282,27 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const node = await workspaceRepository.getNode(data.nodeId);
       if (!node) throw new WorkspaceToolError("unknown_node", `No workspace node with id "${data.nodeId}".`, { nodeId: data.nodeId });
       const latest = (await listNodeOutputs({ nodeId: data.nodeId, runId: data.runId, executionId: data.executionId }, executionRepository))[0];
-      if (!latest || latest.output === undefined) {
+      // W7 — THIS READ `latest.output`, AND NOTHING HAS EVER HAD THAT FIELD.
+      //
+      // listNodeOutputs (nodeRuntime.ts) returns ExecutionArtifacts, and an ExecutionArtifact's
+      // payload field is `value` (executionTypes.ts:222, and executor.ts's buildArtifact writes it).
+      // So `latest.output` was `undefined` on every artifact this tool has ever seen: the guard
+      // below fired unconditionally and `workspace.adopt_output_as_default` threw
+      // `node_output_unavailable` for EVERY node, always — a tool whose entire job is adopting a
+      // recorded output could never adopt one. It went unnoticed because nothing called it: the
+      // control DefaultOutputTab's header points at was never built until W6, and the sibling read
+      // node.get_latest_output hands the whole artifact back without touching either field, so it
+      // was never wrong. Found by an adversarial review of this branch's diff.
+      //
+      // `value` is read with an `output` fallback rather than swapped outright: a legacy record
+      // written under the other spelling, if one exists anywhere, still adopts rather than becoming
+      // the first thing this fix breaks.
+      const adoptedValue = (latest as { value?: unknown; output?: unknown } | undefined)?.value
+        ?? (latest as { output?: unknown } | undefined)?.output;
+      if (!latest || adoptedValue === undefined) {
         throw new WorkspaceToolError("node_output_unavailable", `Node ${data.nodeId} has no recorded output${data.runId ? ` in run ${data.runId}` : ""} to adopt. Run it once, or supply the value directly with workspace.update_node_default_output.`, { nodeId: data.nodeId, runId: data.runId, executionId: data.executionId });
       }
-      const defaultOutput = buildNodeDefaultOutput({ node, value: latest.output, note: data.note, force: data.force, updatedBy: actorKind(meta(data).actor) });
+      const defaultOutput = buildNodeDefaultOutput({ node, value: adoptedValue, note: data.note, force: data.force, updatedBy: actorKind(meta(data).actor) });
       const result = await workspaceRepository.updateNodeDefaultOutput(data.nodeId, defaultOutput, meta(data));
       return ok({ ...result, adoptedFrom: { runId: latest.runId ?? null, executionId: latest.executionId ?? null }, ...(defaultOutput.schemaValidAt === null ? { warnings: [`default_output_schema_invalid_forced:${data.nodeId}`] } : {}) });
     } }),
@@ -1434,8 +1512,8 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // node's input and output plus stageOutputs and artifacts. `detail:"compact"` (the default) reuses
     // the compactRun view run_all has always returned; `detail:"full"` is the old behaviour, unchanged,
     // for when the node payloads are what you actually came for.
-    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is every recorded pending wall on the run in blockage.v1 form: budget, publication approval, tenant-policy hold, configuration/scope, authentication, validation/limit, or an explicitly unknown legacy cause. Each carries the remedies actually supported for that cause; status=blocked alone never fabricates an approval. The array is always present and empty on a healthy run. detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId, run.projectId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run)) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
-    tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status (one value, or an array to match any of several) and startedAt time-range filters. `detail` chooses the row shape: \"summary\" (DEFAULT) is read straight from the run index and opens no run records at all — a row carries the run's identity, status, currentNodeId, timings, per-node COUNTS (nodeCount/completedCount/failedCount/errorCount/artifactCount/approvalsRequiredCount), the `approvalsRequired` entries themselves, and `budgetBlock`/`operatorPublishDecision`/`operatorDecisionSource`. The only thing \"summary\" omits that \"full\" carries is `nodes[]` and the run-level `errors[]` strings (counted instead); \"full\" adds the nodes[] array (per-node status, timings, bounded errors/warnings, recent attempts) at the cost of one run-record read per row. Node inputs/outputs, stage outputs and artifact values are omitted from both; call workflow.get_run for one selected run. Every row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `mode` block naming what produced it and, on status \"running\" rows, a `stall` block naming whether the driver is alive. `page.matchedCount` counts every run matching the filters, not the rows returned, so a windowed page still knows the true fleet size.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => {
+    tool({ name: "workflow.get_run", description: "Get dry-run workflow execution state. detail:\"compact\" (default) returns the compact run view {runId,requestId,projectId,status,currentNodeId,budget,errors,approvalsRequired,blockages,nodes:[{nodeId,status,warnings,errors,durationMs,dispatch,blockage}]}. `blockages` is every recorded pending wall on the run in blockage.v1 form: budget, publication approval, tenant-policy hold, configuration/scope, authentication, validation/limit, or an explicitly unknown legacy cause. Each carries the remedies actually supported for that cause; status=blocked alone never fabricates an approval. The array is always present and empty on a healthy run. detail:\"full\" returns the complete record including every node input/output, stageOutputs and artifacts (large — 100KB+ on a real run). `include: [\"stageOutputs\"]` adds this run's stage outputs and initial input to the COMPACT view, which is what a surface needs to show what a node was handed without paying for the whole record. The `mode` block reports what actually produced this run's outputs: executionMode, live (true only for real model output), and whether node definitions came from the static compile or the workspace store. For a status \"running\" run, `stall` reports whether anything is really in flight (dispatch heartbeat) or the driver died and the run should be advanced again.", zodSchema: getRunInput, inputSchema: getRunJsonSchema, execute: async (input) => { const data = getRunInput.parse(input); const run = await getRun(data.runId, executionRepository); const timing = run ? await runStallTiming(run.workflowId, run.projectId) : undefined; return ok({ run: run ? (data.detail === "full" ? run : compactRun(run, data.include ?? [])) : null, detail: data.detail, mode: run ? runModeSummary(run) : null, stall: run ? assessRunStall(run, new Date(), timing) ?? null : null }); } }),
+    tool({ name: "workflow.list_runs", description: "List compact dry-run workflow summaries, newest first, paged (default 20 rows, max 100; `page.nextCursor` fetches the next page) with optional status (one value, or an array to match any of several) and startedAt time-range filters. `detail` chooses the row shape: \"summary\" (DEFAULT) is read straight from the run index and opens no run records at all — a row carries the run's identity, status, currentNodeId, timings, per-node COUNTS (nodeCount/completedCount/failedCount/errorCount/artifactCount/approvalsRequiredCount), the `approvalsRequired` entries themselves, and `budgetBlock`/`operatorPublishDecision`/`operatorDecisionSource`. The only thing \"summary\" omits that \"full\" carries is `nodes[]` and the run-level `errors[]` strings (counted instead); \"full\" adds the nodes[] array (per-node status, timings, bounded errors/warnings, recent attempts) at the cost of one run-record read per row. Node inputs/outputs, stage outputs and artifact values are omitted from both; call workflow.get_run for one selected run. Every row carries the caller-supplied `requestId` it was started with (when it has one), so a page of runs can be joined back to the requests that asked for them, plus a `modeRef` pointing into the response-level `modes` map that names what produced it (W2: the mode block was repeated verbatim on every row — 24 KB across a 50-row page for two distinct values — so it is interned once and referenced), and, on status \"running\" rows, a `stall` block naming whether the driver is alive. Per-node status chips (`nodeStatuses`, `failedNodeIds`) are opt-in through `include`. `page.matchedCount` counts every run matching the filters, not the rows returned, so a windowed page still knows the true fleet size.", zodSchema: listRunsInput, inputSchema: listRunsJsonSchema, execute: async (input) => {
       const args = listRunsInput.parse(input);
       // W4 — the default is the cheap read. A list row used to cost a blob GET and still carry
       // nodes[] for a caller that was scanning identities and statuses: ~28KB per row, ~8s for
@@ -1455,6 +1533,35 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       };
       const at = new Date();
 
+      // W2 — the mode block is identical on nearly every row (two distinct values across the whole
+      // fleet, 24 KB of a 60 KB page). Intern it: each distinct block appears once in `modes`, and
+      // a row carries the key.
+      const modes: Record<string, ReturnType<typeof runModeSummary>> = {};
+      const modeKeys = new Map<string, string>();
+      const internMode = (mode: ReturnType<typeof runModeSummary>): string => {
+        const fingerprint = JSON.stringify(mode);
+        const existing = modeKeys.get(fingerprint);
+        if (existing) return existing;
+        const ref = `m${modeKeys.size}`;
+        modeKeys.set(fingerprint, ref);
+        modes[ref] = mode;
+        return ref;
+      };
+      const included = new Set(args.include ?? []);
+      const withChips = <T extends object>(row: T): T => {
+        const stripped = row as T & { nodeStatuses?: unknown; failedNodeIds?: unknown; scores?: unknown };
+        let next: T = row;
+        if (!included.has("nodeStatuses")) {
+          const { nodeStatuses: _statuses, failedNodeIds: _failed, ...rest } = stripped;
+          next = rest as T;
+        }
+        if (!included.has("scores")) {
+          const { scores: _scores, ...rest } = next as T & { scores?: unknown };
+          next = rest as T;
+        }
+        return next;
+      };
+
       if (detail === "summary") {
         const { rows, page } = await listRunSummariesPage(args, executionRepository);
         const timingByWorkflow = await timingFor(new Set(rows.map((row) => `${row.workflowId}::${row.projectId ?? ""}`)));
@@ -1464,8 +1571,9 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
             // (runStallFacts), so the two detail modes can never disagree about whether a run
             // is stuck — only about how much per-node detail they show.
             const stall = stallFacts ? assessRunStallFrom(stallFacts, at, timingByWorkflow.get(`${row.workflowId}::${row.projectId ?? ""}`)) : undefined;
-            return { ...row, mode: runModeSummary(row), ...(stall ? { stall } : {}) };
+            return { ...withChips(row), modeRef: internMode(runModeSummary(row)), ...(stall ? { stall } : {}) };
           }),
+          modes,
           page,
           detail
         });
@@ -1476,8 +1584,9 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       return ok({
         runs: runs.map((run) => {
           const stall = assessRunStall(run, at, timingByWorkflow.get(`${run.workflowId}::${run.projectId ?? ""}`));
-          return { ...summarizeRunForList(run), mode: runModeSummary(run), ...(stall ? { stall } : {}) };
+          return { ...withChips(summarizeRunForList(run)), modeRef: internMode(runModeSummary(run)), ...(stall ? { stall } : {}) };
         }),
+        modes,
         page,
         detail
       });
@@ -1498,7 +1607,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // required here, and the refusal says so rather than silently advancing the run instead.
       if (data.useDefaultOutput) {
         if (!data.nodeId) throw new WorkspaceToolError("node_id_required", "useDefaultOutput pushes ONE named node through from its default; pass nodeId.", { runId: data.runId });
-        return ok({ run: await pushNodeThroughWithDefault(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all", note: data.defaultOutputNote }) });
+        return ok({ run: await pushNodeThroughWithDefault(data.runId, data.nodeId, { executionRepository, workspaceRepository, approved: data.approved, driver: "http_run_all", note: data.defaultOutputNote, defaultUpstream: data.defaultUpstream }) });
       }
       let run = await getRun(data.runId, executionRepository);
       // D9 — an operator naming a node directly states a different INTENT, not a different claim: the
@@ -1526,12 +1635,12 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const deadline = Date.now() + RUN_DRIVER_TIME_BUDGET_MS;
       let timedOut = false;
       let run = await getRun(data.runId, executionRepository);
-      run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved }));
+      run = await enterApprovedGateBlockedRun(run, data.approved, () => runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, ...(data.outputMode ? { outputMode: data.outputMode } : {}) }));
       const timing = run ? await runStallTiming(run.workflowId, run.projectId) : undefined;
       let stop = await resolveDriverRefusal(run, workspaceRepository, deadline - Date.now(), timing, data.nodeId);
       for (let i=0; run && !stop && i<100 && !HALTED_RUN_STATUSES.includes(run.status) && run.nodes.find((n) => n.nodeId === data.nodeId)?.status !== "completed"; i++) {
         if (Date.now() > deadline) { timedOut = true; break; }
-        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved });
+        run = await runNextNode(data.runId, { executionRepository, workspaceRepository, approved: data.approved, ...(data.outputMode ? { outputMode: data.outputMode } : {}) });
         if (run.nodes.find((n) => n.nodeId === data.nodeId)?.status === "completed") break;
         stop = await resolveDriverRefusal(run, workspaceRepository, deadline - Date.now(), timing, data.nodeId);
       }
@@ -1748,6 +1857,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     ...createOperationTools(),
     // Track C — autonomous commissioning. Its own module for the reason every sibling surface has
     // one: the verbs share one subject (a tenant's commissioning policy) and nothing else here does.
+    ...createWorkbenchTools({ workspaceRepository, executionRepository }),
     ...createPlannerTools()
   ];
 }

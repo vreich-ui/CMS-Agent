@@ -21,7 +21,8 @@ import { workspaceUpdateNodePrompt } from '../../../api/verbs';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
-import type { WorkflowNode } from '../../../types';
+import type { Run, WorkflowNode } from '../../../types';
+import { ReplayPanel } from './ReplayPanel';
 import { useEffectivePrompt, usePlaybook } from '../queries';
 import {
   canonicalPromptFor,
@@ -36,10 +37,14 @@ import {
   setLocalDraft,
 } from './Shared';
 
-export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId: string; wfName: string }) {
+export function PromptTab({ node, nodeId, wfName, run }: { node: WorkflowNode; nodeId: string; wfName: string; run: Run | null }) {
   const promptQ = useEffectivePrompt(nodeId);
   const playbookQ = usePlaybook(nodeId);
-  const skillsQ = useSkills();
+  // W3 — `skill_list` is the single slowest read on this plane (20 s for 63 KB, measured
+  // 2026-09-16: it re-scans three blob prefixes and opens every object under all of them). This
+  // tab wants it only to turn this node's skill ids into names, so a node with no skills must not
+  // pay for the whole catalogue — and no node should pay for it before its prompt has painted.
+  const skillsQ = useSkills({ enabled: (node.skills?.length ?? 0) > 0 && Boolean(promptQ.data) });
   const qc = useQueryClient();
 
   const storedPrompt =
@@ -126,6 +131,7 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
   const skillIds = node.skills;
 
   return (
+    <>
     <Card
       label={
         <>
@@ -194,13 +200,14 @@ export function PromptTab({ node, nodeId, wfName }: { node: WorkflowNode; nodeId
             loadingPlaybook={playbookQ.isLoading}
           />
         </Disclosure>
-        {/* U7 polish — operator copy, not an internal roadmap phase label
-            plus a bare MCP verb name. */}
-        <Btn disabled title="Replaying this prompt against a frozen test dataset isn't available from this screen yet.">
-          ⇄ Replay vs dataset
-        </Btn>
+        {/* W6 — "⇄ Replay vs dataset" sat here, permanently disabled, since U7. Replaying against a
+            frozen DATASET still has no verb behind it; replaying against a RUN does (node.execute),
+            and that is the question an operator editing a prompt actually has. The real control is
+            the panel below this card. */}
       </div>
     </Card>
+    <ReplayPanel node={node} nodeId={nodeId} run={run} promptDirty={dirty} />
+    </>
   );
 }
 

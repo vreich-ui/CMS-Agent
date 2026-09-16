@@ -14,7 +14,11 @@
 import { Storage, type Bucket } from "@google-cloud/storage";
 
 type SetJsonOptions = { onlyIfNew?: boolean; onlyIfMatch?: string; metadata?: unknown };
-type WriteResult = { etag?: string; modified: boolean };
+// `etagVerified` — W7. False when `etag` came from a metadata re-read rather than the upload's own
+// response, i.e. when it may belong to a writer who raced into that window. Safe for the next
+// conditional write either way (a wrong one simply fails and the caller retries), but NOT safe to
+// cache our own bytes against: see BlobWorkspaceRepository.save().
+type WriteResult = { etag?: string; modified: boolean; etagVerified?: boolean };
 type ListEntry = { key: string; etag: string };
 
 const statusCodeOf = (error: unknown): number | undefined => {
@@ -68,6 +72,21 @@ export class GcsStoreClient {
     }
   }
 
+  // W1 — the cheap half of getWithMetadata: the object's current generation, with no download.
+  // A read path that already holds a parsed document only needs to know whether that generation
+  // moved; asking this costs one metadata call instead of re-fetching (and re-parsing) bytes the
+  // instance already has. Returns null when the object does not exist.
+  async head(key: string): Promise<string | null> {
+    try {
+      const [metadata] = await this.bucket.file(this.objectName(key)).getMetadata();
+      const generation = metadata.generation;
+      return generation === undefined || generation === null ? null : String(generation);
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
   async setJSON(key: string, data: unknown, options?: SetJsonOptions): Promise<WriteResult> {
     const file = this.bucket.file(this.objectName(key));
     const ifGenerationMatch = options?.onlyIfMatch !== undefined ? Number(options.onlyIfMatch) : options?.onlyIfNew ? 0 : undefined;
@@ -86,8 +105,16 @@ export class GcsStoreClient {
     // The library populates file.metadata from the upload response for non-resumable writes; fall
     // back to a metadata read. A writer racing into this window yields a stale etag here, which is
     // CAS-safe: the next conditional write simply fails and the caller retries from a fresh read.
-    const generation = file.metadata?.generation ?? (await file.getMetadata())[0]?.generation;
-    return { modified: true, etag: generation !== undefined ? String(generation) : undefined };
+    //
+    // W7 — but it is NOT safe to CACHE against. Once a caller may `adopt(document, etag)` (see
+    // CachedJsonBlob), pairing our own bytes with somebody else's generation pins the cache to a
+    // version check that passes forever: `head()` keeps returning the generation we recorded, so the
+    // instance serves its own superseded document with no TTL bound. `etagVerified` says which of
+    // the two we got — the upload's own answer, or a re-read that may have caught another writer —
+    // so a cache can adopt the first and drop the second.
+    const fromUpload = file.metadata?.generation;
+    const generation = fromUpload ?? (await file.getMetadata())[0]?.generation;
+    return { modified: true, etag: generation !== undefined ? String(generation) : undefined, etagVerified: fromUpload !== undefined };
   }
 
   async list(options: { prefix?: string } = {}): Promise<{ blobs: ListEntry[]; directories: string[] }> {
