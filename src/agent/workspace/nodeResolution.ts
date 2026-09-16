@@ -21,6 +21,7 @@ import "./pdfTemplateStudioWorkflow.js";
 import "./imageTemplateRevisionWorkflow.js";
 import "./documentRenderWorkflow.js";
 import "./assetLookupWorkflow.js";
+import "./imageAnnotationWorkflow.js";
 // C3 — site_content_specialists, for the identical reason: this module's whole purpose is
 // single-node resolution WITHOUT the executor, so it needs its own side-effect import of every
 // registered workflow, including this one.
