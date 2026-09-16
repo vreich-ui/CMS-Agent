@@ -257,16 +257,48 @@ describe("getSitePrefetch (C1 site/visual-standard/PDF-template/image-policy pre
     const originalObjectGet = HAPPY_PATH_RESPONSES.object_get;
 
     // A site whose logo is a wordmark only: platform's `imageAssetRef` is optional, so there is no
-    // mark to look at. Absent + named, never a fabricated url.
+    // mark to look at.
+    //
+    // DELIBERATELY CHANGED (admin logo upload branch): this used to assert `wordmarkOnly.logo` was
+    // `undefined` with `site_logo_absent` on the warnings. That conflated "no logo block at all" with
+    // "wordmark only" — a wordmark IS a logo, a real and common one, and the old assertion pinned the
+    // bug that told a wordmark-only site it "declares no logo." Now the wordmark travels through as
+    // `{ alt: text }` (no `url` — there is no image half) and the warning is the new, narrower
+    // `site_logo_image_absent`, which names the wordmark instead of claiming nothing is there.
     HAPPY_PATH_RESPONSES.object_get = { object: { logo: { text: "Dr Lurie" } } };
     const wordmarkOnly = await getSitePrefetch({ runId: "run-logo-1", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
-    expect(wordmarkOnly.logo).toBeUndefined();
-    expect(wordmarkOnly.warnings.map((warning) => warning.code)).toContain("site_logo_absent");
+    expect(wordmarkOnly.logo).toEqual({ alt: "Dr Lurie" });
+    expect(wordmarkOnly.warnings.map((warning) => warning.code)).not.toContain("site_logo_absent");
+    expect(wordmarkOnly.warnings.map((warning) => warning.code)).toContain("site_logo_image_absent");
 
-    // A tolerated alias shape (a differently-shaped substrate) still resolves.
+    // A tolerated alias shape (a differently-shaped substrate) still resolves, unconverted, exactly as
+    // before — this behaviour is unchanged by the admin logo upload work.
     HAPPY_PATH_RESPONSES.object_get = { object: { logo: { url: "https://cdn.example/alias.svg", alt: "Alias" } } };
     const alias = await getSitePrefetch({ runId: "run-logo-2", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
     expect(alias.logo).toEqual({ url: "https://cdn.example/alias.svg", alt: "Alias" });
+
+    // Admin logo upload (this branch): a REAL Major Key artifact ref (`image/<requestId>/<64-hex
+    // sha256>.<ext>`, the shape platform's uploader actually writes) must resolve to its PUBLIC PATH,
+    // not travel verbatim — that was defect #1: a raw Major Key handed to a writer node as `url` is
+    // not fetchable. `/img/...` here mirrors platform's own `publicPathForArtifactRef`
+    // (packages/core/lib/artifact-paths.ts), root-relative, no site.urls.base join attempted.
+    HAPPY_PATH_RESPONSES.object_get = {
+      object: { logo: { text: "ZILBERMAN", imageAssetRef: "image/req_x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png" } }
+    };
+    const imageLogo = await getSitePrefetch({ runId: "run-logo-3", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+    expect(imageLogo.logo).toEqual({ url: "/img/req_x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", alt: "ZILBERMAN" });
+    expect(imageLogo.warnings.map((warning) => warning.code)).not.toContain("site_logo_absent");
+    expect(imageLogo.warnings.map((warning) => warning.code)).not.toContain("site_logo_image_absent");
+
+    // REVIEW (admin logo upload): a substrate carrying BOTH a wordmark and an alias url. The
+    // wordmark-only fallback must not shadow it — testing `text` before the alias keys resolved this
+    // to `{ alt: "BRAND" }` and silently DROPPED a perfectly good image mark that the pre-branch
+    // single-`pick` version returned. `alt` still comes from `text` (its pick list ends there), so
+    // the answer is byte-for-byte what it was before the wordmark split.
+    HAPPY_PATH_RESPONSES.object_get = { object: { logo: { text: "BRAND", url: "https://cdn.example/mark.svg" } } };
+    const wordmarkAndAlias = await getSitePrefetch({ runId: "run-logo-4", projectId: "dr-lurie" }, { projectRepository, cache: new RunScopedCache() });
+    expect(wordmarkAndAlias.logo).toEqual({ url: "https://cdn.example/mark.svg", alt: "BRAND" });
+    expect(wordmarkAndAlias.warnings.map((warning) => warning.code)).not.toContain("site_logo_image_absent");
 
     HAPPY_PATH_RESPONSES.object_get = originalObjectGet;
   });

@@ -51,7 +51,18 @@ export type SitePrefetchWarningCode =
   | "site_object_unreachable"
   | "site_object_not_found"
   | "site_brand_tokens_absent"
+  // Case (a): the site body carries no `logo` block at all (or one extractSiteLogo could not use at
+  // all — neither an image ref nor a wordmark). Kept narrow after the admin-logo-upload split below:
+  // it used to also fire for a wordmark-only site, which is a different, valid fact and gets its own
+  // code now.
   | "site_logo_absent"
+  // Admin logo upload (this branch): a wordmark-only logo (`{ text }`, no `imageAssetRef`) is a real,
+  // common, WORKING configuration — a text mark, not a missing one — so it must not read as "declares
+  // no logo." `site_logo_absent` used to fire for this too, because extractSiteLogo returned
+  // undefined for a wordmark with no image and the caller could not tell "no logo block" from "logo,
+  // but no image half" apart. Split so a downstream image-comparison step gets an accurate reason it
+  // cannot run, instead of being told the site has no logo when it plainly does.
+  | "site_logo_image_absent"
   | "visual_standard_list_blocked"
   | "visual_standard_list_unreachable"
   // FIX (chat-recovery): the site HAS no house standard — object_list(visual_standard) came
@@ -229,6 +240,29 @@ const extractBrandPalette = (body: Record<string, unknown>): ReducedContractBran
   return { ...(colors ? { colors } : {}), ...(fonts ? { fonts } : {}) };
 };
 
+// Admin logo upload (this branch): `imageAssetRef` holds a RAW platform Major Key artifact ref
+// (`image/<requestId>/<64-hex-sha256>.<ext>`, or `pdf/...`) — not a URL, and not fetchable as one. It
+// is servable only at its PUBLIC PATH, `/img/<requestId>/<sha>.<ext>` (a netlify redirect to
+// platform's get-public-image function; `pdf/...` becomes `/pdf/...`). Platform's own helper for this
+// exact conversion is `publicPathForArtifactRef` (packages/core/lib/artifact-paths.ts) — this mirrors
+// it on our side of the wire, since this repo has no shared package boundary with platform's to import
+// it from. The two must not drift: if platform changes its prefix rule, this must change with it.
+//
+// Deliberately narrow: only a value that matches the Major Key shape gets converted. A value read
+// from `imageAssetRef` that does NOT match (an operator having hand-set a full URL there, say) is
+// passed through verbatim rather than silently dropped — this function has always been tolerant of a
+// differently-shaped substrate, and a non-matching string is still a better answer than none.
+//
+// The returned path is ROOT-RELATIVE (starts with `/`), never an absolute URL. A consumer that needs
+// an absolute URL must join it to the tenant's `site.urls.base` itself — this function has no way to
+// know that base, and does not attempt the join here.
+const MAJOR_KEY_ARTIFACT_REF = /^(image|pdf)\/([^/]+\/[0-9a-f]{64}\.[a-z]+)$/i;
+const publicPathForArtifactRef = (ref: string): string | undefined => {
+  const match = MAJOR_KEY_ARTIFACT_REF.exec(ref);
+  if (!match) return undefined;
+  return `/${match[1].toLowerCase() === "pdf" ? "pdf" : "img"}/${match[2]}`;
+};
+
 // The logo, bounded to what a look-writer needs: where the mark is, and what it is called.
 //
 // REVIEW: `imageAssetRef` and `text` are the keys that actually matter, and neither was read.
@@ -238,15 +272,48 @@ const extractBrandPalette = (body: Record<string, unknown>): ReducedContractBran
 // dead on arrival: a site that HAS a logo still reported `site_logo_absent` on every run. The other
 // spellings stay as tolerated aliases — a differently-shaped substrate is why every reader in this
 // module is tolerant — with platform's own names read FIRST.
+//
+// Admin logo upload (this branch), two more fixes on top of the above:
+//   1. `imageAssetRef` was being assigned to `url` VERBATIM. That was dormant only because no tenant
+//      had set one yet; platform's admin uploader (shipping alongside this branch) is what actually
+//      writes it, and from that point on every run would have handed a writer node a raw Major Key it
+//      cannot fetch. Now converted through publicPathForArtifactRef above. The tolerated alias keys
+//      (`url`/`src`/`href`/`blobKey`/`blob_key`) are NOT Major Keys — they come from a differently
+//      shaped substrate — so they still pass through unconverted, exactly as before.
+//   2. A wordmark-only site (`{ text }`, no `imageAssetRef`) now returns `{ alt: text }` instead of
+//      undefined, so a caller can tell "there is a text mark but no image" from "there is no logo at
+//      all" — see `site_logo_image_absent` vs. `site_logo_absent` where this result is consumed.
 const extractSiteLogo = (body: Record<string, unknown>): ReducedContractSiteLogo | undefined => {
   const raw = pick(body, ["logo", "logoUrl", "logo_url"]);
   if (isNonEmptyString(raw)) return { url: raw };
   if (!isObject(raw)) return undefined;
-  const url = pick(raw, ["imageAssetRef", "image_asset_ref", "url", "src", "href", "blobKey", "blob_key"]);
   // `text` is platform's own wordmark string — exactly the "what is the mark called" half.
   const alt = pick(raw, ["alt", "altText", "alt_text", "label", "text"]);
-  if (!isNonEmptyString(url)) return undefined;
-  return { url, ...(isNonEmptyString(alt) ? { alt } : {}) };
+
+  // Platform's own key first, and it needs the Major-Key-to-public-path conversion above before it is
+  // usable as `url` at all.
+  const assetRef = pick(raw, ["imageAssetRef", "image_asset_ref"]);
+  if (isNonEmptyString(assetRef)) {
+    const url = publicPathForArtifactRef(assetRef) ?? assetRef;
+    return { url, ...(isNonEmptyString(alt) ? { alt } : {}) };
+  }
+
+  // Tolerated alias shapes — a differently-shaped substrate, unconverted, same as always.
+  //
+  // ORDER IS LOAD-BEARING: this must be tried BEFORE the wordmark-only fallback below. The old
+  // single-`pick` version drew `url` from the alias list and `alt` (whose list ENDS in `text`) from
+  // the same object, so a substrate carrying BOTH — `{ text: "BRAND", url: "https://cdn/mark.svg" }`
+  // — resolved to `{ url, alt: "BRAND" }`. Testing `text` first instead would shadow that perfectly
+  // good image mark and hand the caller `{ alt }` only, i.e. lose the very thing this reader exists
+  // to find. The wordmark fallback is for "there is NO image half", not "there is a wordmark too".
+  const aliasUrl = pick(raw, ["url", "src", "href", "blobKey", "blob_key"]);
+  if (isNonEmptyString(aliasUrl)) return { url: aliasUrl, ...(isNonEmptyString(alt) ? { alt } : {}) };
+
+  // No image half at all. `text` alone is a wordmark-only logo — a real, valid, common configuration,
+  // not an absent one — so it is carried through as `alt` rather than reported as nothing.
+  const text = pick(raw, ["text"]);
+  if (isNonEmptyString(text)) return { alt: text };
+  return undefined;
 };
 
 type SitePdfBlock = { defaultTemplateId?: string; byKind?: Record<string, string> };
@@ -417,8 +484,14 @@ export async function getSitePrefetch(params: SitePrefetchParams, deps: SitePref
     if (siteBodyRead && !brandPalette) {
       warnings.push({ code: "site_brand_tokens_absent", message: `Site object "${siteObjectId}" for project ${params.projectId} declares no brandTokens colors/fonts; a writer on this run reconciles its palette from the references alone.` });
     }
+    // Admin logo upload (this branch): case (a) "no logo block at all" and case (b) "wordmark-only
+    // logo" are not the same fact and must not share a code — see site_logo_image_absent's definition
+    // above for why. `logo` here is `extractSiteLogo`'s result: undefined is case (a); a value with no
+    // `url` (wordmark, `alt` set from `text`) is case (b); a value WITH `url` needs neither warning.
     if (siteBodyRead && !logo) {
       warnings.push({ code: "site_logo_absent", message: `Site object "${siteObjectId}" for project ${params.projectId} declares no logo; nothing on this run can check a proposed look against the mark.` });
+    } else if (siteBodyRead && logo && !logo.url) {
+      warnings.push({ code: "site_logo_image_absent", message: `Site object "${siteObjectId}" for project ${params.projectId} declares a text wordmark ("${logo.alt}") and no image mark; a proposed look can be checked against the wordmark text but not compared against an image.` });
     }
 
     // 3. object_list({object_type:'visual_standard'}) — templates, and a fallback houseId when the
