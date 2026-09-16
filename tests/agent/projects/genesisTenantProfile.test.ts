@@ -3,7 +3,7 @@ import {
   GENESIS_EMISSION_VERBS,
   GENESIS_WITHHELD_ROUTE_VERBS,
   GENESIS_TENANT_DEFINITION_VERSION,
-  GENESIS_TENANT_TOOL_POLICIES,
+  tenantToolPolicies,
   genesisTenantProfile,
   isGenesisMintedProject
 } from "../../../src/agent/projects/genesisTenantProfile.js";
@@ -49,7 +49,7 @@ describe("G5 — the genesis tenant profile", () => {
     // The containment property IS the profile's safety guarantee. A future edit that drops a verb
     // from the map fails here rather than in production as a stalled clone run.
     for (const verb of GENESIS_EMISSION_VERBS) {
-      expect(GENESIS_TENANT_TOOL_POLICIES[verb], `emission verb "${verb}" is not permitted by the genesis profile`).toBe("allowed");
+      expect(tenantToolPolicies()[verb], `emission verb "${verb}" is not permitted by the genesis profile`).toBe("allowed");
     }
   });
 
@@ -73,7 +73,7 @@ describe("G5 — the genesis tenant profile", () => {
     expect(declared.size).toBeGreaterThan(0);
 
     const withheld = new Set(GENESIS_WITHHELD_ROUTE_VERBS);
-    const missing = [...declared].filter((verb) => GENESIS_TENANT_TOOL_POLICIES[verb] !== "allowed" && !withheld.has(verb)).sort();
+    const missing = [...declared].filter((verb) => tenantToolPolicies()[verb] !== "allowed" && !withheld.has(verb)).sort();
     expect(missing, "route verbs a minted tenant needs but the genesis profile neither grants nor withholds").toEqual([]);
   });
 
@@ -85,7 +85,7 @@ describe("G5 — the genesis tenant profile", () => {
     for (const verb of GENESIS_WITHHELD_ROUTE_VERBS) {
       expect(declared.has(verb), `"${verb}" is withheld but no route declares it — remove it`).toBe(true);
       // A withheld verb must also not be granted: the two lists would then contradict each other.
-      expect(GENESIS_TENANT_TOOL_POLICIES[verb]).toBeUndefined();
+      expect(tenantToolPolicies()[verb]).toBeUndefined();
     }
   });
 
@@ -93,9 +93,9 @@ describe("G5 — the genesis tenant profile", () => {
   // not a safe conservative default — it is a run that fails one step before the step it is allowed
   // to take.
   it("does not permit a publish verb whose creation half is blocked", () => {
-    expect(GENESIS_TENANT_TOOL_POLICIES.publish_pdf_template).toBe("allowed");
+    expect(tenantToolPolicies().publish_pdf_template).toBe("allowed");
     for (const verb of ["create_pdf_template", "validate_pdf_template", "get_pdf_template_validation"]) {
-      expect(GENESIS_TENANT_TOOL_POLICIES[verb], `${verb} is needed to produce what publish_pdf_template publishes`).toBe("allowed");
+      expect(tenantToolPolicies()[verb], `${verb} is needed to produce what publish_pdf_template publishes`).toBe("allowed");
     }
   });
 
@@ -110,8 +110,8 @@ describe("G5 — the genesis tenant profile", () => {
   it("keeps the publish verbs the two authorized executor nodes exist to speak", () => {
     // Removing these would harden nothing: FORBIDDEN_PROJECT_VERBS already refuses them
     // pre-transport for every node except publish_executor and release_executor.
-    expect(GENESIS_TENANT_TOOL_POLICIES.object_publish).toBe("allowed");
-    expect(GENESIS_TENANT_TOOL_POLICIES.release_to_production).toBe("allowed");
+    expect(tenantToolPolicies().object_publish).toBe("allowed");
+    expect(tenantToolPolicies().release_to_production).toBe("allowed");
   });
 
   it("returns a fresh policy map per call, so one tenant cannot mutate another's", () => {

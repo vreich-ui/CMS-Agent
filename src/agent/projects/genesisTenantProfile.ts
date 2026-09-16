@@ -53,6 +53,7 @@
 // publish_executor and release_executor exist to speak, and every OTHER node is refused them
 // pre-transport by FORBIDDEN_PROJECT_VERBS regardless of what this map says. Removing them would not
 // harden anything; it would only break the two nodes that are already gated three ways.
+import { declaredRouteVerbs } from "../workspace/routeRegistry.js";
 import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js";
 
 /** Bump when the profile below changes in a way every minted tenant should inherit.
@@ -60,20 +61,23 @@ import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js"
  *  v3 (Milestone A remainder, 2026-09-14): the document-render and template-preview/verify verbs
  *  Platform #751/#752 shipped — `render_article_pdf`, `document_render`,
  *  `preview_pdf_template_fixture`, `verify_pdf_content`, `check_image_text`, `analyze_image_layout`.
+ *  v4 (2026-09-16): `site_apply_brand_imagery` is GRANTED rather than withheld, and the granted set
+ *  is now DERIVED from the route manifests (see below) instead of being a hand-kept list that a new
+ *  route can fall out of.
  *  Before v3 every genesis-minted tenant (zilberman, genesis-lab-2) refused all six pre-transport
  *  (defaultToolPolicy "blocked", none named), so capabilityReadiness.ts's `pdf_render` derived
  *  not_configured for them and imageTemplateRevisionProviders.ts's preview/verify seams could not
  *  have run even once wired. dr-lurie/platform never noticed: their records are defaultToolPolicy
  *  "allowed", the exact drift the header above describes. migrateDefaultProjectConfig applies this
  *  map to a v2 record on every read; `npm run genesis:reconcile -- <projectId> --apply` persists it. */
-export const GENESIS_TENANT_DEFINITION_VERSION = 3;
+export const GENESIS_TENANT_DEFINITION_VERSION = 4;
 
 /**
  * The remote verbs a genesis-minted tenant may speak. Ordered as the live record orders them
  * (contract/registry, objects, capture, artifacts, site, publish, media, deploy) so a diff against
  * `project_get` output reads cleanly.
  */
-export const GENESIS_TENANT_TOOL_POLICIES: Readonly<Record<string, ToolPermission>> = Object.freeze({
+export const GENESIS_TENANT_BASE_TOOL_POLICIES: Readonly<Record<string, ToolPermission>> = Object.freeze({
   ping: "allowed",
   registry_get: "allowed",
   object_contract: "allowed",
@@ -140,9 +144,27 @@ export const GENESIS_TENANT_TOOL_POLICIES: Readonly<Record<string, ToolPermissio
  * `visual_standard_materializer` is an operator-enabled node on a new tenant rather than a birthright.
  * Granting it is a one-line policy change through `project.update` when that operator decides.
  */
-export const GENESIS_WITHHELD_ROUTE_VERBS: readonly string[] = Object.freeze([
-  "site_apply_brand_imagery"
-]);
+export const GENESIS_WITHHELD_ROUTE_VERBS: readonly string[] = Object.freeze([]);
+
+/**
+ * The tenant's tool policy: the curated map above, PLUS every verb the route manifests declare that is
+ * not withheld above. Union, derived at module load.
+ *
+ * WHY DERIVED (2026-09-16, Wolf). The curated list was the whole policy, so a tenant's ability to run
+ * a route depended on somebody remembering to add a row when a route changed — and when they forgot,
+ * the failure was a route refused pre-transport with `ok:true` on every config write, months from the
+ * change that caused it. Deriving the set inverts that: a new route verb is granted on every tenant at
+ * the next deploy, and WITHHOLDING one is the thing that now takes a deliberate line of code.
+ * `GENESIS_WITHHELD_ROUTE_VERBS` is that line, kept (empty) precisely so the guardrail stays visible
+ * and a future withhold is a decision with a name rather than an omission.
+ */
+export const tenantToolPolicies = (): Record<string, ToolPermission> =>
+  declaredRouteVerbs().reduce<Record<string, ToolPermission>>(
+    (map, verb) => (GENESIS_WITHHELD_ROUTE_VERBS.includes(verb) ? map : { ...map, [verb]: "allowed" }),
+    { ...GENESIS_TENANT_BASE_TOOL_POLICIES }
+  );
+
+
 
 /**
  * The verbs the capture and clone emission stages speak. Kept explicit so a future edit to the map
@@ -175,12 +197,15 @@ export const GENESIS_EMISSION_VERBS: readonly string[] = Object.freeze([
  * projects and that shape must never be applied to a minted tenant. platform's own first migration
  * was additive-only for the same reason (see defaultProjects.ts).
  */
-export type GenesisTenantProfile = Pick<ProjectConnectionConfig, "definitionVersion" | "defaultToolPolicy" | "toolPolicies">;
+export type GenesisTenantProfile = Pick<ProjectConnectionConfig, "definitionVersion" | "defaultToolPolicy"> & {
+  // Narrower than ProjectConnectionConfig's optional field: genesisTenantProfile() always sets this.
+  toolPolicies: Record<string, ToolPermission>;
+};
 
 export const genesisTenantProfile = (): GenesisTenantProfile => ({
   definitionVersion: GENESIS_TENANT_DEFINITION_VERSION,
   defaultToolPolicy: "blocked",
-  toolPolicies: { ...GENESIS_TENANT_TOOL_POLICIES }
+  toolPolicies: tenantToolPolicies()
 });
 
 /**
