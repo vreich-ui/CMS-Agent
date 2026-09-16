@@ -25,13 +25,15 @@
 // what counts as evidence for a capability means changing capabilityReadiness.ts; changing this file
 // only changes which capability ids exist at all.
 //
-// POPULATED FROM THE SIX LIVE DESCRIPTORS, NOTHING INVENTED. Every id below is copied from a
-// `requiredCapabilities` array in descriptors/*.ts as it stands today — nine ids total, one shared
+// POPULATED FROM THE LIVE DESCRIPTORS, NOTHING INVENTED. Every id below is copied from a
+// `requiredCapabilities` array in descriptors/*.ts as it stands today — ten ids total (the ninth
+// through A10; the tenth, image_annotate, added by T3 of the 2026-09-16 annotate-bridge plan for
+// descriptors/imageAnnotation.ts), one shared
 // pair (visual_identity_read/visual_identity_propose) used by the one bound operation
 // (visualIdentityReviewChange.ts) and the other seven spread across the five unbound ones
 // (siteInventory.ts, assetLookupAdopt.ts, documentRender.ts, pdfTemplateFamily.ts,
-// imageTemplateRevision.ts). Adding a tenth id here with no descriptor requiring it, or a descriptor
-// requiring an eleventh id not added here, are both refused: the former by nothing (an unused
+// imageTemplateRevision.ts, imageAnnotation.ts). Adding an id here with no descriptor requiring it, or a descriptor
+// requiring an id not added here, are both refused: the former by nothing (an unused
 // vocabulary entry is harmless — see isKnownCapability's own doc comment) and the latter by
 // registerOperation()'s new check.
 
@@ -45,7 +47,7 @@ export type CapabilityVocabularyEntry = {
   evidence: string;
 };
 
-// Declaration order mirrors the six descriptor files' own read order (siteInventory, then the two
+// Declaration order mirrors the descriptor files' own read order (siteInventory, then the two
 // visual-identity capabilities, then documentRender, pdfTemplateFamily's two, assetLookupAdopt,
 // imageTemplateRevision's two) — listCapabilityIds() below sorts before returning, so this order is
 // for a human reader only and carries no behavioral meaning.
@@ -89,6 +91,11 @@ const CAPABILITY_VOCABULARY: readonly CapabilityVocabularyEntry[] = [
     id: "image_search",
     description: "Search for candidate images to place into a web page template.",
     evidence: "The project's own tool policy resolves \"search_images\" to \"allowed\" for this tenant, and the project is active."
+  },
+  {
+    id: "image_annotate",
+    description: "Draw a deterministic annotation layer (a caption, a title, a label, a numbered badge) over an image already stored on the tenant plane, saving the result as a NEW image artifact.",
+    evidence: "The project's own tool policy resolves \"annotate_image\" to \"allowed\" for this tenant, and the project is active — that is the WRITE verb of the pair image_annotation declares (analyze_image_layout is its read half and gates nothing on its own)."
   },
   {
     id: "image_template_write",

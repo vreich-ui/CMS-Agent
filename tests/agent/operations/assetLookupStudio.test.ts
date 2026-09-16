@@ -102,8 +102,12 @@ afterEach(() => {
 });
 
 describe("A5 — the binding", () => {
-  it("asset_lookup_adopt is bound to a registered workflow, and nothing is left unbound", () => {
-    expect(UNBOUND_OPERATION_IMPLEMENTING_TASK).toEqual({});
+  it("asset_lookup_adopt is bound to a registered workflow, and is not left unbound", () => {
+    // T3 (2026-09-16 annotate-bridge plan) — this used to assert the whole map was empty. The map
+    // is the mechanism for an operation registered AHEAD of its implementation, and T3 registered
+    // one (image_annotation, awaiting T4), so what this test actually means — A5 finished
+    // asset_lookup_adopt's binding — is asserted about asset_lookup_adopt itself.
+    expect(Object.keys(UNBOUND_OPERATION_IMPLEMENTING_TASK)).not.toContain("asset_lookup_adopt");
     expect(getOperationWorkflowBinding("asset_lookup_adopt")?.workflowId).toBe(ASSET_LOOKUP_WORKFLOW_ID);
   });
 

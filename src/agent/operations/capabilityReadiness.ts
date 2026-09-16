@@ -86,6 +86,15 @@ type CapabilityRequirement =
 //     declared effect searches for candidate images.
 //   create_pdf_template / publish_pdf_template — GENESIS_TENANT_TOOL_POLICIES names both "allowed";
 //     pdf_template_family's own two declared effects (design, then publish) are exactly these verbs.
+//   annotate_image — T3 (2026-09-16 annotate-bridge plan). NOT named in any allowlist constant in
+//     this repo, and deliberately not claimed to be: it is a PDF-Tool verb reached through the
+//     per-tenant bridge, and the tenants it was live-verified on today (dr-lurie, platform) carry
+//     defaultToolPolicy "allowed" (drLurie/definition.ts, platform/definition.ts), under which
+//     effectiveToolPermission resolves it "allowed" without an explicit row — the same already-
+//     persisted declared-policy fact this module reads for every other tool name here (see the
+//     module header's own note on what "genuinely registered" means). A tenant that narrows its
+//     policy therefore reports an honest not_configured gap naming annotate_image, which is exactly
+//     the record operation_list_capability_gaps could never hold while this operation had no id.
 //   document_render — GENESIS_TENANT_TOOL_POLICIES v3 names it "allowed" (genesisTenantProfile.ts);
 //     it is Platform's owner-based render verb (packages/core/server/lib/mcp-tool-definitions.ts:
 //     `document_render`, shipped in Platform #752) whose input — an owned document named by its
@@ -105,6 +114,11 @@ const REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   pdf_template_write: { kind: "tool", toolName: "create_pdf_template" },
   pdf_template_publish: { kind: "tool", toolName: "publish_pdf_template" },
   image_search: { kind: "tool", toolName: "search_images" },
+  // T3 — the WRITE half of image_annotation's declared pair. analyze_image_layout (its read half)
+  // gates nothing on its own: it writes nothing, and a tenant that can annotate can analyze. Same
+  // posture as image_template_write below, which gates on create_pdf_template and not on the reads
+  // its own run performs first.
+  image_annotate: { kind: "tool", toolName: "annotate_image" },
   // A10 — WAS `{ kind: "unsupported" }`, on the stated grounds that "image_template_revision, A9, is
   // unimplemented". A9 SHIPPED: the operation is bound to image_template_revision_studio and its
   // apply stage (cloneConductorRoutes.ts's "image_revision_apply" -> runImageRevisionApplyBatch)

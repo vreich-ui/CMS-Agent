@@ -234,13 +234,25 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // BINDINGS above (with its own evidence comment) rather than editing preflightOperation.ts. An
 // operation whose implementing task shipped an EXECUTOR instead (operationExecutorBindings.ts) is
 // also removed from here — site_inventory (A4) is the one example; see this module's header.
-// Milestone A remainder — NOW EMPTY, and deliberately kept rather than deleted: it is the mechanism
+// Milestone A remainder — EMPTIED THEN, and deliberately kept rather than deleted: it is the mechanism
 // preflightOperation() uses to name a concrete remedy for an operation with no implementation, and
 // the next operation added to the catalog before its workflow exists belongs here. document_render
 // (A8) and asset_lookup_adopt (A5) both moved OUT into BINDINGS above, which is exactly what this
 // map's own header says to do when a task ships a real implementing workflow. Every catalog
 // operation now has one — or, for site_inventory (A4), a registered executor.
-export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {};
+// T3 (2026-09-16 annotate-bridge plan) — image_annotation is the first entry this map has held
+// since the Milestone A remainder emptied it, and it is here for exactly the reason the paragraph
+// above describes: the operation is REGISTERED (descriptors/imageAnnotation.ts) ahead of the
+// executor that will run it. The underlying annotate path is not missing — it shipped and was
+// live-verified on 2026-09-16 — but no registered workflow or executor in THIS codebase drives it
+// yet, and claiming otherwise by binding it to a lookalike workflow is precisely what this module's
+// "never bind on similarity" discipline forbids. preflightOperation() therefore reports
+// executable:false with a named remedy pointing at T4, rather than a run that would die at
+// dispatch. When T4 ships, move this id OUT of here and into BINDINGS above (or into
+// operationExecutorBindings.ts, if it ships as an executor) with its own evidence comment.
+export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
+  image_annotation: "T4 of the 2026-09-16 annotate-bridge plan"
+};
 
 function assertBindingIsSound(binding: OperationWorkflowBinding): void {
   if (!listRegisteredWorkflowIds().includes(binding.workflowId)) {
