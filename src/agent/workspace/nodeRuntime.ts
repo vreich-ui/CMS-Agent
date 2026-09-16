@@ -8,6 +8,8 @@ import { recordModelUsage } from "../observability/modelUsage.js";
 import { recordNodeTimingCompletion, NODE_EXECUTE_ROUTE_ERA, type NodeTimingOutcome } from "./nodeTimings.js";
 import { nextAttemptNumber } from "./nodeAttemptHistory.js";
 import { resolveSkillsForNode } from "../skills/skillResolver.js";
+import { pinSkillSelection, selectScopedSkills } from "../skills/runSkillSelection.js";
+import type { SkillRepository } from "../repository/interfaces/SkillRepository.js";
 import { resolveNodeInstructions } from "../execution/nodeInstructions.js";
 import { resolveEffectiveToolsForNode } from "../tools/toolResolver.js";
 import { DEFAULT_EXECUTION_MODE } from "./executor.js";
@@ -133,6 +135,39 @@ export async function getEffectivePrompt(nodeId: string, workspaceRepository = r
   return redactSecrets({ prompt, nodePrompt, skillInstructions });
 }
 
+// C2/C3 gap close (part 2) — prepareNodeExecution previews a dispatch, and a dispatch (executeNode,
+// below) now narrows by scope/family before it resolves. A preview that skipped that narrowing would
+// show a node's FULL live assignment (e.g. reference_content_writer's three-family set) and then
+// disagree with what the dispatch it previews actually resolves — a preview that lies about the
+// thing it previews. So the narrowing runs here too, using EXACTLY the same context as the dispatch
+// path below: `{ task: node.id }`, never a real site (see executeNode's own comment on why site is
+// not honestly available on this path — the same reasoning applies verbatim here).
+//
+// This is scope narrowing ONLY, never a pin: pinSkillSelection writes onto a WorkflowExecutionRecord,
+// and prepareNodeExecution's own `repos` default doesn't even carry an executionRepository (only
+// `workspaceRepository`) — there is no run to write to and this function must never behave as if one
+// exists. selectScopedSkills is the pure half of that machinery (no run, no write, no clock), which
+// is exactly what a stateless preview needs. Pure means idempotent, too: calling this twice for the
+// same node must answer from the CURRENT assignment both times, never memoize the first answer —
+// that would be pinning in effect, just without a run object to point at.
+//
+// The one thing this cannot preview: a runId that already carries an earlier pin (executeNode's
+// `existingSkillSelection` reuse). prepareNodeExecution has no runId parameter at all, so a caller
+// re-dispatching an already-pinned run will see this preview disagree with that particular dispatch —
+// an accepted, narrow residual gap, not something scope narrowing here can close.
+const scopeNarrowedSkillIds = async (node: WorkspaceNode, repository: SkillRepository): Promise<string[]> => {
+  const candidates = [...new Set(node.assignedSkills ?? [])];
+  if (!candidates.length) return candidates;
+  try {
+    const defined = await repository.list({ skillIds: candidates });
+    return selectScopedSkills(candidates, defined, { task: node.id }).skillIds;
+  } catch {
+    // Degrade honestly, the same posture pinSkillSelection takes on an unreadable store: the
+    // candidates stay unfiltered rather than the preview silently going empty.
+    return candidates;
+  }
+};
+
 // preloadedNode (same contract as getEffectivePrompt's above) lets executeNode pass down the node it
 // already loaded, instead of prepareNodeExecution loading it again itself AND getEffectivePrompt AND
 // resolveEffectiveToolsForNode each loading it a THIRD and FOURTH time for the very same dispatch —
@@ -147,10 +182,11 @@ export async function prepareNodeExecution(data: { nodeId: string; input?: unkno
   const prompt = await getEffectivePrompt(node.id, repos.workspaceRepository, node);
   const inputTokens = tokenCount({ prompt, input: data.input, dependencyOutputs }, 64);
   const outputTokens = tokenCount(node.outputSchema, 32);
+  const skillRepository = repositoryManager.getSkillRepository();
   return redactSecrets({
     resolvedNode: node,
     resolvedPrompt: prompt,
-    resolvedSkills: await resolveSkillsForNode(node, repositoryManager.getSkillRepository()),
+    resolvedSkills: await resolveSkillsForNode(node, skillRepository, { pinnedSkillIds: await scopeNarrowedSkillIds(node, skillRepository) }),
     resolvedEffectiveTools: await resolveEffectiveToolsForNode(node.id, {}, node),
     dependencyOutputs,
     missingInputs: [...missingInputs, ...(!inputValidation.valid ? ["input_schema"] : [])],
@@ -206,7 +242,45 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   const executionId = makeExecutionId();
   const startedAt = now();
   const state: NodeExecutionState = { nodeId: node.id, status: "running", startedAt, input: { input: data.input, dependencies: prep.dependencyOutputs }, produces: node.produces };
-  const run: WorkflowExecutionRecord = { runId, workflowId: "independent_node", projectId: "workspace", status: "running", currentNodeId: node.id, startedAt, updatedAt: startedAt, nodes: [state], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: prep.dependencyOutputs as Record<string, unknown>, dryRun: true, executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE };
+  // C2/C3 gap close - a caller-named runId may already carry a pinned skill selection for this
+  // node (e.g. a prior node.execute call under the same runId). Seeding it here is what makes
+  // the pin below write-once ACROSS calls, not only within one: an existing entry wins over
+  // whatever node.assignedSkills says right now, exactly as it would for a conductor-dispatched
+  // node (runSkillSelection.ts's WRITE-ONCE guarantee). No extra read when no runId was given -
+  // the common case (replay.ts always mints a fresh one; most MCP callers pass none at all).
+  const existingSkillSelection = data.runId ? (await repos.executionRepository.getRun(data.runId))?.skillSelection : undefined;
+  const run: WorkflowExecutionRecord = { runId, workflowId: "independent_node", projectId: "workspace", status: "running", currentNodeId: node.id, startedAt, updatedAt: startedAt, nodes: [state], artifacts: [], errors: [], approvalsRequired: [], stageOutputs: prep.dependencyOutputs as Record<string, unknown>, dryRun: true, executionMode: data.executionMode ?? DEFAULT_EXECUTION_MODE, ...(existingSkillSelection ? { skillSelection: existingSkillSelection } : {}) };
+  // C2 - pin (or, on a reused runId, simply confirm) this node's skill selection BEFORE dispatch,
+  // mirroring executor.ts's own claim-time pin (its `if (claim)` block calls pinSkillSelection the
+  // moment a conductor-dispatched node's claim is stamped - executor.ts:3689). Without this,
+  // `context.run.skillSelection` was always undefined on this path - a fresh synthetic run never
+  // carried one - so AnthropicNodeRunner's/OpenAINodeRunner's own `selectedSkillsFor(context.run,
+  // node.id)` call (their own comment: "Undefined (a node.execute outside a run...) falls back to
+  // the live assignment exactly as before") fired on EVERY node.execute dispatch, not only on the
+  // ad-hoc probes that comment was written for. #369's five specialist nodes have no conductor
+  // route yet, so node.execute is their ONLY dispatch path today - this pin is what makes
+  // run-pinned selection (#358) and family/scope narrowing (#361) actually reach them.
+  //
+  // ScopeContext: only `task` (this node's id) is honestly derivable here, so that is all that is
+  // passed - never `runScopeContext(run, node.id)`, which would read `site` off `run.projectId`.
+  // That field is the literal placeholder "workspace" on this path (see the
+  // visual_standard_materializer guard above: "a run whose projectId is the literal 'workspace' -
+  // there is no client here to write to"), not a real tenant, and neither node.execute nor
+  // node.prepare_execution accepts a projectId/site argument the way workflow.start_dry_run does.
+  // WorkflowExecutionRecord.objective's own doc comment states the identical principle for the
+  // third dimension: "an objective inferred ... would be a guess that then SILENTLY selects
+  // policy, which is the one thing the vocabulary's 'unknown is not a match' rule exists to
+  // prevent" (executionTypes.ts). Treating "workspace" as a real site would be exactly that guess,
+  // so `site`/`objective` are omitted rather than invented. The scope vocabulary's own rule then
+  // does the safe, narrowing-only thing (policyScope.ts's scopeApplies): an unscoped or
+  // task-scoped skill resolves exactly as it always has; a site- or objective-scoped one does not
+  // apply here, the same as it would not apply to any context that cannot name what it asks for.
+  // A DTC/foundation-style family pair (one fleet-wide member, one site-narrower member) therefore
+  // degrades to its fleet member rather than either widening to both - which the live/unpinned
+  // resolution this replaces used to do, raising a spurious same-family blocker on every such
+  // dispatch (skillResolver.ts's family-conflict check) - or guessing which site's member should
+  // win.
+  await pinSkillSelection(run, node, repositoryManager.getSkillRepository(), { context: { task: node.id } });
   await repos.executionRepository.createRun(run);
   // Live by default, mock only when a caller asks for it — the same deliberate choice the workflow
   // entry points make (see DEFAULT_EXECUTION_MODE), so node.execute cannot quietly hand back a
