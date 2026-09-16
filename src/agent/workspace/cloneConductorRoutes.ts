@@ -59,6 +59,25 @@ import { resolvePdfToolSiteId } from "../capture/pdfToolSiteScope.js";
 import { buildDocumentRenderReportStep, documentRenderExecuteStep, DOCUMENT_RENDER_ARTIFACTS, type DocumentRenderBrief, type DocumentRenderExecuteEnvelope } from "../capture/documentRenderEngine.js";
 // A5 (runner 3c) — asset_lookup_studio's own two deterministic stages, on the same route.
 import { assetLookupAdoptStep, assetLookupSearchStep, ASSET_LOOKUP_ARTIFACTS, type AssetLookupBrief, type AssetLookupSearchEnvelope } from "../capture/assetLookupEngine.js";
+// T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio's own three deterministic stages,
+// on the same metadata-keyed route as A5's, A7's, A8's and A9's.
+import {
+  imageAnnotationAnalyzeStep,
+  imageAnnotationDrawStep,
+  imageAnnotationVerifyStep,
+  IMAGE_ANNOTATION_ARTIFACTS,
+  type ImageAnnotationAnalyzeEnvelope,
+  type ImageAnnotationDrawEnvelope
+} from "../capture/imageAnnotationEngine.js";
+import type { ImageAnnotationBrief } from "../capture/imageAnnotationBriefBuilder.js";
+// T5 — the side-effect registration for image_annotation_studio, on THIS module rather than in
+// executor.ts's own list of workflow imports. The two are equivalent for the executor plane (this
+// module is what executor.ts imports to dispatch a deterministic stage at all), and this home is the
+// tighter one: the module that OWNS this workflow's three stage cases is the module that guarantees
+// its workflow is registered wherever those cases can be reached, so the route and the registration
+// can never arrive on a plane separately. nodeResolution.ts keeps its own explicit import alongside
+// the other workflows', unchanged.
+import "./imageAnnotationWorkflow.js";
 import type { TenantCallContext } from "../tools/tenantInvoke.js";
 import { ClientMemoryStore } from "../memory/clientMemoryStore.js";
 import type { TemplateArtifactValue } from "../memory/memoryEnvelope.js";
@@ -142,7 +161,10 @@ export const CLONE_STAGES = [
   "document_render_execute",
   "document_render_report",
   "asset_lookup_search",
-  "asset_lookup_adopt"
+  "asset_lookup_adopt",
+  "image_annotation_analyze",
+  "image_annotation_draw",
+  "image_annotation_verify"
 ] as const;
 export type CloneStage = typeof CLONE_STAGES[number];
 
@@ -669,6 +691,79 @@ export async function runCloneStage(input: { run: WorkflowExecutionRecord; node:
             targetProjectId,
             search: search as unknown as AssetLookupSearchEnvelope,
             brief: initial.assetLookupBrief as unknown as AssetLookupBrief
+          },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      // T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio's three stages: a layout READ
+      // that chooses the placement from the reported numbers, the WRITE that draws it as a new
+      // artifact, and the terminal text check that is the operation's own completion evidence.
+      case "image_annotation_analyze": {
+        // The same dispatch-boundary refusal A5's asset_lookup_search and A8's
+        // document_render_execute hold: a run whose initialInput carries no brief is refused BY NAME
+        // here, never completed on an empty envelope.
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.imageAnnotationBrief)) {
+          return refused(
+            "image_annotation_brief_missing",
+            "The run's initialInput carries no imageAnnotationBrief; image_annotation_analyze needs one to know which image to read and what to draw on it. A binding that dispatches this workflow without constructing an imageAnnotationBrief cannot run it — see operationWorkflowBindings.ts's image_annotation entry."
+          );
+        }
+        const { config: analyzeConfig } = await resolveCloneAuthority(targetProjectId);
+        // Every bridge verb in this module is pdf-tool-scoped: by the tenant's Platform site object
+        // id, refused by name when the record has none — never the tenantId as a stand-in.
+        const analyzeScope = resolvePdfToolSiteId(analyzeConfig);
+        if (!analyzeScope.ok) return refused(analyzeScope.code, analyzeScope.reason);
+        const envelope = await imageAnnotationAnalyzeStep(
+          { targetProjectId, siteId: analyzeScope.siteId, brief: initial.imageAnnotationBrief as unknown as ImageAnnotationBrief },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "image_annotation_draw": {
+        const analyze = envelopeOf(run, "image_annotation_analyze", IMAGE_ANNOTATION_ARTIFACTS.analyze);
+        if (isOutcome(analyze)) return analyze;
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.imageAnnotationBrief)) {
+          return refused(
+            "image_annotation_brief_missing",
+            "The run's initialInput carries no imageAnnotationBrief; image_annotation_draw reads the base image reference, the slot and the device scale factor from it and never infers one."
+          );
+        }
+        const { config: drawConfig } = await resolveCloneAuthority(targetProjectId);
+        const drawScope = resolvePdfToolSiteId(drawConfig);
+        if (!drawScope.ok) return refused(drawScope.code, drawScope.reason);
+        const envelope = await imageAnnotationDrawStep(
+          {
+            targetProjectId,
+            siteId: drawScope.siteId,
+            brief: initial.imageAnnotationBrief as unknown as ImageAnnotationBrief,
+            analyze: analyze as unknown as ImageAnnotationAnalyzeEnvelope
+          },
+          { tenantContext }
+        );
+        return { kind: "completed", output: envelope as unknown as Record<string, unknown> };
+      }
+      case "image_annotation_verify": {
+        const draw = envelopeOf(run, "image_annotation_draw", IMAGE_ANNOTATION_ARTIFACTS.draw);
+        if (isOutcome(draw)) return draw;
+        const initial = isRecord(run.initialInput) ? run.initialInput : {};
+        if (!isRecord(initial.imageAnnotationBrief)) {
+          return refused(
+            "image_annotation_brief_missing",
+            "The run's initialInput carries no imageAnnotationBrief; image_annotation_verify is scoped to the same tenant and request the annotation was drawn under and never infers one."
+          );
+        }
+        const { config: verifyConfig } = await resolveCloneAuthority(targetProjectId);
+        const verifyScope = resolvePdfToolSiteId(verifyConfig);
+        if (!verifyScope.ok) return refused(verifyScope.code, verifyScope.reason);
+        const envelope = await imageAnnotationVerifyStep(
+          {
+            targetProjectId,
+            siteId: verifyScope.siteId,
+            brief: initial.imageAnnotationBrief as unknown as ImageAnnotationBrief,
+            draw: draw as unknown as ImageAnnotationDrawEnvelope
           },
           { tenantContext }
         );
