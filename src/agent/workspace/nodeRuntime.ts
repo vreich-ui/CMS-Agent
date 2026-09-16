@@ -155,8 +155,25 @@ export async function getEffectivePrompt(nodeId: string, workspaceRepository = r
 // `existingSkillSelection` reuse). prepareNodeExecution has no runId parameter at all, so a caller
 // re-dispatching an already-pinned run will see this preview disagree with that particular dispatch —
 // an accepted, narrow residual gap, not something scope narrowing here can close.
-const scopeNarrowedSkillIds = async (node: WorkspaceNode, repository: SkillRepository): Promise<string[]> => {
-  const candidates = [...new Set(node.assignedSkills ?? [])];
+//
+// candidateSkillIds (C2/C3 — closing node.execute's missing-parameter gap) — the same recipe-narrowing
+// pinSkillSelection accepts (see runSkillSelection.ts's C3 section), applied here BEFORE scope
+// narrowing, in the same order pinSkillSelection applies it: intersect against the assignment first
+// (never widen — an id the node was not assigned is dropped, exactly as pinSkillSelection drops it
+// with reason `not_assigned`), then scope-narrow the survivors. Presence, not length: `[]` narrows to
+// no candidates and is distinguished from "no recipe narrowing" by `!== undefined`, matching
+// `pinnedSkillIds`'s own discipline in skillResolver.ts and `candidateSkillIds`'s in runSkillSelection.ts.
+//
+// THIS IS WHY node.prepare_execution TAKES THE PARAMETER TOO. #372's own reasoning for scope
+// narrowing here applies verbatim to candidate narrowing: a preview that stopped at scope would show
+// `reference_content_writer`'s full three-family set for a dispatch that is about to narrow further
+// by candidate, and preview would once again disagree with the dispatch it previews — the exact
+// defect #372 closed one dimension ago. Passing the same `candidateSkillIds` to both this function and
+// `pinSkillSelection` is what keeps them agreeing on a fresh (unpinned) dispatch; see
+// nodeRuntimeSkillPinning.test.ts's "preview and dispatch agree" test, extended to cover this.
+const scopeNarrowedSkillIds = async (node: WorkspaceNode, repository: SkillRepository, candidateSkillIds?: string[]): Promise<string[]> => {
+  const assigned = [...new Set(node.assignedSkills ?? [])];
+  const candidates = candidateSkillIds === undefined ? assigned : assigned.filter((id) => new Set(candidateSkillIds).has(id));
   if (!candidates.length) return candidates;
   try {
     const defined = await repository.list({ skillIds: candidates });
@@ -173,7 +190,7 @@ const scopeNarrowedSkillIds = async (node: WorkspaceNode, repository: SkillRepos
 // resolveEffectiveToolsForNode each loading it a THIRD and FOURTH time for the very same dispatch —
 // four getNode calls for one node execution, three of them redundant. node.prepare_execution (the only
 // other caller) passes only data.nodeId and is unaffected: it still fetches exactly as before.
-export async function prepareNodeExecution(data: { nodeId: string; input?: unknown; dependencyOutputs?: Record<string, unknown>; modelConfig?: Record<string, unknown> }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository() }, preloadedNode?: WorkspaceNode) {
+export async function prepareNodeExecution(data: { nodeId: string; input?: unknown; dependencyOutputs?: Record<string, unknown>; modelConfig?: Record<string, unknown>; candidateSkillIds?: string[] }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository() }, preloadedNode?: WorkspaceNode) {
   const node = preloadedNode ?? await resolveNodeForExecution(data.nodeId, repos.workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
   const dependencyOutputs = Object.fromEntries(await Promise.all(node.dependsOn.map(async (id) => [id, data.dependencyOutputs?.[id] ?? (await repos.workspaceRepository.getStageOutput(id))?.value])));
@@ -186,7 +203,7 @@ export async function prepareNodeExecution(data: { nodeId: string; input?: unkno
   return redactSecrets({
     resolvedNode: node,
     resolvedPrompt: prompt,
-    resolvedSkills: await resolveSkillsForNode(node, skillRepository, { pinnedSkillIds: await scopeNarrowedSkillIds(node, skillRepository) }),
+    resolvedSkills: await resolveSkillsForNode(node, skillRepository, { pinnedSkillIds: await scopeNarrowedSkillIds(node, skillRepository, data.candidateSkillIds) }),
     resolvedEffectiveTools: await resolveEffectiveToolsForNode(node.id, {}, node),
     dependencyOutputs,
     missingInputs: [...missingInputs, ...(!inputValidation.valid ? ["input_schema"] : [])],
@@ -198,7 +215,7 @@ export async function prepareNodeExecution(data: { nodeId: string; input?: unkno
   });
 }
 
-export async function executeNode(data: { nodeId: string; input?: unknown; runId?: string; dependencyOutputs?: Record<string, unknown>; executionMode?: ExecutionMode; modelConfig?: Record<string, unknown>; promptOverride?: string; expectedWorkspaceVersion?: number }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
+export async function executeNode(data: { nodeId: string; input?: unknown; runId?: string; dependencyOutputs?: Record<string, unknown>; executionMode?: ExecutionMode; modelConfig?: Record<string, unknown>; promptOverride?: string; expectedWorkspaceVersion?: number; candidateSkillIds?: string[] }, repos = { workspaceRepository: repositoryManager.getWorkspaceRepository(), executionRepository: repositoryManager.getExecutionRepository() }) {
   if (data.expectedWorkspaceVersion !== undefined && data.expectedWorkspaceVersion !== await repos.workspaceRepository.getWorkspaceVersion()) throw new Error("stale_workspace_version");
   const node = await resolveNodeForExecution(data.nodeId, repos.workspaceRepository);
   if (!node) throw new Error(`Unknown node: ${data.nodeId}`);
@@ -280,7 +297,16 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // resolution this replaces used to do, raising a spurious same-family blocker on every such
   // dispatch (skillResolver.ts's family-conflict check) - or guessing which site's member should
   // win.
-  await pinSkillSelection(run, node, repositoryManager.getSkillRepository(), { context: { task: node.id } });
+  //
+  // C2/C3 — data.candidateSkillIds is node.execute's missing parameter, closed here. `pinSkillSelection`
+  // has taken `options.candidateSkillIds` since #365; nothing on the MCP surface could ever supply
+  // it, because node.execute's schema had no field for it — #369's five specialist nodes have no
+  // conductor route (a recipe, if one existed) either, so node.execute was the only place this could
+  // ever have reached `pinSkillSelection` from, and it didn't. Threaded straight through, undefined
+  // when the caller omits it: `pinSkillSelection` already does every bit of the actual work (the
+  // assignment intersection, the `not_assigned` refusal, the presence-not-length check) — see its own
+  // C3 section — and this call site does not re-implement any of it.
+  await pinSkillSelection(run, node, repositoryManager.getSkillRepository(), { context: { task: node.id }, candidateSkillIds: data.candidateSkillIds });
   await repos.executionRepository.createRun(run);
   // Live by default, mock only when a caller asks for it — the same deliberate choice the workflow
   // entry points make (see DEFAULT_EXECUTION_MODE), so node.execute cannot quietly hand back a
