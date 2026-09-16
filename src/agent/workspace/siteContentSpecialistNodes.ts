@@ -80,9 +80,10 @@ const GROUNDED_IN_PROPERTY = { type: "array", items: { type: "string", minLength
 const PLANNER_PROMPT = `Objective: decide what ONE page needs — which sections it should carry, in what order, and what each section must establish for its reader — from the page's brief and whatever content already exists for this site. You plan the page's shape; you do not write a single word of its final copy, not even a placeholder sentence a downstream writer might mistake for approved text.
 Inputs expected: brief (the page's purpose, audience, and any constraints — required; a plan cannot be built from nothing), existingContent (an inventory of what this site or page already carries — titles, section types, short summaries — read as evidence of what is already established, never redrafted here), siteContext (site-level facts: what kind of site this is, who it serves, its declared voice, when supplied).
 What you decide, per section: its order, a sectionType label (plain and specific — "leadership_bios", "how_it_works", "faq", never "content"), a one-sentence purpose, and mustEstablish — the concrete claims or facts a reader must come away holding after that section, stated as bullet-sized assertions a writer could grade their own draft against. Prefer FEWER sections that each do real work over a long list that pads the page.
+NAME WHICH JOB WRITES EACH SECTION. Every section also carries contentRequirement: {job, needs}. job is exactly one of: about_organization, people_profile, product_service_description, program_event_description, faq_help_process, policy_explanation, evidence_story, focused_revision, localization — the task job whose specialist will draft this section's copy — or null when the section is filled by a deterministic builder with no writer at all (a bound contact form, a static map embed). needs is one line stating what that job must know to write this section. When the job you name is itself ambiguous about which of two things it is — product_service_description and program_event_description both cover two offering kinds; faq_help_process covers two reference kinds — you must ALSO set the matching discriminator on the section: offeringKind ("product"|"service" for product_service_description, "program"|"event" for program_event_description) or referenceKind ("faq"|"process" for faq_help_process). A section that names one of those three jobs without its discriminator is refused downstream rather than guessed, so leaving it out is not a shortcut — it is a section that never gets written.
 Reuse before you invent: when existingContent already establishes something this page needs, say so in reusesExisting (naming what already covers it) instead of planning a new section that duplicates it.
 You never write body copy, a headline, a call-to-action sentence, or sample text of any kind — that is one of the three writer nodes' job, never yours. A plan that slips a drafted sentence into mustEstablish or a section's purpose has failed at the one thing this node exists to avoid.
-Output required: site_content_plan.v1 {artifact, summary, sections: [{order, sectionType, purpose, mustEstablish, reusesExisting?}], openQuestions?}. openQuestions names anything the brief left unresolved that a writer will need answered before drafting.
+Output required: site_content_plan.v1 {artifact, summary, sections: [{order, sectionType, purpose, mustEstablish, contentRequirement: {job, needs?}, offeringKind?, referenceKind?, reusesExisting?}], openQuestions?}. openQuestions names anything the brief left unresolved that a writer will need answered before drafting.
 Blocker criteria: brief is missing, or says nothing about the page's purpose or its audience.
 ${SAFETY_MEMORY_FORMAT_FOOTER}`;
 
@@ -144,12 +145,39 @@ export const siteContentSpecialistNodes = [
           items: {
             type: "object",
             additionalProperties: true,
-            required: ["order", "sectionType", "purpose", "mustEstablish"],
+            required: ["order", "sectionType", "purpose", "mustEstablish", "contentRequirement"],
             properties: {
               order: { type: "integer", minimum: 0 },
               sectionType: { type: "string", minLength: 1 },
               purpose: { type: "string", minLength: 1 },
               mustEstablish: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+              // C4 — which task job supplies this section's content, or null for a section a
+              // deterministic builder fills with no writer at all. Required on every section: the
+              // C4 conductor (siteContentDraftingExecutor.ts) routes purely on this field, by job,
+              // never by sectionType, and a section carrying none of it is not routable at all.
+              contentRequirement: {
+                type: "object",
+                additionalProperties: true,
+                required: ["job"],
+                properties: {
+                  job: {
+                    type: ["string", "null"],
+                    enum: [
+                      "about_organization", "people_profile", "product_service_description", "program_event_description",
+                      "faq_help_process", "policy_explanation", "evidence_story", "focused_revision", "localization", null
+                    ],
+                    description: "The task job that drafts this section, by name — or null for a deterministically-built section (e.g. a bound contact form)."
+                  },
+                  needs: { type: "string", minLength: 1, description: "What that job needs to know to write this section, in one line." }
+                }
+              },
+              // Required IN SPIRIT, not by this schema, when contentRequirement.job is
+              // product_service_description/program_event_description (offeringKind) or
+              // faq_help_process (referenceKind) — PLANNER_PROMPT states the rule; the C4 conductor
+              // enforces it at dispatch time by refusing the section by name when it is missing,
+              // rather than this schema guessing a default.
+              offeringKind: { type: "string", enum: ["product", "service", "program", "event"] },
+              referenceKind: { type: "string", enum: ["faq", "process", "policy", "evidence_story"] },
               reusesExisting: { type: ["string", "null"] }
             }
           }

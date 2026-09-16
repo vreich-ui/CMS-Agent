@@ -206,3 +206,45 @@ describe("assignedSkills resolve against the seeded canonical set (the fix for t
     expect(missingBySpecialist).toEqual({});
   });
 });
+
+// C4 follow-up — site_content_planner's own outputSchema must REQUIRE contentRequirement.job on
+// every section, not merely allow it via additionalProperties. The C4 conductor
+// (siteContentDraftingExecutor.ts) routes purely on this field, by job, never by sectionType; a
+// planner whose outputSchema stops requiring it would ship a routable-looking plan that is
+// actually unroutable end to end (every section reads as "no job" and is silently skipped) — this
+// pins the requirement at the schema the real dispatch path validates against
+// (validateAgainstNodeSchema, the same function nodeRuntime.ts's executeNode calls on a completed
+// run's output), so a future edit that drops it fails loudly here.
+describe("site_content_planner's outputSchema requires contentRequirement.job on every section (the C4 conductor routes on nothing else)", () => {
+  const node = siteContentSpecialistNodes.find((candidate) => candidate.id === "site_content_planner")!;
+  const basePlan = (sectionOverrides: Record<string, unknown>) => ({
+    artifact: "site_content_plan.v1",
+    summary: "a plan",
+    sections: [{ order: 0, sectionType: "about", purpose: "intro", mustEstablish: ["x"], ...sectionOverrides }]
+  });
+
+  it("a section with no contentRequirement at all is rejected, naming contentRequirement", () => {
+    const result = validateAgainstNodeSchema(basePlan({}), node.outputSchema);
+    expect(result.valid).toBe(false);
+    expect(result.issues.join(" ")).toContain("contentRequirement");
+  });
+
+  it("a section with contentRequirement but no job is rejected, naming job", () => {
+    const result = validateAgainstNodeSchema(basePlan({ contentRequirement: {} }), node.outputSchema);
+    expect(result.valid).toBe(false);
+    expect(result.issues.join(" ")).toContain("job");
+  });
+
+  it("a named job satisfies the schema", () => {
+    const result = validateAgainstNodeSchema(basePlan({ contentRequirement: { job: "about_organization" } }), node.outputSchema);
+    expect(result.valid).toBe(true);
+  });
+
+  it("an explicit null job (a deterministically-built section) satisfies the schema — null is a value, not an absence", () => {
+    const result = validateAgainstNodeSchema(
+      basePlan({ sectionType: "contact_form", contentRequirement: { job: null } }),
+      node.outputSchema
+    );
+    expect(result.valid).toBe(true);
+  });
+});
