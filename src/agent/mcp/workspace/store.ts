@@ -122,7 +122,7 @@ export interface WorkspaceStore {
 }
 
 const now = () => new Date().toISOString();
-const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 // R-22 — this used to overwrite article_body's own schema AND outputSchema with articleBodyJsonSchema, the
 // workspace-local {schema_version, nodes} monolith, on every fresh workspace. It is the third of the three
 // article_body schemas and the one that was installed by default, which is why a fresh workspace disagreed
@@ -406,10 +406,14 @@ export class WorkspaceStateStore implements WorkspaceStore {
   protected healedDroppedNodes = 0;
   getHealedDroppedNodes(): number { return this.healedDroppedNodes; }
 
-  protected async load() { return this.document; }
+  // W1 — `fresh` is the read half of a read-modify-write. A backend that caches reads (see
+  // BlobWorkspaceRepository) MUST bypass every cache layer for it: basing a compare-and-swap on a
+  // cached document would make the retry below read back the same stale bytes it just conflicted
+  // on, forever. Every read path leaves it unset and is free to be served from cache.
+  protected async load(_options?: { fresh?: boolean }): Promise<WorkspaceDocument> { return this.document; }
   protected async save(document: WorkspaceDocument) { this.document = document; }
   protected async mutate(update: (document: WorkspaceDocument) => void, meta?: WorkspaceMutationMeta, eventType = "workspace.updated", nodeId?: string, agentId?: string) {
-    let document = await this.load();
+    let document = await this.load({ fresh: true });
     // Eventual-consistency reconciliation: if the caller expects a NEWER version than we just read,
     // our read is lagging a version already committed elsewhere (a fresh instance under Blobs'
     // eventual fallback). Reload — strong-first — a few times so the version a prior mutation returned
@@ -417,7 +421,7 @@ export class WorkspaceStateStore implements WorkspaceStore {
     // is always current, and when no expectedWorkspaceVersion is supplied.
     for (let attempt = 0; meta?.expectedWorkspaceVersion !== undefined && document.workspaceVersion < meta.expectedWorkspaceVersion && attempt < STALE_READ_RETRIES; attempt++) {
       await delay(STALE_READ_BACKOFF_MS * (attempt + 1));
-      document = await this.load();
+      document = await this.load({ fresh: true });
     }
     assertWorkspaceVersion(document, meta);
     assertBaseRevision(document, meta);
@@ -643,8 +647,8 @@ export class WorkspaceStateStore implements WorkspaceStore {
     }, undefined, "workspace.imported");
     return { imported: true as const, workspaceVersion, counts: { nodes: workspace.nodes?.length ?? 0, stageOutputs: workspace.stageOutputs?.length ?? 0, learningObservations: workspace.learningObservations?.length ?? 0 } };
   }
-  async saveStageOutput(stage: string, value: unknown, id = makeId("stage")) {
-    const output = { id, stage, value, createdAt: now() };
+  async saveStageOutput(stage: string, value: unknown, id = makeId("stage")): Promise<StageOutput> {
+    const output: StageOutput = { id, stage, value, createdAt: now() };
     await this.mutate((document) => { document.stageOutputs = [...document.stageOutputs.filter((existing) => existing.id !== id), output]; }, undefined, "stage.output_saved");
     return output;
   }

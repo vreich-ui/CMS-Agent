@@ -10,6 +10,7 @@ import { ConversationalRunner } from "../../conversations/conversationalRunner.j
 import { resolveConversationSkills } from "../../conversations/conversationSkills.js";
 import { agentConverseInputSchema, agentConverseJsonSchema } from "../../conversations/conversationContract.js";
 import { classifyConversationalAgentPrompt, conversationalAgentStatuses, type ConversationalAgentDefinition } from "../../conversations/agentDefinitions.js";
+import type { ConversationTurnRecord } from "../../conversations/conversationTurnTypes.js";
 import { metaJson, mutationMeta, objectSchema, ok, tool, type WorkspaceTool } from "./toolKit.js";
 
 const resolveAgentInput = z.object({
@@ -42,6 +43,31 @@ const updateAgentInput = z.object({
 }).strict();
 
 const agentIdJson = { type: "string", pattern: "^agt_[a-z0-9_]+$" } as const;
+
+// W5 — the Client Manager page's history. An operator editing this agent's prompt has no way to
+// see what it has actually been SAYING: the human-facing transcript lives in Platform's ChatDoc,
+// and CMS-Agent's own 200-turn mirror was reachable only by knowing a conversation id in advance.
+//
+// Bounded on purpose, twice over. `limit` bounds the conversations returned, and SCAN_MULTIPLE
+// bounds the conversations examined to find them — the mirror store is a prefix scan, which is the
+// shape this repository has been bitten by three times (W0.3, W1.4, W2.1), so an unbounded read is
+// not on offer at any `limit`. When the scan cap is reached the response says so rather than
+// implying the answer is complete.
+const listConversationsInput = z.object({
+  agentId: agentIdSchema,
+  projectId: z.string().min(1).max(63).optional(),
+  limit: z.number().int().min(1).max(50).optional()
+}).strict();
+// W7 — an agent ref is `<agentId>` or `<agentId>@<revision>`; matching on a bare prefix meant
+// `agt_client` returned `agt_client_manager`'s turns, previews and cost figures. Not an
+// authorization boundary today (grants are per tool name, not per agent), but "whose conversations
+// am I reading" is not a question to answer with a substring.
+const agentRefMatches = (ref: string, agentId: string): boolean =>
+  ref === agentId || ref.startsWith(`${agentId}@`);
+
+const CONVERSATION_SCAN_MULTIPLE = 4;
+const CONVERSATION_READ_CONCURRENCY = 6;
+const ASSISTANT_PREVIEW_CHARS = 600;
 
 /**
  * The editable view of a definition. `promptState` tells an operator whether what they are looking
@@ -170,6 +196,73 @@ export function createAgentTools({ workspaceRepository, projectRepository, conve
         await workspaceRepository.ensureConversationalAgentSeeds();
         const result = await workspaceRepository.updateConversationalAgent(id, patch, meta);
         return ok({ agent: await agentView(result.agent, skillRepository), workspaceVersion: result.workspaceVersion });
+      }
+    }),
+    tool({
+      name: "agent.list_conversations",
+      description: "The turns this conversational agent has actually taken, newest conversation first — CMS-Agent's own bounded audit mirror, not Platform's ChatDoc, which remains the human-facing transcript authority. Each turn reports who spoke, a preview of what they said, the agent's reply (truncated), the TOOL CALLS IT PROPOSED (CMS-Agent never executes one — they are proposals for Platform to gate), token usage and cost. Read-only, and bounded twice: `limit` bounds the conversations returned and the scan that finds them is capped independently — `scanned`/`scanCapped` on the response say whether older conversations were left unexamined, so an incomplete answer is never presented as a complete one.",
+      zodSchema: listConversationsInput,
+      inputSchema: objectSchema({
+        agentId: agentIdJson,
+        projectId: { type: "string", minLength: 1, maxLength: 63, description: "Only conversations whose turns belong to this project." },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "Conversations to return, newest first. Default 10." }
+      }, ["agentId"]),
+      execute: async (input) => {
+        const data = listConversationsInput.parse(input);
+        const limit = data.limit ?? 10;
+        const ids = await conversationTurnRepository.listConversationIds(limit * CONVERSATION_SCAN_MULTIPLE);
+
+        const conversations: Array<{ conversationId: string; projectId: string; agentRev?: string; lastTurnAt: string; turnCount: number; trimmedTurnCount?: number; turns: unknown[] }> = [];
+        let cursor = 0;
+        await Promise.all(Array.from({ length: Math.min(CONVERSATION_READ_CONCURRENCY, ids.length) }, async () => {
+          while (cursor < ids.length) {
+            const conversationId = ids[cursor++];
+            const entries = await conversationTurnRepository.list(conversationId);
+            const turns = entries.filter((entry): entry is ConversationTurnRecord => entry.recordType === "turn")
+              .filter((turn) => agentRefMatches(turn.agentRef, data.agentId) && (!data.projectId || turn.projectId === data.projectId));
+            if (!turns.length) continue;
+            const trimmed = entries.find((entry) => entry.recordType === "trim_marker") as { trimmedTurnCount?: number } | undefined;
+            const newest = turns.reduce((latest, turn) => (turn.createdAt > latest.createdAt ? turn : latest), turns[0]);
+            conversations.push({
+              conversationId,
+              projectId: newest.projectId,
+              agentRev: newest.agentRev,
+              lastTurnAt: newest.createdAt,
+              turnCount: turns.length,
+              ...(trimmed?.trimmedTurnCount ? { trimmedTurnCount: trimmed.trimmedTurnCount } : {}),
+              turns: turns
+                .slice()
+                .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+                .map((turn) => ({
+                  turnId: turn.turnId,
+                  createdAt: turn.createdAt,
+                  actor: turn.actor,
+                  // The request MIRROR, never the caller's full payload — CMS-Agent is not the
+                  // transcript authority and must not become one by way of a read verb.
+                  request: turn.requestPreview,
+                  assistantText: turn.assistantText && turn.assistantText.length > ASSISTANT_PREVIEW_CHARS
+                    ? `${turn.assistantText.slice(0, ASSISTANT_PREVIEW_CHARS)}…`
+                    : turn.assistantText,
+                  // PROPOSED, not executed. agent.converse returns tool calls for Platform to gate
+                  // and execute; CMS-Agent never enters a provider tool loop (CLIENT-MANAGER-CONTRACT).
+                  proposedToolCalls: (turn.toolCalls ?? []).map((call) => {
+                    const named = call as { name?: unknown; function?: { name?: unknown } };
+                    const name = typeof named?.name === "string" ? named.name : typeof named?.function?.name === "string" ? named.function.name : "(unnamed)";
+                    return { name };
+                  }),
+                  usage: turn.usage
+                }))
+            });
+          }
+        }));
+
+        conversations.sort((left, right) => right.lastTurnAt.localeCompare(left.lastTurnAt));
+        return ok({
+          agentId: data.agentId,
+          conversations: conversations.slice(0, limit),
+          scanned: ids.length,
+          scanCapped: ids.length >= limit * CONVERSATION_SCAN_MULTIPLE
+        });
       }
     }),
     tool({

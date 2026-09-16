@@ -18,7 +18,10 @@ test('shell renders nav, workflow switcher, and both themes', async ({ page }) =
 
   await page.locator('#wfsel').click();
   await expect(page.locator('#wfmenu')).toHaveClass(/open/);
-  await expect(page.locator('#wfmenu button')).toHaveCount(4);
+  // W3 — five: the catalog's three conductors, its planned card, and `visual_identity`, which the
+  // server registers and WORKFLOW_CATALOG does not know. The switcher lists what the workspace
+  // actually runs.
+  await expect(page.locator('#wfmenu button')).toHaveCount(5);
   await page.keyboard.press('Escape');
 
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));

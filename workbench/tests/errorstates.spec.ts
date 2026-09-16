@@ -11,6 +11,19 @@ async function goToWorkflows(page: Page) {
   await expect(page.locator('.pagehead h1')).toHaveText('Workflows');
 }
 
+/**
+ * W3 — the attention strip is a COUNT until it is expanded.
+ *
+ * The count is free (`workbench.bootstrap` reads it off the run index, opening no run records);
+ * the LIST is `constellation_get_attention`, which has to read the runs it cites and was measured
+ * at 13-56s. So the expensive verb runs when the operator asks the question, not on every mount of
+ * three different screens. Everything these tests assert about the list still holds — it just
+ * takes one click to get there.
+ */
+async function expandAttention(page: Page) {
+  await page.locator('.attn-strip button').first().click();
+}
+
 test('a rejected attention verb shows its error card + Retry promptly, not after a retry budget', async ({ page }) => {
   // Armed before first render — AttentionStrip's own test seam (see deck.spec.ts).
   await page.addInitScript(() => {
@@ -19,6 +32,7 @@ test('a rejected attention verb shows its error card + Retry promptly, not after
   });
 
   await goToWorkflows(page);
+  await expandAttention(page);
 
   // The whole point of `retry: 0` on this query: the app-wide policy is retry 1 with a
   // 1000ms delay, which on a verb that takes 25s to fail means the operator waits out
@@ -40,6 +54,7 @@ test('a rejected attention verb shows its error card + Retry promptly, not after
 test('the attention query is not refetched on every screen switch', async ({ page }) => {
   await goToWorkflows(page);
   await expect(page.locator('.attn-strip')).toBeVisible();
+  await expandAttention(page);
 
   const read = async () =>
     page.evaluate(() => {
@@ -67,6 +82,10 @@ test('a rejected rail verb renders the backend message inline with a Retry that 
   // The general fixture-mode failure seam (mock/handlers.ts) — armed before first render.
   await page.addInitScript(() => {
     (window as unknown as { __MOCK_FAIL_VERBS__?: Record<string, string> }).__MOCK_FAIL_VERBS__ = {
+      // W3 — the rail's node set comes from `workbench.bootstrap` now, not from a graph call per
+      // surface. The other two stay armed: the assertion is about the rail's error card, and it
+      // must not accidentally pass because some other verb happened to fail instead.
+      workbench_bootstrap: 'Cloud Run MCP request failed with HTTP 502: ERR_REQUIRE_ESM',
       workspace_get_graph: 'Cloud Run MCP request failed with HTTP 502: ERR_REQUIRE_ESM',
       workspace_get_nodes: 'Cloud Run MCP request failed with HTTP 502: ERR_REQUIRE_ESM',
     };

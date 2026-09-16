@@ -67,6 +67,17 @@ const CLOUD_RUN_MCP_URL: string =
 export const IS_MOCK: boolean = explicitMock === '1' || (explicitMock === undefined && !API_BASE && !IS_CLOUD_RUN_TRANSPORT);
 
 /**
+ * W3 — which workspace this browser is talking to, as a cache key.
+ *
+ * The persisted query cache (App.tsx) is keyed on it so a browser pointed at a different control
+ * plane — a staging Cloud Run service, a local broker, fixtures — never paints from the cache of
+ * another one. Contains no credential: it is a transport name and a URL, both of which the client
+ * already ships in its bundle.
+ */
+export const WORKSPACE_CACHE_KEY: string =
+  IS_MOCK ? 'fixtures' : IS_CLOUD_RUN_TRANSPORT ? `cloudrun:${CLOUD_RUN_MCP_URL}` : `broker:${API_BASE || location.origin}`;
+
+/**
  * Read-only defaults ON, so a misconfigured deploy is safe rather than
  * permissive. Two ways it turns off:
  *   - explicit `VITE_READ_ONLY=0`;
@@ -192,7 +203,14 @@ export const MUTATING_VERBS: ReadonlySet<string> = new Set([
   'workspace_update_node_metadata',
   'workspace_update_node_default_output',
   'workspace_adopt_output_as_default',
+  // W6 — node_execute creates a real run record server-side (synthetic, workflowId
+  // "independent_node") and, in openai mode, spends money on a model call. It also writes the
+  // node's stage output on success. It is a mutation by every measure this set exists to catch.
+  'node_execute',
   'changes_restore',
+  // W5 — editing the Client Manager's prompt bumps its revision, which invalidates every
+  // outstanding agent_ref. That is a change to the agent every editor's admin chat talks to.
+  'agent_update',
   'stage_save_output',
   'skill_update',
   'skill_assign',
@@ -250,7 +268,34 @@ interface McpErrResponse {
 }
 type McpResponse<T> = McpOkResponse<T> | McpErrResponse;
 
+/**
+ * W3 — the load-budget seam. DEV-only, exactly like App.tsx's `__queryClient` handle and for the
+ * same reason: `workbench/tests/firstPaintBudget.spec.ts` asserts a CALL COUNT and a payload size
+ * against `workbench/contracts/first-paint.json`, and in fixture mode there is no network panel to
+ * read those from — the mock plane resolves in-process. Never in a production bundle.
+ */
+// W6 adds `args`, held by reference and never cloned: an acceptance test needs to assert WHAT a
+// control sent, not merely that it sent something — "the replay went against this run's upstream
+// outputs" and "the default adopted was scoped to the bound run" are the properties worth holding,
+// and both live in the arguments. Nothing in product code reads this field.
+type VerbCallRecord = { verb: string; at: number; bytes: number; args?: object };
+const recordVerbCall = (verb: string, startedAt: number, result: unknown, args?: object): void => {
+  if (!isDev() || typeof window === 'undefined') return;
+  const w = window as unknown as { __verbCalls?: VerbCallRecord[] };
+  (w.__verbCalls ??= []).push({ verb, at: startedAt, bytes: JSON.stringify(result ?? null)?.length ?? 0, ...(args ? { args } : {}) });
+};
+
 export async function callVerb<T>(verb: string, args?: object): Promise<T> {
+  if (isDev() && typeof window !== 'undefined') {
+    const startedAt = Date.now();
+    const result = await callVerbInner<T>(verb, args);
+    recordVerbCall(verb, startedAt, result, args);
+    return result;
+  }
+  return callVerbInner<T>(verb, args);
+}
+
+async function callVerbInner<T>(verb: string, args?: object): Promise<T> {
   if (MUTATING_VERBS.has(verb) && confirmedCallDepth === 0 && isDev()) {
     // eslint-disable-next-line no-console
     console.error(

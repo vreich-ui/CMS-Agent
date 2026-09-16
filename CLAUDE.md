@@ -23,6 +23,8 @@ Repo: GitHub `vreich-ui/CMS-Agent`; `main` is protected — land through a PR, n
 
 `npm ci && npm ci --prefix ui`, then `npm run typecheck` and `npm test` (~4 min). CI also gates on `npm run test:drift`, `test:glossary`, `test:objects`, `test:scope`, and the ui suite (`npm run test:ui`, `npm run ui:build`).
 
+**`workbench/` is not covered by any of those.** Root `typecheck` includes only `src`, `scripts`, `tests` and `netlify/functions`; no GitHub workflow builds the workbench. Its only gate is the **Netlify deploy**, so a type error there fails the PR's deploy checks rather than its test run. Check it with `npm --prefix workbench install && npm --prefix workbench run build` (`tsc -b && vite build`) plus `npx playwright test --prefix`-style runs from `workbench/`. Do **not** substitute `tsc --noEmit -p workbench/tsconfig.json`: that file is a solution stub with `"files": []` and only project references, so it type-checks nothing and exits 0 — three errors reached a failed deploy preview that way (PR #375).
+
 ## Do not break
 
 - Publish gates and publish authority (`publisher.ts`, `publishDecision.ts`); never widen the publish charter; never change tool grants on publish/admin nodes on your own initiative (operator decision via `workspace_update_node_tools`). If a change lets a node publish something it could not before, stop and ask Wolf.

@@ -4,7 +4,7 @@ import type { RecordEnvelope } from "../RecordEnvelope.js";
 import type { WorkspaceMutationMeta } from "../../mcp/workspace/store.js";
 import type { EvalResultFilters, EvaluationRepository, FeedbackFilters, RegressionReportFilters } from "../interfaces/EvaluationRepository.js";
 import { makeImprovementId, validateRubric, type EvalResult, type EvalRubric, type EvalRubricVersionSnapshot, type FeedbackRecord, type PairwiseResult, type RegressionReport, type RubricStatus } from "../../improvement/improvementTypes.js";
-import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
+import { CoalescedTtlCache, getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const now = () => new Date().toISOString();
 const rubricKey = (rubricId: string) => `evaluation/rubrics/${rubricId}.json`;
@@ -24,6 +24,11 @@ const newestFirst = <T extends { createdAt: string }>(records: T[], limit?: numb
 // results, pairwise comparisons, and feedback are append-only RecordEnvelope blobs (one immutable
 // JSON per record — the BlobChangeRepository convention).
 export class BlobEvaluationRepository implements EvaluationRepository {
+  // W1 — see CoalescedTtlCache. Rubric writes invalidate it; `restoreRubricVersion` and
+  // `updateRubric` both land through `setJSON(rubricKey(...))`, which is the one place that can
+  // change what listRubrics answers.
+  private readonly reads = new CoalescedTtlCache<unknown>();
+
   constructor(private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
   async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
@@ -46,6 +51,7 @@ export class BlobEvaluationRepository implements EvaluationRepository {
     if (await this.getRubric(rubric.rubricId)) throw new Error(`Duplicate rubric id: ${rubric.rubricId}`);
     const stored = { ...rubric, createdAt: rubric.createdAt || now(), updatedAt: now() };
     await this.store.setJSON(rubricKey(stored.rubricId), stored);
+    this.reads.invalidate();
     await this.writeVersion(stored, meta);
     return stored;
   }
@@ -57,15 +63,21 @@ export class BlobEvaluationRepository implements EvaluationRepository {
     const errors = validateRubric(next);
     if (errors.length) throw new Error(`invalid_rubric: ${errors.join("; ")}`);
     await this.store.setJSON(rubricKey(rubricId), next);
+    this.reads.invalidate();
     await this.writeVersion(next, meta);
     return next;
   }
 
   async getRubric(rubricId: string) { return (await getBlobJson<EvalRubric>(this.store, rubricKey(rubricId))) ?? undefined; }
   async listRubrics(filters: { nodeId?: string; status?: RubricStatus } = {}) {
-    const { blobs } = await this.store.list({ prefix: "evaluation/rubrics/" });
-    const rubrics = (await Promise.all(blobs.map((blob) => getBlobJson<EvalRubric>(this.store, blob.key)))).filter((rubric): rubric is EvalRubric => Boolean(rubric));
-    return rubrics.filter((rubric) => (!filters.nodeId || rubric.nodeId === filters.nodeId) && (!filters.status || rubric.status === filters.status));
+    // W1 — a prefix scan plus one read per rubric, previously repeated for every caller. The rail
+    // asks for it on first paint; coalesced and short-TTL'd like the other composite reads.
+    const rubrics = await this.reads.read("rubrics", async () => {
+      const { blobs } = await this.store.list({ prefix: "evaluation/rubrics/" });
+      return (await Promise.all(blobs.map((blob) => getBlobJson<EvalRubric>(this.store, blob.key)))).filter((rubric): rubric is EvalRubric => Boolean(rubric));
+    }) as EvalRubric[];
+    // Cloned: the cached array is shared between callers and must not be mutable through any of them.
+    return rubrics.filter((rubric) => (!filters.nodeId || rubric.nodeId === filters.nodeId) && (!filters.status || rubric.status === filters.status)).map((rubric) => structuredClone(rubric));
   }
   async listRubricVersions(rubricId: string) {
     const { blobs } = await this.store.list({ prefix: `evaluation/rubric-versions/${rubricId}/` });

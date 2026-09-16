@@ -3,7 +3,7 @@ import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
 import { auditProjectObjectDialects, formatProjectDialectFindings } from "../../projects/projectDialectAudit.js";
 import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHealth.js";
 import type { ProjectRepository } from "../interfaces/ProjectRepository.js";
-import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
+import { CoalescedTtlCache, getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 
 const clone = <T>(value: T): T => structuredClone(value);
 const projectKey = (projectId: string) => `projects/${projectId}.json`;
@@ -20,6 +20,11 @@ export class BlobProjectRepository implements ProjectRepository {
   // failed attempt clears itself so a transient blob-store error doesn't permanently mark this
   // instance "seeded" without ever having actually seeded anything.
   private seedPromise?: Promise<void>;
+
+  // W1 — list() is a prefix scan plus one blob read per project, and it is on the Workbench's
+  // first paint (the ⌘K and start-run project pickers) as well as on health(). Coalesced with a
+  // short TTL; every write path invalidates.
+  private readonly reads = new CoalescedTtlCache<unknown>();
 
   // Seed the code-defined default projects the first time the store is read so the persisted registry
   // always contains the known projects. Only non-secret config is stored; endpoints/tokens stay in
@@ -45,9 +50,14 @@ export class BlobProjectRepository implements ProjectRepository {
 
   async list(): Promise<ProjectConnectionConfig[]> {
     await this.ensureSeeded();
-    const result = await this.store.list({ prefix: "projects/" });
-    const records = await Promise.all(result.blobs.map((blob) => getBlobJson<ProjectConnectionConfig>(this.store, blob.key)));
-    return records.filter((record): record is ProjectConnectionConfig => record !== null).sort((a, b) => a.projectId.localeCompare(b.projectId)).map((record) => clone(record));
+    const records = await this.reads.read("list", async () => {
+      const result = await this.store.list({ prefix: "projects/" });
+      const found = await Promise.all(result.blobs.map((blob) => getBlobJson<ProjectConnectionConfig>(this.store, blob.key)));
+      return found.filter((record): record is ProjectConnectionConfig => record !== null).sort((a, b) => a.projectId.localeCompare(b.projectId));
+    }) as ProjectConnectionConfig[];
+    // Cloned on the way out: the cached array is shared between callers and must not be mutable
+    // through any of them.
+    return records.map((record) => clone(record));
   }
 
   async get(projectId: string): Promise<ProjectConnectionConfig | undefined> {
@@ -61,13 +71,15 @@ export class BlobProjectRepository implements ProjectRepository {
   }
 
   async save(config: ProjectConnectionConfig): Promise<ProjectConnectionConfig> {
-    await this.store.setJSON(projectKey(config.projectId), config);
+    try { await this.store.setJSON(projectKey(config.projectId), config); }
+    finally { this.reads.invalidate(); }
     return clone(config);
   }
 
   async delete(projectId: string): Promise<boolean> {
     const existed = (await getBlobJson<ProjectConnectionConfig>(this.store, projectKey(projectId))) !== null;
-    await this.store.delete(projectKey(projectId));
+    try { await this.store.delete(projectKey(projectId)); }
+    finally { this.reads.invalidate(); }
     return existed;
   }
 

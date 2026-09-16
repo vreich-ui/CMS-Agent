@@ -52,7 +52,10 @@
     "job:strategy-review": "tsx src/agent/entrypoints/strategyReviewJobMain.ts",
     "serve:mcp": "tsx src/agent/entrypoints/mcpServerMainRun.ts",
     "job:continuation-tick": "tsx src/agent/entrypoints/runContinuationTickMain.ts",
-    "job:reconcile-site-credentials": "tsx src/agent/entrypoints/reconcileSiteCredentialsMain.ts"
+    "job:reconcile-site-credentials": "tsx src/agent/entrypoints/reconcileSiteCredentialsMain.ts",
+    "perf:store-burst": "tsx scripts/perf/storeBurst.ts",
+    "perf:workbench-load": "node scripts/perf/workbench-load.mjs",
+    "run-index:heal": "tsx scripts/run-index-heal.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.21.0",

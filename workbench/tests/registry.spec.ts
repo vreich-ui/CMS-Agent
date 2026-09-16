@@ -166,7 +166,16 @@ test('registry: agents and usage sections render live data honestly', async ({ p
   await nav(page, 'Agents').click();
   await expect(page.locator('#regbody')).toContainText('agt_client_manager');
   await expect(page.locator('#regbody')).toContainText("editors’ admin-chat");
-  await expect(page.locator('#regbody')).toContainText('diverged from canonical');
+  // W5 — this is a Client Manager PAGE now, not a read-only card. `promptState` still has to say
+  // plainly that what is on screen is not what the build ships, and the prompt itself is readable
+  // and editable: it is the editorial policy of this workspace, and it was the only prompt in the
+  // system the Workbench could not show.
+  await expect(page.locator('#client-manager-prompt .pin')).toHaveText('diverged');
+  await expect(page.locator('#regbody')).toContainText('an operator edit');
+  await expect(page.locator('#client-manager-prompt-text')).toHaveValue(/client-management agent/);
+  // ...and what it has actually been saying. The fixture set captures no conversations, and the
+  // empty state has to say why rather than implying the agent has never been used.
+  await expect(page.locator('#client-manager-conversations-empty')).toContainText('ChatDoc');
 
   await nav(page, 'Usage & budgets').click();
   // The headline figure is labelled honestly as an all-time total (the

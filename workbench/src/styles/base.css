@@ -190,6 +190,12 @@
   .grid table{border-collapse:separate; border-spacing:3px; font-family:var(--mono); font-size:10.5px;}
   .grid th{color:var(--faint); font-weight:400; text-align:left; padding:2px 8px 6px 0; white-space:nowrap;}
   .grid thead th{text-align:center; padding:0 2px 8px; color:var(--muted); writing-mode:vertical-rl; transform:rotate(180deg); height:86px;}
+  /* W5/W7 — the Scores table. Deliberately NOT .grid: that class's rotated vertical headers are
+     for the run grid's one-glyph-per-node columns, and these headers are node names meant to be
+     read straight across. */
+  .scoretbl{border-collapse:separate; border-spacing:3px; font-family:var(--mono); font-size:11.5px; width:100%;}
+  .scoretbl th{color:var(--muted); font-weight:400; text-align:left; white-space:nowrap; padding:4px 12px 6px 0; border-bottom:1px solid var(--line);}
+  .scoretbl td{white-space:nowrap; padding:3px 12px 3px 0;}
   .cell{width:26px; height:17px; border-radius:4px; background:var(--panel3); display:block;}
   .cell.completed{background:var(--cell-ok);} .cell.blocked{background:var(--cell-gate);} .cell.failed{background:var(--cell-bad);}
   .cell.queued{background:var(--panel3);} .cell.paused{background:var(--paused);}

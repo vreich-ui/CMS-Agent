@@ -80,12 +80,16 @@ describe("workflow.get_run / workflow.list_runs report the mode prominently", ()
     // W10 — a LIVE run must name its subject (editorialSubject.ts). Mock rows may stay subject-less;
     // this row is live, so it declares a topic exactly as a real live run does.
     await data("workflow.start_dry_run", { executionMode: "openai", projectId: "dr-lurie", requestId: "req_test_fixture_20260817_01", input: { topic: "execution mode fixture" } });
-    const runs = (await data("workflow.list_runs", {})).runs as { mode: { live: boolean } }[];
+    // W2 — the mode block is interned once per distinct value in the response-level `modes` map and
+    // each row carries a `modeRef` into it. The property being asserted is unchanged: every row
+    // still names its mode, and the two runs above still report different ones.
+    const page = await data("workflow.list_runs", {}) as { runs: { modeRef: string }[]; modes: Record<string, { live: boolean }> };
+    const modeOf = (run: { modeRef: string }) => page.modes[run.modeRef];
 
-    expect(runs.length).toBeGreaterThanOrEqual(2);
-    expect(runs.every((run) => typeof run.mode?.live === "boolean")).toBe(true);
-    expect(runs.some((run) => run.mode.live)).toBe(true);
-    expect(runs.some((run) => !run.mode.live)).toBe(true);
+    expect(page.runs.length).toBeGreaterThanOrEqual(2);
+    expect(page.runs.every((run) => typeof modeOf(run)?.live === "boolean")).toBe(true);
+    expect(page.runs.some((run) => modeOf(run).live)).toBe(true);
+    expect(page.runs.some((run) => !modeOf(run).live)).toBe(true);
   });
 
   it("returns a null mode for an unknown run rather than inventing one", async () => {

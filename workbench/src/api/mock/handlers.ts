@@ -102,6 +102,35 @@ function skillsFor(node: adapters.RawWorkflowNode | undefined): Skill[] {
  * With no workflowId, live returns the flat store view of every node —
  * mirrored here too.
  */
+// The registry the live server reports, which is deliberately LARGER than WORKFLOW_CATALOG — the
+// Workbench has to render a workflow whose presentation config it does not have, and fixture mode
+// is where that is proven.
+const MOCK_REGISTERED_WORKFLOW_IDS = [
+  'publishing_conductor', 'clone_conductor', 'capture_conductor',
+  // Registered on the live plane, absent from WORKFLOW_CATALOG — the case the deck has to render
+  // honestly rather than silently omit. One is enough to prove it; the live registry has five.
+  'visual_identity',
+];
+
+/** Mirrors summarizeWorkspaceNode: absent means empty, absent means false. */
+function summarizeMockNode(node: adapters.RawWorkflowNode & { metadata?: Record<string, unknown>; position?: { x: number; y: number } }) {
+  return {
+    id: node.id,
+    name: node.name,
+    kind: node.kind,
+    executionKind: (node.metadata && Object.keys(node.metadata).some((key) => key.toLowerCase().includes('deterministic'))) ? 'deterministic' : 'model',
+    status: node.status ?? 'active',
+    riskLevel: node.riskLevel,
+    ...(node.dependsOn?.length ? { dependsOn: node.dependsOn } : {}),
+    ...(node.requiredInputs?.length ? { requiredInputs: node.requiredInputs } : {}),
+    ...(node.produces?.length ? { produces: node.produces } : {}),
+    ...(node.position ? { position: node.position } : {}),
+    ...(node.defaultOutput ? { hasDefaultOutput: true } : {}),
+    promptSha: `mock${(node.prompt ?? '').length.toString(16).padStart(8, '0')}`,
+    updatedAt: node.updatedAt,
+  };
+}
+
 function graphFor(workflowId: string): {
   workflowId: string;
   nodes: adapters.RawWorkflowNode[];
@@ -140,7 +169,44 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   // workspace_get_nodes takes no arguments at all and always returns the
   // whole workspace. Both mirrored exactly.
   workspace_get_graph: (a) => graphFor(str(a, 'workflowId')),
-  workspace_get_nodes: () => ({ nodes: mockStore.getNodes() }),
+  // W3 — the fixture must answer the same one-call first paint live does, or fixture mode stops
+  // being evidence about the client. The `detail: "summary"` projection is mirrored field for
+  // field (src/agent/workspace/nodeProjection.ts), including "absent means empty".
+  workbench_bootstrap: (a) => {
+    const workflowId = optStr(a, 'workflowId');
+    const registeredWorkflowIds = MOCK_REGISTERED_WORKFLOW_IDS;
+    const known = workflowId ? registeredWorkflowIds.includes(workflowId) : false;
+    const graph = workflowId && known ? graphFor(workflowId) : null;
+    const runs = workflowId && known
+      ? mockStore.getRuns({ workflowId }).slice(0, 5).map(({ nodes, errors, ...row }) => ({
+          ...row,
+          nodeCount: nodes?.length ?? 0,
+          completedCount: (nodes ?? []).filter((n) => n.status === 'completed').length,
+          failedCount: (nodes ?? []).filter((n) => n.status === 'failed').length,
+          errorCount: errors?.length ?? 0,
+          nodeStatuses: Object.fromEntries((nodes ?? []).map((n) => [n.nodeId, n.status.charAt(0)])),
+          modeRef: 'm0',
+        }))
+      : [];
+    const all = mockStore.getRuns({});
+    const countOf = (status: string) => all.filter((run) => run.status === status).length;
+    return {
+      registeredWorkflowIds,
+      nodeCounts: Object.fromEntries(registeredWorkflowIds.map((id) => [id, graphFor(id).nodes.length])),
+      ...(workflowId && !known ? { unknownWorkflowId: workflowId } : {}),
+      graph: graph ? { workflowId: graph.workflowId, nodes: graph.nodes.map(summarizeMockNode), edges: graph.edges, detail: 'summary' } : null,
+      recentRuns: runs,
+      modes: { m0: { executionMode: 'mock', live: false, declared: true } },
+      attentionCounts: { running: countOf('running'), paused: countOf('paused'), blocked: countOf('blocked'), failed: countOf('failed') },
+      workspaceVersion: mockWorkspaceVersion,
+    };
+  },
+  // W2/W6 — `detail` is honoured here exactly as live: "summary" returns the list projection and
+  // nothing else. A fixture that ignored it would hand the adapter full nodes to summarize, which
+  // is the one thing fixture mode must never do — agree with the client while the server does not.
+  workspace_get_nodes: (a) => (optStr(a, 'detail') === 'summary'
+    ? { nodes: mockStore.getNodes().map(summarizeMockNode), detail: 'summary' }
+    : { nodes: mockStore.getNodes() }),
   workspace_get_node: (a) => ({ node: mockStore.getNode(str(a, 'id')) ?? null }),
   workspace_export_workspace: () => ({ workspaceVersion: mockWorkspaceVersion, currentRevisionId: mockRevisionId }),
   workspace_get_node_effective_config: (a) => {
@@ -171,6 +237,25 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
       tools: toolsFor(node),
       engine: deterministic ? ['project_call_tool'] : [],
       capability: { executionKind: deterministic ? 'deterministic' : 'model', deadGrants: deterministic ? node?.allowedTools ?? [] : [], findings: [] },
+      // W4 — the canonical algorithm a deterministic node carries live
+      // (src/agent/workspace/nodeAlgorithms.ts). Mirrored here for the one node this fixture calls
+      // deterministic, so the Algorithm panel is exercised rather than only type-checked.
+      algorithm: deterministic
+        ? {
+            nodeId: node?.id ?? 'publish_payload',
+            summary: 'Assembles the publish payload from what the run produced, and validates it before anything is offered to a tenant.',
+            source: 'src/agent/workspace/publishExecution.ts',
+            reads: ["every upstream node's stage output", "the run's contract intelligence"],
+            steps: [
+              'Collect the produced artifacts and the article body the run emitted.',
+              "Shape them into the tenant's declared object contract.",
+              'Validate the assembled payload against that contract and fail here rather than at the tenant.',
+              'Emit the payload for publication_controller to decide on. Assembling it authorizes nothing.',
+            ],
+            engineTools: [{ verb: 'object_validate', risk: 'read', description: 'Validate the candidate body against the tenant contract.' }],
+            route: { routeId: 'publish_payload' },
+          }
+        : null,
       resolvedAgainst: 'node_declaration',
     };
   },
@@ -254,17 +339,38 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
     // evidence about the client. "summary" (the default) replaces nodes[]/errors[] with counts;
     // "full" returns the captured row untouched.
     const detail = optStr(a, 'detail') === 'full' ? 'full' : 'summary';
+    // W5 — `include` is opt-in, exactly as live. `scores` is synthesized from the fixture's own
+    // completed scoring nodes by the SAME rule the server applies (runScores.ts): a node that did
+    // not complete contributes nothing, and a run with no scoring node completed carries no
+    // `scores` field at all rather than an empty object.
+    const include = new Set(Array.isArray(a.include) ? (a.include as string[]) : []);
+    const SCORING_NODE_IDS = ['human_texture', 'trust_factual', 'emotional_resonance', 'reader_simulation', 'review_aggregator', 'contract_intelligence', 'capture_score', 'gap_adjudicator', 'fit_adjudicator'];
+    const FIXTURE_VERDICTS: Record<string, string> = { human_texture: 'pass', trust_factual: 'pass', review_aggregator: 'revise' };
+    const scoresFor = (row: { runId: string; nodes?: Array<{ nodeId: string; status: string }> }) => {
+      const completed = new Set((row.nodes ?? []).filter((n) => n.status === 'completed').map((n) => n.nodeId));
+      const seed = Number(/(\d+)/.exec(row.runId)?.[1] ?? 0);
+      const out: Record<string, number | string> = {};
+      for (const nodeId of SCORING_NODE_IDS) {
+        if (!completed.has(nodeId)) continue;
+        out[nodeId] = FIXTURE_VERDICTS[nodeId] ?? Number((0.55 + ((seed + nodeId.length) % 40) / 100).toFixed(2));
+      }
+      return out;
+    };
     const runs =
       detail === 'full'
         ? page
-        : page.map(({ nodes, errors, ...row }) => ({
-            ...row,
-            nodeCount: nodes?.length ?? 0,
-            completedCount: (nodes ?? []).filter((n) => n.status === 'completed').length,
-            failedCount: (nodes ?? []).filter((n) => n.status === 'failed').length,
-            errorCount: errors?.length ?? 0,
-            artifactCount: (row as { artifactCount?: number }).artifactCount ?? 0,
-          }));
+        : page.map(({ nodes, errors, ...row }) => {
+            const scores = include.has('scores') ? scoresFor({ runId: row.runId, nodes }) : {};
+            return {
+              ...row,
+              nodeCount: nodes?.length ?? 0,
+              completedCount: (nodes ?? []).filter((n) => n.status === 'completed').length,
+              failedCount: (nodes ?? []).filter((n) => n.status === 'failed').length,
+              errorCount: errors?.length ?? 0,
+              artifactCount: (row as { artifactCount?: number }).artifactCount ?? 0,
+              ...(Object.keys(scores).length ? { scores } : {}),
+            };
+          });
     const nextOffset = offset + runs.length;
     const hasMore = nextOffset < matched.length;
     return {
@@ -286,7 +392,31 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   workflow_get_run: (a) => {
     const run = mockStore.getRun(str(a, 'runId'));
     if (!run) return null;
-    return { run, mode: { executionMode: run.mode?.executionMode ?? run.executionMode }, stall: run.stall ?? null };
+    // W7 FIXTURE CORRECTION — this ALWAYS attached stageOutputs/initialInput, while the live
+    // default (`detail: "compact"`) carries neither. That gap is what hid a defect that would have
+    // left the I/O tab and the replay empty in production. The fixture now answers the way the
+    // server does: only on `detail: "full"` or `include: ["stageOutputs"]`.
+    const includes = Array.isArray(a.include) ? (a.include as string[]) : [];
+    const carriesStageOutputs = optStr(a, 'detail') === 'full' || includes.includes('stageOutputs');
+    // W4 — the live `workflow_get_run` carries the run's stage outputs and the input it was started
+    // with; the fixture runs predate both. Synthesized from what the fixture DOES record (each
+    // completed node's canonical artifact) rather than invented, so the I/O tab is exercised
+    // against the same shape live returns instead of only against an empty map.
+    const stageOutputs: Record<string, unknown> = {};
+    for (const node of run.nodes ?? []) {
+      if (node.status !== 'completed') continue;
+      const entry = mockStore.listNodeOutputs(node.nodeId, run.runId)[0];
+      stageOutputs[node.nodeId] = entry?.value ?? { nodeId: node.nodeId, note: 'fixture output' };
+    }
+    return {
+      run: {
+        ...run,
+        ...(carriesStageOutputs ? { stageOutputs, initialInput: run.initialInput ?? { topic: 'fixture run input' } } : {}),
+      },
+      detail: optStr(a, 'detail') ?? 'compact',
+      mode: { executionMode: run.mode?.executionMode ?? run.executionMode },
+      stall: run.stall ?? null,
+    };
   },
   workflow_get_run_context: (a) => {
     const run = mockStore.getRun(str(a, 'runId'));
@@ -466,9 +596,34 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
       }) ?? null;
     return { node: updated, workspaceVersion: mockWorkspaceVersion };
   },
+  // W6 — replay. Fixture mode has no model, so `executionMode: "openai"` is refused here rather
+  // than quietly answered with a placeholder: the whole point of the control is that a live replay
+  // costs money, and a fixture that pretended to make one would be more generous than the server.
+  node_execute: (a) => {
+    if (optStr(a, 'executionMode') === 'openai') {
+      throw new Error('fixture mode makes no model calls — node_execute is available in mock mode only here');
+    }
+    return mockStore.executeNode(str(a, 'nodeId'), {
+      runId: optStr(a, 'runId'),
+      dependencyOutputs: (a.dependencyOutputs as Record<string, unknown> | undefined) ?? undefined,
+    });
+  },
+  // W6 FIXTURE CORRECTION — this returned `{ node: null }` when the node had no recorded output to
+  // adopt, so the caller saw a resolved promise and reported success. The live tool
+  // (tools.ts, workspace.adopt_output_as_default) THROWS `node_output_unavailable` in exactly that
+  // case. A node being `completed` on a run is not the same as having a recorded output the
+  // execution repository can hand back — the Workbench cannot tell the two apart without a second
+  // round trip, so the refusal is the only thing that tells an operator the truth, and a fixture
+  // that swallowed it hid a live failure path from every test that runs against it.
   workspace_adopt_output_as_default: (a) => {
-    const updated =
-      mockStore.adoptOutputAsDefault(str(a, 'nodeId'), optStr(a, 'runId'), optStr(a, 'note')) ?? null;
+    const nodeId = str(a, 'nodeId');
+    const runId = optStr(a, 'runId');
+    const updated = mockStore.adoptOutputAsDefault(nodeId, runId, optStr(a, 'note'));
+    if (!updated) {
+      throw new Error(
+        `node_output_unavailable: Node ${nodeId} has no recorded output${runId ? ` in run ${runId}` : ''} to adopt. Run it once, or supply the value directly with workspace.update_node_default_output.`,
+      );
+    }
     return { node: updated, workspaceVersion: mockWorkspaceVersion };
   },
   changes_compare: (a) => ({
@@ -498,10 +653,45 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   // tell fixture mode from live at a glance). An empty list is the honest answer, and it is a REAL
   // state the screen already handles: every run that finished before the durable ledger began
   // recording returns exactly this.
-  tool_list_executions: () => ({ executions: [] }),
+  // REBASE RECONCILIATION — two handlers for this verb existed after the rebase, and an object
+  // literal may not declare the same key twice. One handler, both behaviours:
+  //   * Unscoped, or scoped to a run only (main's W5 T4 Tools timeline): an EMPTY list, for the
+  //     reason above — the fixture set records no ledger, and inventing one would put fabricated
+  //     publishes and releases in front of an operator who cannot tell fixture mode from live.
+  //   * Scoped to a run AND a node (workbench-v2 W4's per-node I/O tab): the synthesised calls
+  //     mockStore makes for the one node that tab's own test drives, so the populated state is
+  //     exercised as well as the empty one.
+  tool_list_executions: (a) => {
+    const runId = optStr(a, 'runId');
+    const nodeId = optStr(a, 'nodeId');
+    if (!runId || !nodeId) return { executions: [] };
+    return { executions: mockStore.listToolExecutions(runId, nodeId) };
+  },
   skill_list: () => ({ skills: mockStore.getSkills() }),
   skill_resolve_for_node: (a) => skillsFor(mockStore.getNode(str(a, 'nodeId'))),
   agent_list: () => ({ agents: mockStore.getAgents() }),
+  agent_get: (a) => {
+    const agent = mockStore.getAgents().find((entry) => entry.id === str(a, 'id'));
+    if (!agent) throw new Error(`agent_unresolved: no conversational agent matches "${str(a, 'id')}".`);
+    return { agent, workspaceVersion: mockWorkspaceVersion };
+  },
+  agent_update: (a) => {
+    const patch = (a.patch ?? {}) as { prompt?: string };
+    const agent = mockStore.updateAgent(str(a, 'id'), patch);
+    if (!agent) throw new Error(`agent_unresolved: no conversational agent matches "${str(a, 'id')}".`);
+    mockWorkspaceVersion += 1;
+    return { agent, workspaceVersion: mockWorkspaceVersion };
+  },
+  // W5 — CMS-Agent's own bounded audit mirror of what the agent has been saying. The fixture set
+  // captures no conversations (the live mirror is per-tenant chat traffic, which a workbench
+  // fixture has no business carrying), so this answers honestly with an empty list and a scan that
+  // did not hit its cap — which is the state the page's empty branch has to handle anyway.
+  agent_list_conversations: (a) => ({
+    agentId: str(a, 'agentId'),
+    conversations: mockStore.listAgentConversations(str(a, 'agentId')),
+    scanned: 0,
+    scanCapped: false,
+  }),
   repository_get_health: () => ({ ok: true, checkedAt: new Date().toISOString(), issues: [] }),
 
   // -- learning --
@@ -518,11 +708,17 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
 
   // -- evaluation --
   evaluation_list_rubrics: () => ({ rubrics: mockStore.getRubrics() }),
+  // W7 FIXTURE CORRECTION — this returned a BARE ARRAY where the live tool returns
+  // `ok({ results: [...] })` (improvementTools.ts), like every other list verb. The client wrapper
+  // was typed against this fixture rather than against the server, so W5's Scores tab iterated an
+  // object on the live plane and threw inside a render. Both planes now return the same envelope.
   evaluation_list_results: (a) => {
     const nodeId = optStr(a, 'nodeId');
-    return mockStore
-      .getRegressionReports(nodeId)
-      .map((r) => ({ nodeId: r.nodeId, score: r.summary?.meanScore ?? null, verdict: r.verdict }));
+    return {
+      results: mockStore
+        .getRegressionReports(nodeId)
+        .map((r) => ({ nodeId: r.nodeId, score: r.summary?.meanScore ?? null, verdict: r.verdict })),
+    };
   },
   evaluation_list_regression_reports: (a) => ({ reports: mockStore.getRegressionReports(optStr(a, 'nodeId')) }),
 

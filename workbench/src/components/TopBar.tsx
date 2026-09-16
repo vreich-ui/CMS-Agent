@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRun, useWorkflows } from '../api/hooks';
-import { workspaceGetResolvedWorkflowNodeCount } from '../api/verbs';
+import { useQueryClient } from '@tanstack/react-query';
+import { useBootstrap, useRun, useWorkflows } from '../api/hooks';
 import { IS_MOCK } from '../api/client';
 import { performLogout, useAuthState } from './LoginGate';
 import { useStore } from '../store';
@@ -33,6 +32,7 @@ export function TopBar() {
   const openPalette = useStore((s) => s.openPalette);
 
   const workflowsQ = useWorkflows();
+  const bootstrapQ = useBootstrap(wf);
   const runQ = useRun(runId);
   const auth = useAuthState();
   const queryClient = useQueryClient();
@@ -68,13 +68,30 @@ export function TopBar() {
   }
 
   const workflows = workflowsQ.data ?? [];
-  const workflowCountsQ = useQuery({
-    queryKey: ['resolvedWorkflowNodeCounts', workflows.map((workflow) => workflow.id)],
-    enabled: workflows.length > 0,
-    queryFn: async () => Object.fromEntries(
-      await Promise.all(workflows.map(async (workflow) => [workflow.id, await workspaceGetResolvedWorkflowNodeCount(workflow.id)] as const)),
-    ),
-  });
+  // W3 — the node counts come off `workbench.bootstrap`, which already has them for every
+  // registered workflow. This used to fetch a WHOLE GRAPH per workflow — three graph downloads
+  // (~300 KB) on every cold paint — to read `.nodes.length` three times.
+  const workflowCounts = bootstrapQ.data?.nodeCounts;
+  // W3 — stale-while-revalidate, said out loud. The Workbench paints from a persisted cache on the
+  // second visit (App.tsx), which is only honest if the screen admits how old what it is showing
+  // is. `dataUpdatedAt` is when this client last heard from the server; `workspaceVersion` is what
+  // the server said the workspace was at, and the refetch behind this pill is what moves it.
+  const [freshnessTick, setFreshnessTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setFreshnessTick((v) => v + 1), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+  void freshnessTick;
+  const updatedAgo = bootstrapQ.dataUpdatedAt ? Math.max(0, Math.round((Date.now() - bootstrapQ.dataUpdatedAt) / 1000)) : null;
+  const freshness = bootstrapQ.isFetching
+    ? 'refreshing…'
+    : updatedAgo === null
+      ? null
+      : updatedAgo < 5
+        ? 'updated just now'
+        : updatedAgo < 90
+          ? `updated ${updatedAgo}s ago`
+          : `updated ${Math.round(updatedAgo / 60)}m ago`;
   const activeWf = workflows.find((w) => w.id === wf);
   const showRunChip = Boolean(runId) && screen === 'bench' && mode === 'run';
   const run = runQ.data;
@@ -142,6 +159,24 @@ export function TopBar() {
           </span>
           <span className="car">▾</span>
         </button>
+        {freshness && (
+          <span
+            className="chip"
+            id="workspace-freshness"
+            title={
+              bootstrapQ.data
+                ? `Workspace version ${bootstrapQ.data.workspaceVersion}. The Workbench paints from its last answer and refreshes in place; this is how old that answer is.`
+                : undefined
+            }
+            onClick={() => void bootstrapQ.refetch()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void bootstrapQ.refetch(); } }}
+            style={{ cursor: 'pointer' }}
+          >
+            {freshness}
+          </span>
+        )}
         <div className={`wfmenu${menuOpen ? ' open' : ''}`} id="wfmenu">
           {workflows.map((w) => (
             <button key={w.id} onClick={() => pickWorkflow(w.id)}>
@@ -150,7 +185,7 @@ export function TopBar() {
                 <span className="t">{w.name}</span>
                 <span className="sub">{w.short}</span>
               </span>
-              <span className="n">{workflowCountsQ.data?.[w.id] ?? (workflowCountsQ.isError ? 'unknown' : '…')} nodes</span>
+              <span className="n">{workflowCounts?.[w.id] ?? (bootstrapQ.isError ? 'unknown' : '…')} nodes</span>
             </button>
           ))}
           <button className="dis" disabled>

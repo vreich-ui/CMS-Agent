@@ -62,7 +62,38 @@ function mutate<T>(verb: string, effect: string, args?: object, danger = false):
 
 const WORKFLOWS = WORKFLOW_CATALOG;
 
-export const workflowList = (): Promise<Workflow[]> => Promise.resolve(Object.values(WORKFLOWS));
+/**
+ * W3 — the catalog is presentation config, the SERVER says which workflows exist.
+ *
+ * WORKFLOW_CATALOG lists three; the live registry registers eight (publishing, clone, capture,
+ * visual_identity, pdf_template_studio, asset_lookup, document_render, image_template_revision).
+ * Five workflows the workspace actually runs were simply not on this screen. A registered id the
+ * catalog does not know now gets a generic card whose single phase is "ungrouped (live)" — the
+ * same honesty rule the rail already applies to a node no phase claims.
+ *
+ * Called with no argument (fixture mode before the registry lands, and any caller that does not
+ * have it) it returns the catalog alone, exactly as it always did.
+ */
+export const workflowList = (registeredWorkflowIds?: string[]): Promise<Workflow[]> => {
+  const catalog = Object.values(WORKFLOWS);
+  if (!registeredWorkflowIds?.length) return Promise.resolve(catalog);
+  const known = new Set(catalog.map((workflow) => workflow.id));
+  const live = registeredWorkflowIds
+    .filter((id) => !known.has(id))
+    .map((id) => ({
+      id,
+      name: id.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()),
+      fn: 'Registered workflow — no presentation config',
+      icon: 'ic-pub',
+      short: 'Live in the server registry; this build has no phase config for it.',
+      desc: 'This workflow is registered and runnable on the control plane. The Workbench has no phase names for it, so its nodes are listed under "ungrouped (live)" in the order the graph returns them.',
+      phases: [] as Array<[string, string[]]>,
+    }));
+  // Catalog order first (it is editorial), then whatever else the server runs. Catalog entries are
+  // never filtered OUT by the registry: a catalog card may be a `planned` workflow that is
+  // deliberately not registered yet, and dropping it would delete a deliberate piece of the deck.
+  return Promise.resolve([...catalog, ...live]);
+};
 
 export const workflowGet = (args: { workflowId: string }): Promise<Workflow | undefined> =>
   Promise.resolve(WORKFLOWS[args.workflowId]);
@@ -225,6 +256,8 @@ export interface EvaluationResult {
   score: number | null;
   verdict: string | null;
   ranAt?: string;
+  /** W5 — present when the evaluation was run against a specific run; the Scores tab joins on it. */
+  runId?: string;
 }
 
 export interface RegressionReport {
@@ -366,7 +399,7 @@ function nodeIdsForWorkflow(workflowId: string): Set<string> | null {
  * node list still answers, filtered by the catalog, rather than leaving
  * the rail empty.
  */
-export const workspaceGetNodes = async (args?: { workflowId?: string }): Promise<WorkflowNode[]> => {
+export const workspaceGetNodes = async (args?: { workflowId?: string; detail?: 'summary' | 'full' }): Promise<WorkflowNode[]> => {
   if (args?.workflowId) {
     try {
       const graph = await workspaceGetGraph({ workflowId: args.workflowId });
@@ -375,11 +408,73 @@ export const workspaceGetNodes = async (args?: { workflowId?: string }): Promise
       // fall through to the flat list below
     }
   }
+  // W2/W6 — `detail: "summary"` is the list projection: identity, shape, status, executionKind and
+  // a promptSha, and none of the prompt/schema/tool payload that is 82 % of a full node. A caller
+  // that draws a LIST asks for it; the inspector still fetches the one node it opened in full.
+  if (args?.detail === 'summary') {
+    const summary = await callVerb<{ nodes: adapters.RawWorkflowNodeSummary[] }>('workspace_get_nodes', { detail: 'summary' });
+    return summary.nodes.map(adapters.toNodeSummary);
+  }
   const raw = await callVerb<{ nodes: adapters.RawWorkflowNode[] }>('workspace_get_nodes', {});
   const nodes = raw.nodes.map(adapters.toNode);
   if (!args?.workflowId) return nodes;
   const ids = nodeIdsForWorkflow(args.workflowId);
   return ids ? nodes.filter((n) => ids.has(n.id)) : nodes;
+};
+
+/**
+ * W3 — `workbench.bootstrap`: the whole first paint, in one call.
+ *
+ * Before it, a cold load fired FIFTEEN verbs (see workbench/contracts/first-paint.json), five of
+ * which took 12-24 s each. This one returns the registry, the requested workflow's summary graph,
+ * its recent run rows, the attention counts and the workspace version — the version being the key
+ * a persisted client cache is invalidated on.
+ *
+ * `registeredWorkflowIds` is the server's own registry. WORKFLOW_CATALOG is presentation config
+ * and knows three; the registry has more, and a workflow missing from the Workbench because a
+ * constant in this repo was never updated is exactly the defect that field closes.
+ */
+export interface BootstrapEnvelope {
+  registeredWorkflowIds: string[];
+  /** Node count per registered workflow — what the workflow menu and the deck print, without a
+   *  graph download each. */
+  nodeCounts: Record<string, number>;
+  unknownWorkflowId?: string;
+  graph: { workflowId: string; nodes: WorkflowNode[]; edges: Array<{ from: string; to: string }> } | null;
+  recentRuns: Run[];
+  attentionCounts: { running: number; paused: number; blocked: number; failed: number };
+  workspaceVersion: number;
+}
+
+interface RawBootstrap {
+  registeredWorkflowIds?: string[];
+  nodeCounts?: Record<string, number>;
+  unknownWorkflowId?: string;
+  graph?: { workflowId: string; nodes: adapters.RawWorkflowNodeSummary[]; edges: Array<{ from: string; to: string }> } | null;
+  recentRuns?: adapters.RawRun[];
+  modes?: Record<string, { executionMode?: string }>;
+  attentionCounts?: Partial<BootstrapEnvelope['attentionCounts']>;
+  workspaceVersion?: number;
+}
+
+export const workbenchBootstrap = async (args: { workflowId?: string } = {}): Promise<BootstrapEnvelope> => {
+  const raw = await callVerb<RawBootstrap>('workbench_bootstrap', args.workflowId ? { workflowId: args.workflowId } : {});
+  return {
+    registeredWorkflowIds: raw.registeredWorkflowIds ?? [],
+    nodeCounts: raw.nodeCounts ?? {},
+    ...(raw.unknownWorkflowId ? { unknownWorkflowId: raw.unknownWorkflowId } : {}),
+    graph: raw.graph
+      ? { workflowId: raw.graph.workflowId, nodes: (raw.graph.nodes ?? []).map(adapters.toNodeSummary), edges: raw.graph.edges ?? [] }
+      : null,
+    recentRuns: (raw.recentRuns ?? []).map((row) => adapters.toRun(row.modeRef && raw.modes?.[row.modeRef] ? { ...row, mode: raw.modes[row.modeRef] } : row)),
+    attentionCounts: {
+      running: raw.attentionCounts?.running ?? 0,
+      paused: raw.attentionCounts?.paused ?? 0,
+      blocked: raw.attentionCounts?.blocked ?? 0,
+      failed: raw.attentionCounts?.failed ?? 0,
+    },
+    workspaceVersion: raw.workspaceVersion ?? 0,
+  };
 };
 
 export const workspaceGetNode = async (args: { nodeId: string }): Promise<WorkflowNode | null> => {
@@ -715,14 +810,41 @@ export interface EffectiveSkillPolicy {
   conflicts: Array<{ severity?: string; source?: string; message?: string }>;
 }
 
+/**
+ * W4 — the canonical account of what a DETERMINISTIC node does
+ * (src/agent/workspace/nodeAlgorithms.ts). Null for a model node, whose explanation is its prompt.
+ */
+export interface NodeAlgorithm {
+  nodeId: string;
+  summary: string;
+  source: string;
+  reads: string[];
+  steps: string[];
+  engineTools: Array<{ verb: string; risk?: string; description?: string }>;
+  route?: { routeId: string; phaseId?: string };
+  engineToolsUnverified?: boolean;
+}
+
 export interface EffectiveTools {
   /** Controlled model grants. These are not the deterministic engine route. */
   tools: ToolDef[];
   /** Tenant verbs a deterministic engine route invokes directly. */
   engine: string[];
   capability: { executionKind?: 'model' | 'deterministic'; routeId?: string; deadGrants?: string[]; findings?: unknown[] } | null;
+  algorithm: NodeAlgorithm | null;
   resolvedAgainst?: string;
 }
+
+/**
+ * `tool.list_executions` — the controlled tool calls a node made inside a run.
+ *
+ * REBASE RECONCILIATION (workbench-v2 onto main's W5 T4) — both branches added a wrapper over this
+ * verb, for two surfaces that want the same rows: main's run-level Tools timeline and this branch's
+ * per-node I/O tab. There is one wrapper now, below, over main's `ToolExecutionRow` — the ledger
+ * record's own shape, with no adapter, for the reasons its doc comment gives. This alias keeps the
+ * name the I/O tab was written against.
+ */
+export type ToolExecution = ToolExecutionRow;
 
 export const nodeGetEffectiveSkills = async (args: { nodeId: string }): Promise<EffectiveSkillPolicy> => {
   const raw = await callVerb<{ policy?: EffectiveSkillPolicy } | EffectiveSkillPolicy>('node_get_effective_skills', args);
@@ -736,12 +858,14 @@ export const nodeGetEffectiveTools = async (args: { nodeId: string }): Promise<E
     tools?: Array<adapters.RawToolDef | ToolDef>;
     engine?: unknown;
     capability?: EffectiveTools['capability'];
+    algorithm?: NodeAlgorithm | null;
     resolvedAgainst?: string;
   }>('node_get_effective_tools', args);
   return {
     tools: (raw.tools ?? []).map((tool) => ('toolId' in tool ? adapters.toToolDef(tool) : tool)),
     engine: Array.isArray(raw.engine) ? raw.engine.filter((verb): verb is string => typeof verb === 'string') : [],
     capability: raw.capability ?? null,
+    algorithm: raw.algorithm ?? null,
     ...(raw.resolvedAgainst ? { resolvedAgainst: raw.resolvedAgainst } : {}),
   };
 };
@@ -812,6 +936,13 @@ export interface RunListArgs {
    * workflow_get_run was always the cheaper read.
    */
   detail?: 'summary' | 'full';
+  /**
+   * W2/W5 — opt-in row fields. `nodeStatuses` adds the per-node status map and failedNodeIds,
+   * which only the rail's five-row strip renders; it is 18 KB across a 50-row page, so every other
+   * caller (the attention strip, the runs table, the workflow deck) leaves it off. `scores` adds
+   * what the run's scoring and judgement nodes recorded — the Scores tab, and nothing else.
+   */
+  include?: Array<'nodeStatuses' | 'scores'>;
 }
 
 /** Runs plus the page metadata — see adapters.toRunPage(), which does the reading. */
@@ -819,7 +950,7 @@ export type RunPage = adapters.RunPageView;
 
 export const workflowListRunsPage = async (args: RunListArgs = {}): Promise<RunPage> =>
   adapters.toRunPage(
-    await callVerb<{ runs: adapters.RawRun[]; page?: adapters.RawRunPage }>('workflow_list_runs', {
+    await callVerb<{ runs: adapters.RawRun[]; page?: adapters.RawRunPage; modes?: Record<string, { executionMode?: string }> }>('workflow_list_runs', {
       limit: DEFAULT_RUNS_LIMIT,
       ...args,
     }),
@@ -846,7 +977,17 @@ export const workflowListRuns = async (args: RunListArgs = {}): Promise<Run[]> =
 export const workflowGetRun = async (args: { runId: string }): Promise<Run | null> => {
   const raw = await callVerb<{ run: adapters.RawRun; mode?: { executionMode?: string }; stall?: unknown } | null>(
     'workflow_get_run',
-    args,
+    {
+      ...args,
+      // W7 LIVE-PLANE CORRECTION. `detail` defaults to "compact" server-side, and the compact view
+      // has never carried `stageOutputs` or `initialInput` — so the I/O tab's inputs and output
+      // cards and W6's replay, all of which read the run record's stage outputs, would have found an
+      // empty map against the live plane. The FIXTURE synthesised one, which is exactly why no test
+      // on either plane could see it. `include` is the opt-in W7 added to the compact view for this;
+      // `detail: "full"` would also work and would drag every node's whole input/output object
+      // (100 KB+) along with it.
+      include: ['stageOutputs'],
+    },
   );
   if (!raw?.run) return null;
   const merged: adapters.RawRun = { ...raw.run, mode: raw.mode ?? raw.run.mode, stall: raw.stall ?? raw.run.stall };
@@ -1072,6 +1213,86 @@ export const constellationGetMetrics = (args?: { projectId?: string; runId?: str
 // written into the run's stage outputs, marked as an operator override, and
 // every downstream node reads it as the upstream result.
 
+/**
+ * W6 — REPLAY. `node.execute` runs ONE node outside the workflow, against dependency outputs the
+ * caller supplies. Handing it a real run's upstream stage outputs is what turns "I changed this
+ * prompt, is it better?" from a whole new run into one node and one answer.
+ *
+ * It creates its own single-node run server-side (every run does — see AGENTS.md on startDryRun),
+ * so this is a MUTATING verb and goes through the confirm gate like every other one. `executionMode`
+ * is explicit rather than defaulted, because the difference between a mock reply and a real model
+ * call is the difference between free and not.
+ */
+export interface NodeExecuteResult {
+  /**
+   * The WHOLE synthetic run record the server wrote for this one-node execution
+   * (`nodeRuntime.executeNode` returns `{ execution, executionId, trace? }` — it does NOT
+   * flatten the node's own result out for you, and an earlier draft of this type that claimed
+   * a top-level `output`/`status` would have read `undefined` on every call). The record's
+   * `workflowId` is the literal "independent_node" and its `projectId` is the literal
+   * "workspace": it is not the run you replayed against, and nothing downstream reads it.
+   */
+  execution?: {
+    runId?: string;
+    status?: string;
+    errors?: string[];
+    stageOutputs?: Record<string, unknown>;
+    nodes?: Array<{
+      nodeId: string;
+      status?: string;
+      output?: unknown;
+      errors?: string[];
+      durationMs?: number;
+      blockage?: unknown;
+    }>;
+  };
+  executionId?: string;
+  trace?: unknown;
+}
+
+/**
+ * The executed node's own result, dug out of the synthetic run record above. `stageOutputs`
+ * carries it only on success (executeNode writes it in the completed branch); the node state
+ * carries it either way, and on failure `output` is `{ error: { code, message, ... } }` rather
+ * than node output — which is why the caller gets `status` alongside it and must not render a
+ * failed result as if it were content.
+ */
+export const nodeExecuteResultOf = (result: NodeExecuteResult, nodeId: string) => {
+  const state = result.execution?.nodes?.find((n) => n.nodeId === nodeId);
+  return {
+    status: state?.status ?? result.execution?.status,
+    output: state?.status === 'completed' ? (result.execution?.stageOutputs?.[nodeId] ?? state?.output) : state?.output,
+    errors: state?.errors ?? result.execution?.errors ?? [],
+    durationMs: state?.durationMs,
+    executionId: result.executionId,
+    runId: result.execution?.runId,
+  };
+};
+
+export const nodeExecute = (args: {
+  nodeId: string;
+  runId?: string;
+  /** The run's own initial input. `executeNode` validates `input ?? {}` against the node's
+   *  inputSchema before anything else, so a node with required input fields refuses a call that
+   *  omits it — which is why this is threaded rather than left to default. */
+  input?: unknown;
+  dependencyOutputs?: Record<string, unknown>;
+  modelConfig?: Record<string, unknown>;
+  executionMode?: 'mock' | 'openai';
+}) =>
+  mutate<NodeExecuteResult>(
+    'node_execute',
+    `Run ${args.nodeId} on its own${args.runId ? `, against run ${args.runId}'s upstream outputs` : ''}${args.executionMode === 'openai' ? ' — a REAL model call, which costs money' : ' in mock mode (no model call, no cost)'}. This does not touch the run it reads from.`,
+    {
+      nodeId: args.nodeId,
+      ...(args.runId ? { runId: args.runId } : {}),
+      ...(args.input !== undefined ? { input: args.input } : {}),
+      ...(args.dependencyOutputs ? { dependencyOutputs: args.dependencyOutputs } : {}),
+      ...(args.modelConfig ? { modelConfig: args.modelConfig } : {}),
+      executionMode: args.executionMode ?? 'mock',
+    },
+  );
+
 export const nodeValidateOutput = (args: { nodeId: string; output: unknown }) =>
   callVerb<{ valid: boolean; issues?: unknown[] }>('node_validate_output', args);
 
@@ -1227,9 +1448,11 @@ export const toolList = async (): Promise<ToolDef[]> => {
  * each, and "this row did not say" is the fact the screen is there to show. The cast is the same
  * honest boundary-trust cast this file uses for verbs whose item shape is the live shape.
  */
-export const toolListExecutions = async (args: { runId: string }): Promise<ToolExecutionRow[]> => {
-  const raw = await callVerb<{ executions: unknown[] }>('tool_list_executions', args);
-  return (raw.executions ?? []) as ToolExecutionRow[];
+export const toolListExecutions = async (args: { runId?: string; nodeId?: string; toolId?: string }): Promise<ToolExecutionRow[]> => {
+  // The filters are all optional server-side (listToolExecutionsInput is `.strict()` with every
+  // field optional), and the I/O tab scopes to one node of one run rather than to a whole run.
+  const raw = await callVerb<{ executions?: unknown[] } | unknown[]>('tool_list_executions', args);
+  return (Array.isArray(raw) ? raw : (raw.executions ?? [])) as ToolExecutionRow[];
 };
 
 /**
@@ -1281,6 +1504,58 @@ export const skillRestoreVersion = (args: { skillId: string; version: string }) 
 export const agentList = async (): Promise<Agent[]> => {
   const raw = await callVerb<{ agents: adapters.RawAgent[] }>('agent_list');
   return raw.agents.map(adapters.toAgent);
+};
+
+/** `agent_get` — the same view as a list row plus the FULL prompt, which a list deliberately omits. */
+export interface AgentDetail extends Agent {
+  prompt: string;
+  modelConfig?: { provider?: string; model?: string; timeoutMs?: number; maxOutputTokens?: number };
+}
+
+export const agentGet = async (args: { agentId: string }): Promise<AgentDetail> => {
+  const raw = await callVerb<{ agent: adapters.RawAgent & { prompt?: string; modelConfig?: AgentDetail['modelConfig'] } }>('agent_get', { id: args.agentId });
+  return { ...adapters.toAgent(raw.agent), prompt: raw.agent.prompt ?? '', modelConfig: raw.agent.modelConfig };
+};
+
+export const agentUpdatePrompt = (args: { agentId: string; prompt: string; expectedWorkspaceVersion?: number }) =>
+  confirmAction(
+    { verb: 'agent_update', effect: `Replace this agent's stored prompt. It bumps the agent's revision, which invalidates outstanding agent_ref values — the next admin-chat turn re-resolves against the new one.` },
+    () => callVerb<{ agent: adapters.RawAgent; workspaceVersion: number }>('agent_update', {
+      id: args.agentId,
+      patch: { prompt: args.prompt },
+      ...(args.expectedWorkspaceVersion !== undefined ? { expectedWorkspaceVersion: args.expectedWorkspaceVersion } : {}),
+    }),
+  );
+
+/**
+ * W5 — `agent.list_conversations`. CMS-Agent's own bounded audit mirror of what this agent has
+ * been saying; Platform's ChatDoc remains the human-facing transcript authority. `scanCapped` says
+ * whether older conversations were left unexamined, so an incomplete answer is never presented as
+ * a complete one.
+ */
+export interface AgentTurn {
+  turnId: string;
+  createdAt: string;
+  actor: { kind: string; id: string };
+  request: { messageCount: number; latestMessagePreview?: string; toolNames?: string[] };
+  assistantText?: string;
+  proposedToolCalls: Array<{ name: string }>;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number; costUsdEstimate: number };
+}
+
+export interface AgentConversation {
+  conversationId: string;
+  projectId: string;
+  agentRev?: string;
+  lastTurnAt: string;
+  turnCount: number;
+  trimmedTurnCount?: number;
+  turns: AgentTurn[];
+}
+
+export const agentListConversations = async (args: { agentId: string; projectId?: string; limit?: number }): Promise<{ conversations: AgentConversation[]; scanned: number; scanCapped: boolean }> => {
+  const raw = await callVerb<{ conversations?: AgentConversation[]; scanned?: number; scanCapped?: boolean }>('agent_list_conversations', args);
+  return { conversations: raw.conversations ?? [], scanned: raw.scanned ?? 0, scanCapped: Boolean(raw.scanCapped) };
 };
 
 export const repositoryGetHealth = () => callVerb<RepositoryHealth>('repository_get_health');
@@ -1358,8 +1633,19 @@ export const evaluationListRubrics = async (): Promise<Rubric[]> => {
   return raw.rubrics.map((r) => adapters.toRubric(r, newestByNode.get(r.nodeId)));
 };
 
-export const evaluationListResults = (args?: { nodeId?: string }) =>
-  callVerb<EvaluationResult[]>('evaluation_list_results', args);
+/**
+ * W7 LIVE-PLANE CORRECTION — the server returns `ok({ results: [...] })` (improvementTools.ts), like
+ * every other list verb, NOT a bare array. This was typed as `EvaluationResult[]`, so W5's Scores
+ * tab did `for (const r of evalsQ.data)` over an object and would have thrown
+ * "is not iterable" inside a render on the first live open, taking the whole Runs screen down. The
+ * fixture returned a bare array, so fixture mode could never catch it. Tolerates both shapes rather
+ * than swapping one assumption for another.
+ */
+export const evaluationListResults = async (args?: { nodeId?: string }): Promise<EvaluationResult[]> => {
+  const raw = await callVerb<{ results?: EvaluationResult[] } | EvaluationResult[] | null>('evaluation_list_results', args);
+  if (Array.isArray(raw)) return raw;
+  return raw?.results ?? [];
+};
 
 /**
  * LIVE-VERIFIED CORRECTION (workbench-verb-fixes): wraps `{ reports: [...] }`

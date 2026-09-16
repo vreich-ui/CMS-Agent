@@ -208,7 +208,10 @@ export function Activity() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  const nodesQ = useNodes();
+  // W6 — the node list here exists to fill a FILTER and to map a node id to its workflow. It was
+  // pulling the flat 310 KB workspace list, prompts and schemas included, to render a dropdown of
+  // ids. The summary projection answers the same question in ~19 KB.
+  const nodesQ = useNodes(undefined, { detail: 'summary' });
   const workflowsQ = useWorkflows();
   const baselineQ = useActivityBaseline();
 

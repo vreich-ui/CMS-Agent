@@ -7,7 +7,11 @@ import type { HeaderMap } from "../../runtime/auth.js";
 import { handleMcpHttp } from "./mcpEndpoint.js";
 import { handleAuthorize, handleAuthorizationServerMetadata, handleProtectedResourceMetadata, handleRegister, handleToken, type HttpResponse, type OAuthRequest } from "./oauthEndpoints.js";
 
-export type RouterRequest = { method: string; path: string; query: Record<string, string | undefined>; headers: HeaderMap; body: string | null };
+// `signal` (W1) aborts when the CLIENT goes away. The Workbench cancels queries on unmount and on
+// retry, and a burst of fifteen verbs that the browser has already abandoned was still being served
+// to completion — work charged to a single-vCPU instance for an answer nobody would read. Optional
+// so every existing caller (the Netlify adapter, the tests) is unchanged.
+export type RouterRequest = { method: string; path: string; query: Record<string, string | undefined>; headers: HeaderMap; body: string | null; signal?: AbortSignal };
 
 const notFound = (): HttpResponse => ({ statusCode: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ error: { code: "not_found", message: "No such endpoint on the CMS-Agent control plane." } }) });
 
@@ -27,7 +31,7 @@ export async function routeControlPlaneRequest(request: RouterRequest): Promise<
   // alias because some existing callers still use it; Cloud Run's edge may reserve paths ending
   // in "z" before they reach this container.
   if (path === "/health" || path === "/healthz" || path === "/") return health();
-  if (MCP_PATHS.has(path)) return handleMcpHttp({ httpMethod: method, headers: request.headers, body: request.body });
+  if (MCP_PATHS.has(path)) return handleMcpHttp({ httpMethod: method, headers: request.headers, body: request.body, signal: request.signal });
 
   // OAuth discovery + endpoints (trailing-segment forms allowed, matching the netlify.toml globs).
   if (path === "/.well-known/oauth-protected-resource" || path.startsWith("/.well-known/oauth-protected-resource/")) return handleProtectedResourceMetadata(oauthRequest(request));

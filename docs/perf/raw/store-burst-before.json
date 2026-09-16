@@ -1,0 +1,19 @@
+{
+  "at": "2026-09-16T09:44:08.977Z",
+  "reads": 15,
+  "simulatedGcsLatencyMs": 40,
+  "documentBytes": 328990,
+  "documentNodes": 51,
+  "burst": {
+    "getMetadata": 15,
+    "download": 15,
+    "bytesDownloaded": 4934850,
+    "roundTrips": 30,
+    "roundTripsPerRead": 2,
+    "megabytesDownloaded": 4.71,
+    "wallMs": 162,
+    "jsonParseMs": 1.6,
+    "tolerantParseMs": 2.5,
+    "cpuBoundMsPerBurst": 38
+  }
+}

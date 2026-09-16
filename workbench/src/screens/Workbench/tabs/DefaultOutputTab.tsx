@@ -223,6 +223,10 @@ export function DefaultOutputTab({ node, nodeId }: { node: WorkflowNode; nodeId:
       setPendingConfirm(false);
       await qc.invalidateQueries({ queryKey: ['node', nodeId] });
       qc.invalidateQueries({ queryKey: ['nodes'] });
+      // W3/W4 — the rail reads its node rows (and `hasDefaultOutput`, which is what decides whether
+      // it offers a push-through at all) from `workbench.bootstrap`. Without this, an operator could
+      // save a default here and the rail would keep insisting the node has none.
+      qc.invalidateQueries({ queryKey: ['bootstrap'] });
       recordChange({ nodeId, kind: 'defaultOutput', label: 'default output saved', before, after: value });
       toast('Default output saved', `workspace_update_node_default_output → ${nodeId}${force ? ' (force)' : ''}`);
     } catch (err) {
@@ -246,6 +250,10 @@ export function DefaultOutputTab({ node, nodeId }: { node: WorkflowNode; nodeId:
       resetEditorState();
       await qc.invalidateQueries({ queryKey: ['node', nodeId] });
       qc.invalidateQueries({ queryKey: ['nodes'] });
+      // W3/W4 — the rail reads its node rows (and `hasDefaultOutput`, which is what decides whether
+      // it offers a push-through at all) from `workbench.bootstrap`. Without this, an operator could
+      // save a default here and the rail would keep insisting the node has none.
+      qc.invalidateQueries({ queryKey: ['bootstrap'] });
       recordChange({ nodeId, kind: 'defaultOutput', label: 'default output cleared', before, after: null });
       toast('Default output cleared', `workspace_update_node_default_output → ${nodeId} (value: null)`);
     } catch (err) {

@@ -16,6 +16,7 @@ import { LiveTab } from './LiveTab';
 import { HistoryTab } from './HistoryTab';
 import { GridTab } from './GridTab';
 import { ToolsTab } from './ToolsTab';
+import { ScoresTab } from './ScoresTab';
 import { stoppedNode } from './helpers';
 
 export interface RunFilters {
@@ -43,6 +44,9 @@ const TABS: Array<{ id: RunTab; label: string }> = [
   { id: 'history', label: 'History' },
   { id: 'grid', label: 'Grid' },
   { id: 'tools', label: 'Tools' },
+  // workbench-v2 W5 — "are our runs getting better or worse", which this system could not answer
+  // at all. Sits beside Tools: that tab is what a run CALLED, this one is what it SCORED.
+  { id: 'scores', label: 'Scores' },
 ];
 
 export function Runs() {
@@ -147,7 +151,11 @@ export function Runs() {
   // for the same reason it is not covered by the skeleton: it fetches its own data for a run it
   // already has (the bound run), so a failed workflow_list_runs must not replace it with a retry
   // button for a query it does not read. It renders its own error, below its own run picker.
-  const criticalError = runtab === 'tools' ? undefined : ((runtab === 'live' ? liveQ.error : runsQ.error) ?? workflowsQ.error);
+  // workbench-v2 W5 — Scores is the same case as Tools, one tab over: it makes its own scored read
+  // (`include: ["scores"]`) and renders its own loading, empty and error states, so the
+  // screen-level gates must not speak for it either.
+  const ownsItsGates = runtab === 'tools' || runtab === 'scores';
+  const criticalError = ownsItsGates ? undefined : ((runtab === 'live' ? liveQ.error : runsQ.error) ?? workflowsQ.error);
   // REVIEW FIX (round 2) — only skeleton when there is genuinely nothing to show. The filter
   // selects live INSIDE the tab bodies, so treating a filter change as "loading" unmounted the
   // controls the operator was using, for a whole round trip.
@@ -157,14 +165,27 @@ export function Runs() {
   // Letting the screen-level skeleton cover it would blank that picker for a round trip it does not
   // depend on — the same defect the filter-change fix above was for, one tab over.
   const loading =
-    runtab !== 'tools' &&
+    !ownsItsGates &&
     !criticalError &&
     !hasRows &&
     ((runtab === 'live' ? liveQ.isLoading : runsQ.isLoading) || workflowsQ.isLoading);
   const refetching = runtab === 'live' ? liveQ.isPlaceholderData : runsQ.isPlaceholderData;
 
   let body: ReactNode;
-  if (criticalError) {
+  // W5 — Scores owns its own read (a scored page, `include: ["scores"]`) and its own loading,
+  // empty and error states, so it must not sit behind the shared runsQ gates: on a tab whose own
+  // query has not been made yet, `hasRows` is false and the screen would paint a skeleton over a
+  // panel that was perfectly able to render itself.
+  if (runtab === 'scores') {
+    body = (
+      <ScoresTab
+        workflows={workflows}
+        workflowId={gridWorkflowId}
+        onSelectWorkflow={(id) => setFilters((current) => ({ ...current, wf: id }))}
+        onOpen={onOpen}
+      />
+    );
+  } else if (criticalError) {
     // W2 — was a dead end: the message with no way to act on it. Retry refetches both
     // queries, since either can be the failed half.
     body = (

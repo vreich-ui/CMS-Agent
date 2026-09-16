@@ -11,11 +11,14 @@
 // all-clear (per the brief). A hover (or long-press) on a row opens the
 // node quick-look popover.
 
-import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNodes, useRubrics, useRun, useRuns, useWorkflows } from '../../api/hooks';
+import { useWorkflowNodes, useWorkflowRecentRuns, useRubrics, useRun, useRunNode, useWorkflows } from '../../api/hooks';
 import { changesListEvents } from '../../api/verbs';
-import { suppliedOutputMarker } from '../../components/drive/overrideStatus';
+import { ActionCancelledError } from '../../api/confirmAction';
+import { IS_READ_ONLY } from '../../api/client';
+import { toast } from '../../components/Toasts';
+import { isLiveRun, isPublishTailNode, suppliedOutputMarker } from '../../components/drive/overrideStatus';
 import { Dot } from '../../components/primitives';
 import { Skeleton } from '../../components/Skeleton';
 import { QueryError } from '../../components/QueryError';
@@ -23,7 +26,7 @@ import { QuickLookPopover } from '../../components/quicklook/QuickLookPopover';
 import { useNodeQuickLook } from '../../components/quicklook/useNodeQuickLook';
 import { useStore } from '../../store';
 import type { Run, WorkflowNode } from '../../types';
-import { nodeErrorFrequency, nodeRunStatus, orderedNodes, type NodeRunStatus } from './helpers';
+import { formatDurationMs, nodeErrorFrequency, nodeRunStatus, orderedNodes, type NodeRunStatus } from './helpers';
 
 interface VisibleRow {
   nid: string;
@@ -73,6 +76,9 @@ function RailRow({
   errorFreq,
   learned,
   provenance,
+  durationMs,
+  onPushThrough,
+  pushThroughBusy,
   onSelect,
   rowRef,
 }: {
@@ -92,6 +98,11 @@ function RailRow({
    * operator value), or null — which means this node produced its own output,
    * the normal case, and is NOT a reason to go asking the server anything. */
   provenance: 'default_output' | 'operator_override' | null;
+  /** W4 — this node's duration in the BOUND run, off the run record. */
+  durationMs?: number;
+  /** W4 — offered when this node is queued in a bound run and carries a standing default. */
+  onPushThrough?: () => void;
+  pushThroughBusy?: boolean;
   onSelect: (id: string) => void;
   rowRef: (el: HTMLButtonElement | null) => void;
 }) {
@@ -130,6 +141,19 @@ function RailRow({
         {...ql.triggerProps}
       >
         <Dot status={st ?? undefined} />
+        {/* W4 — HOW this node runs, at a glance. A deterministic node has no prompt and no grants:
+            its behaviour is engine code, and the operator needs to know that before opening a Prompt
+            tab that is empty by construction. Computed server-side (the summary projection drops the
+            route metadata a client would need to derive it). */}
+        {n?.executionKind && (
+          <span
+            className="kindglyph lbl"
+            title={n.executionKind === 'deterministic' ? 'deterministic — engine code, no model turn. See the I/O tab for its algorithm.' : 'model — dispatched to a model with this node’s prompt'}
+            style={{ marginRight: 4 }}
+          >
+            {n.executionKind === 'deterministic' ? '⚙' : '◇'}
+          </span>
+        )}
         <span className="nm">{nid}</span>
         {typeof evalScore === 'number' && (
           <span
@@ -165,12 +189,37 @@ function RailRow({
             ⇐{n.fan}
           </span>
         )}
+        {typeof durationMs === 'number' && durationMs > 0 && (
+          <span className="lbl" title="how long this node took in the bound run">
+            {formatDurationMs(durationMs)}
+          </span>
+        )}
         {n && n.risk === 'publish' && (
           <span className="risk publish" title="publish risk">
             P
           </span>
         )}
       </button>
+      {/* W4 — push-through, on ANY queued node rather than only the run's "up next" one. A node
+          deep in the pipeline is exactly the one an operator wants to jump to, and the server has
+          always addressed a push-through by node id. Only offered when the node actually carries a
+          standing default (`hasDefaultOutput`, one bit on the summary row) — a control that can only
+          refuse is worse than no control. */}
+      {onPushThrough && (
+        <button
+          type="button"
+          className="btn pushthrough"
+          disabled={pushThroughBusy}
+          title={`Push ${nid} through on its standing default — no model turn, no cost. This run can never publish live afterwards.`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPushThrough();
+          }}
+          style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', padding: '1px 5px', fontSize: 11 }}
+        >
+          ⚙▸
+        </button>
+      )}
       <QuickLookPopover nodeId={nid} workflowId={wf} anchor={ql.anchor} onClose={ql.close} />
     </div>
   );
@@ -191,7 +240,7 @@ export function Rail() {
   const openGraphOverlay = useStore((s) => s.openGraphOverlay);
 
   const workflowsQ = useWorkflows();
-  const nodesQ = useNodes(wf);
+  const nodesQ = useWorkflowNodes(wf);
   // W1 — this panel renders a handful of "recent runs · this workflow" rows; ask the
   // server for exactly that rather than taking the default 20-row page and slicing.
   // W5 — `detail: 'full'` REMOVED. It was pulling five whole run records (up to 1.2 MB each) on
@@ -203,9 +252,14 @@ export function Rail() {
   // The filter object is now BYTE-IDENTICAL to DriveCenter's, so react-query's ['runs', filters] key
   // dedupes those two into ONE in-flight request instead of firing both at first paint. That
   // coincidence is load-bearing: keep the shapes identical, or the dedupe silently stops happening.
-  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
+  const wfRunsQ = useWorkflowRecentRuns(wf);
   const boundRunQ = useRun(runId);
-  const rubricsQ = useRubrics();
+  // W3 — score glyphs and "learned since your last visit" badges are decoration on a rail that
+  // has to be usable before either arrives. Both wait until the rail has actually painted (the
+  // node set is in hand), so neither is on the critical path; both already degrade to "no badge"
+  // on failure, which is what makes deferring them safe rather than merely cheaper.
+  const railPainted = Boolean(nodesQ.data?.length);
+  const rubricsQ = useRubrics({ enabled: railPainted });
 
   // U5 — one call for the whole rail (not per row): every learning-sourced
   // change made by an agent, grouped by node below. `changes_list` is
@@ -215,6 +269,7 @@ export function Rail() {
     queryKey: ['changes', 'learning-agent'],
     queryFn: () => changesListEvents({ actorKind: 'agent', source: 'learning' }),
     retry: false,
+    enabled: railPainted,
   });
 
   // Captured once per mount: the visit BEFORE this one. Writing the new
@@ -315,6 +370,62 @@ export function Rail() {
     const first = visibleIds[0];
     if (first) adoptNode(first);
   }, [node, visibleIds, adoptNode]);
+
+  // W3 — the load-budget seam. DEV-only, like App.tsx's `__queryClient` handle: stamps the moment
+  // the rail became INTERACTIVE (it has rows and one of them is selected), so
+  // tests/firstPaintBudget.spec.ts can separate the verbs the first paint blocks on from the ones
+  // that legitimately start the instant it is usable — the inspector's read of the adopted node,
+  // the score glyphs, the learned badges. Sampling "when the row appears" cannot tell those apart;
+  // a timestamp can. Never in a production bundle.
+  // W4 — the push-through itself. `workflow.run_node { useDefaultOutput }` addresses ONE node by
+  // name and always has; what changes here is that the rail offers it on any queued node rather
+  // than only on the run's own cursor. Failures surface as a toast with the server's own words —
+  // `default_output_missing`, `upstream_incomplete` naming the first blocking node, or the
+  // defaulted-publish refusal — because every one of those is something the operator can act on.
+  const [pushingNodeId, setPushingNodeId] = useState<string | null>(null);
+  const runNodeM = useRunNode();
+
+  /**
+   * W7 — the upstream nodes this run has NOT completed for a target node.
+   *
+   * The comment above lists `upstream_incomplete` among the refusals this control can surface. It
+   * cannot: that check is scoped to `defaultUpstream`, which this call does not send. Without it
+   * the server writes the named node's output "whatever state its upstream is in" (its own schema's
+   * words) — so pushing a node near the tail of a run that is still near the head SUCCEEDS, and
+   * writes an output built from inputs that were never produced. Offering the control on any queued
+   * node was W4's deliberate change and stays; reporting that as an unqualified success was not.
+   */
+  function incompleteUpstream(targetNodeId: string): string[] {
+    const deps = nodesById.get(targetNodeId)?.dependsOn ?? [];
+    if (!deps.length || !run) return [];
+    return deps.filter((depId) => run.nodes.find((entry) => entry.nodeId === depId)?.status !== 'completed');
+  }
+
+  async function pushThrough(targetNodeId: string, targetRunId: string) {
+    setPushingNodeId(targetNodeId);
+    const pending = incompleteUpstream(targetNodeId);
+    try {
+      await runNodeM.mutateAsync({ runId: targetRunId, nodeId: targetNodeId, useDefaultOutput: true });
+      toast(
+        'Pushed through',
+        pending.length
+          ? `${targetNodeId} completed on its standing default — no model turn, no cost. Its upstream (${pending.join(', ')}) has not run on this run, so that default was written over inputs this run never produced.`
+          : `${targetNodeId} completed on its standing default — no model turn, no cost.`,
+      );
+    } catch (error) {
+      if (error instanceof ActionCancelledError) return;
+      toast('Push-through failed', error instanceof Error ? error.message : 'Something went wrong.');
+    } finally {
+      setPushingNodeId(null);
+    }
+  }
+
+  const railInteractive = Boolean(node) && visibleIds.length > 0;
+  useEffect(() => {
+    if (!import.meta.env.DEV || !railInteractive || typeof window === 'undefined') return;
+    const w = window as unknown as { __railInteractiveAt?: number };
+    w.__railInteractiveAt ??= Date.now();
+  }, [railInteractive]);
 
   function handleModeBuild() {
     setMode('build');
@@ -418,6 +529,18 @@ export function Rail() {
                       errorFreq={wfRunsQ.data ? nodeErrorFrequency(wfRunsQ.data, nid) : 0}
                       learned={learned}
                       provenance={suppliedOutputMarker(run, nid)}
+                      durationMs={run?.nodes.find((entry) => entry.nodeId === nid)?.durationMs ?? undefined}
+                      onPushThrough={
+                        // Offered only where it can actually succeed. The server refuses a supplied
+                        // output on a node that writes to a live client, on a live run
+                        // (defaulted_publish_node_refused) — the same rule drive mode already
+                        // applies to its own button. A control whose only outcome is a refusal is
+                        // worse than no control.
+                        run && st === 'queued' && n?.hasDefaultOutput && !IS_READ_ONLY && !(isLiveRun(run) && isPublishTailNode(n))
+                          ? () => void pushThrough(nid, run.id)
+                          : undefined
+                      }
+                      pushThroughBusy={pushingNodeId === nid}
                       onSelect={setNode}
                       rowRef={(el) => {
                         rowRefs.current[nid] = el;

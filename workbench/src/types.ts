@@ -24,6 +24,8 @@ export type BenchMode = 'build' | 'run' | 'drive';
 
 export type NodeTab =
   | 'thisrun'
+  // W4 — what this node was actually handed, what it produced, and what it called in between.
+  | 'io'
   | 'prompt'
   | 'tools'
   | 'skills'
@@ -35,7 +37,8 @@ export type NodeTab =
   | 'learn';
 
 // W5 T4 — 'tools' is the run's tool-execution ledger (Runs/ToolsTab.tsx).
-export type RunTab = 'live' | 'history' | 'grid' | 'tools';
+// workbench-v2 W5 — 'scores' is what every run's judgement nodes recorded (Runs/ScoresTab.tsx).
+export type RunTab = 'live' | 'history' | 'grid' | 'tools' | 'scores';
 
 export type RegTab = 'projects' | 'keys' | 'tools' | 'skills' | 'agents' | 'usage';
 
@@ -108,12 +111,37 @@ export interface WorkflowNode {
   // `updatedAt`) with no fixture-derived equivalent before now — see
   // api/adapters.ts's toNode() and fixtures/README.md.
   produces?: string[];
+  /**
+   * W6 — the node ids this node's output is built from. This is the field the RUN ENGINE reads
+   * (nodeRuntime.prepareNodeExecution walks `node.dependsOn` to assemble dependencyOutputs); it is
+   * NOT `requiredInputs`, which is a list of required input ARTIFACT TYPES and diverges from the
+   * dependency list on at least one node — `input_triage` has `dependsOn: []` and
+   * `requiredInputs: ["content_source.v1"]`. Any surface answering "what was this node handed"
+   * must read this one; reading requiredInputs there produced a row for a type id that is not a
+   * key in `stageOutputs` and reported it as "not produced on this run".
+   */
+  dependsOn?: string[];
   requiredInputs?: string[];
   status?: string;
   updatedAt?: string;
   /** node-default-output (W4) — the node's standing default, when one is
    * set. Absent means no default has ever been saved for this node. */
   defaultOutput?: NodeDefaultOutput;
+
+  // --- W3. A node built from the server's `detail: "summary"` projection.
+  //
+  // A summary row carries what a LIST draws and nothing an inspector reads: `tools`, `skills`,
+  // `desc`, `prompt`, `model` and `defaultOutput` are absent, and this flag says so. It exists so
+  // that "empty tools array" can never be mistaken for "this node grants no tools" — every
+  // consumer that needs those fields fetches the one node with `workspace_get_node`.
+  summary?: true;
+  /** model | deterministic — the rail's glyph. Computed server-side from route metadata the
+   *  summary projection drops, so a client cannot derive it. */
+  executionKind?: 'model' | 'deterministic';
+  /** Whether a standing default exists, without carrying it. */
+  hasDefaultOutput?: boolean;
+  /** Identity of the prompt WITHOUT the prompt: changes when, and only when, the prompt does. */
+  promptSha?: string;
 }
 
 export interface ToolPolicyCounts {
@@ -206,6 +234,21 @@ export interface Run {
    * was supplied (defaulted or overridden) rather than produced. Drives
    * the "this run can never publish live" gate at the publish tail. */
   defaultedNodeIds?: string[];
+  /**
+   * W4 — what each completed node actually produced on this run, and what the run was started
+   * with. Carried by `workflow_get_run` only; a LIST row has neither, and an absent map means
+   * "this row does not carry them", never "the run produced nothing". The I/O tab reads a node's
+   * INPUTS out of its dependencies' entries here — which is literally what the dispatcher handed
+   * it, so no second call is needed to answer the question.
+   */
+  stageOutputs?: Record<string, unknown>;
+  input?: unknown;
+  /**
+   * W5 — what this run's scoring and judgement nodes recorded, keyed by node id. Carried only on a
+   * row that asked for it (`include: ["scores"]`); ABSENT — never `{}` and never a zero — when the
+   * run recorded none, because "has not reached its reviews" and "scored zero" are different facts.
+   */
+  scores?: Record<string, number | string>;
 }
 
 export interface ToolDef {

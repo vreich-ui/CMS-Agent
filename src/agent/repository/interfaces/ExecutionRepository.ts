@@ -1,5 +1,6 @@
 import { runStallFacts, type ExecutionStatus, type RunStallFacts, type WorkflowExecutionRecord } from "../../workspace/executionTypes.js";
 import type { RepositoryHealth } from "../RepositoryHealth.js";
+import { runScoresOf } from "../../workspace/runScores.js";
 
 // Thrown by saveRun when the stored run has advanced past the revision the caller loaded, i.e. a
 // concurrent writer committed in between. Callers reload the latest run and retry, so a completed
@@ -147,6 +148,13 @@ export type RunSummaryRecord = {
   // from nodeStatuses would make every consumer re-implement the letter mapping.
   nodeStatuses?: Record<string, RunIndexNodeStatus>;
   failedNodeIds?: string[];
+  /**
+   * W5 — what this run's scoring and judgement nodes recorded, keyed by node id (see
+   * workspace/runScores.ts). ABSENT when the run recorded none, never `{}`: a run that has not
+   * reached its reviews and a run that scored zero are different facts, and this projection has
+   * been bitten by that distinction before.
+   */
+  scores?: Record<string, number | string>;
   /** Only on a "running" row — the projection assessRunStallFrom needs. */
   stallFacts?: RunStallFacts;
 };
@@ -167,6 +175,7 @@ const APPROVAL_REASON_MAX = 500;
 /** The one reading of a full record into a row, shared by every backend. */
 export const runSummaryOf = (run: WorkflowExecutionRecord): RunSummaryRecord => {
   const nodes = run.nodes ?? [];
+  const scores = runScoresOf(run);
   return {
   runId: run.runId,
   projectId: run.projectId,
@@ -209,6 +218,9 @@ export const runSummaryOf = (run: WorkflowExecutionRecord): RunSummaryRecord => 
   // not.
   ...(nodes.length ? { nodeStatuses: Object.fromEntries(nodes.flatMap((node) => { const code = nodeStatusCode(node.status); return code ? [[node.nodeId, code] as const] : []; })) } : {}),
   ...(nodes.some((node) => node.status === "failed") ? { failedNodeIds: nodes.filter((node) => node.status === "failed").map((node) => node.nodeId) } : {}),
+  // W5 — scores, read off the run's own outputs at the moment it is indexed. Same omit-when-empty
+  // rule as nodeStatuses above, and for the same reason.
+  ...(Object.keys(scores).length ? { scores } : {}),
   // Stall is only ever assessed on a running run, so only a running row has to carry the
   // facts for it. Everything else would be dead weight on every row in the fleet.
   ...(run.status === "running" ? { stallFacts: runStallFacts(run) } : {})

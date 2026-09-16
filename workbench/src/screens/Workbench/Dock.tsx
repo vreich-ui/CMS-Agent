@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNodes, usePauseRun, useResumeRun, useCancelRun, useResetRun, useRetryNode, useRunNextNode, useRunUntil, useRun, useRunCost, useRuns, useWorkflows } from '../../api/hooks';
+import { useWorkflowNodes, usePauseRun, useResumeRun, useCancelRun, useResetRun, useRetryNode, useRunNextNode, useRunUntil, useRun, useRunCost, useWorkflowRecentRuns, useWorkflows } from '../../api/hooks';
 import { ActionCancelledError, confirmAction } from '../../api/confirmAction';
 import { IS_READ_ONLY, callVerb } from '../../api/client';
 import { workflowPublishReadiness } from '../../api/verbs';
@@ -27,6 +27,7 @@ import {
   isRealPublishGate,
   optimisticRunControl,
   orderedNodes,
+  formatDurationMs,
 } from './helpers';
 // U3 — drive mode reuses this same dock (Pause/Step/Run until/Retry/Cancel/
 // Reset are still exactly the right controls for a hand-driven run); the one
@@ -50,6 +51,57 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
 }
 
+/**
+ * W4 — the run's shape in time: one bar per node that has actually run, scaled to the longest.
+ *
+ * "Which node is this run spending its time in" was answerable only by opening nodes one at a time
+ * and reading a number. A run is a sequence with a shape, and the shape is the first thing anyone
+ * looks for when one is slow — a single node taking nine tenths of the wall clock is obvious here
+ * and invisible in a list of durations.
+ *
+ * Reads the bound run's own per-node timings; nothing is fetched for it. Nodes that never ran carry
+ * no duration and are omitted rather than drawn as zero-width bars, because "did not run" and "ran
+ * instantly" are different facts and a defaulted node genuinely does take no time.
+ */
+function RunTimeline({ run }: { run: Run }) {
+  const timed = run.nodes.filter((node) => typeof node.durationMs === 'number' && node.durationMs > 0);
+  if (timed.length === 0) return null;
+  const longest = Math.max(...timed.map((node) => node.durationMs as number));
+  const total = timed.reduce((sum, node) => sum + (node.durationMs as number), 0);
+  return (
+    <div style={{ marginTop: 10 }} id="run-timeline">
+      <span className="lbl">timeline · {timed.length} node{timed.length === 1 ? '' : 's'} · {formatDurationMs(total)} total</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
+        {timed.map((node) => {
+          const durationMs = node.durationMs as number;
+          const share = durationMs / longest;
+          const supplied = Boolean(node.outputProvenance);
+          return (
+            <div key={node.nodeId} style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={`${node.nodeId} · ${formatDurationMs(durationMs)} · ${Math.round((durationMs / total) * 100)}% of the run`}>
+              <span className="mono" style={{ fontSize: 10.5, width: 108, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: node.status === 'failed' ? 'var(--bad)' : undefined }}>
+                {node.nodeId}
+              </span>
+              <span style={{ flex: 1, height: 7, background: 'var(--line2)', borderRadius: 3, overflow: 'hidden' }}>
+                <i
+                  style={{
+                    display: 'block',
+                    height: '100%',
+                    width: `${Math.max(2, share * 100)}%`,
+                    background: node.status === 'failed' ? 'var(--bad)' : supplied ? 'var(--run)' : 'var(--acc)',
+                  }}
+                />
+              </span>
+              <span className="num" style={{ fontSize: 10.5, width: 52, textAlign: 'right' }}>
+                {formatDurationMs(durationMs)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function Dock() {
   const wf = useStore((s) => s.wf);
   const mode = useStore((s) => s.mode);
@@ -61,7 +113,7 @@ export function Dock() {
 
   const workflowsQ = useWorkflows();
   // W1 — recent runs for this workflow only; five rows is what the dock shows.
-  const wfRunsQ = useRuns({ workflowId: wf, limit: 5 });
+  const wfRunsQ = useWorkflowRecentRuns(wf);
   const boundRunQ = useRun(runId);
   // P2-03 split the cost ledger out of workflowGetRun into its own lazy
   // query (see verbs.workflowGetRun's doc comment) — `boundRunQ.data.cost`/
@@ -172,7 +224,7 @@ function BoundDock({
   // U3 — only fetched for the breakpoint-risk lookup below; harmless in
   // 'run' mode (cached under the same ['nodes', wf] key Rail/Center already
   // populate, so this is very rarely a fresh network round trip).
-  const nodesQ = useNodes(wf);
+  const nodesQ = useWorkflowNodes(wf);
   const riskById = new Map((nodesQ.data ?? []).map((n) => [n.id, n.risk]));
 
   const pauseM = usePauseRun();
@@ -318,6 +370,7 @@ function BoundDock({
           </p>
         )}
         <Prog pct={(100 * run.done) / total} />
+        <RunTimeline run={run} />
         <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
           <Btn style={{ flex: 1 }} onClick={onUnbind}>
             unbind · back to build
