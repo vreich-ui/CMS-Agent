@@ -14,7 +14,7 @@ import {
   STRATEGY_PLAYBOOK_TARGET_NODES,
   type StrategyLearningResult
 } from "../improvement/strategyLearning.js";
-import { trackingSinkConnectionState, TRACKING_PROJECT_ID_ENV, type TrackingSinkConnectionState } from "../improvement/trackingIngest.js";
+import { trackingSinkConnectionState, TRACKING_PROJECT_ID_ENV, type TrackingSinkConnectionState, CMS_AGENT_PROJECT_ID_ENV } from "../improvement/trackingIngest.js";
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
 import type { ImprovementRepository } from "../repository/interfaces/ImprovementRepository.js";
 import { repositoryManager } from "../runtime/repositories.js";
@@ -53,6 +53,12 @@ export const trailingUtcDays = (days: number, reference: Date = new Date()): { f
 export type StrategyLearningJobOptions = {
   /** Tracking partition to read (the sink's TRACKING_PROJECT_ID). Falls back to that env var. */
   projectId?: string;
+  /**
+   * C2 (part 2) — the CMS-Agent project id (`dr-lurie`) whose playbooks this run's lessons belong to.
+   * Falls back to CMS_AGENT_PROJECT_ID, the same env var the tracking ingest job reads. Omitted, the
+   * promotion writes the fleet playbook as it always has.
+   */
+  cmsAgentProjectId?: string;
   /** Window bounds; default to the trailing STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS whole UTC days. */
   from?: string;
   to?: string;
@@ -68,7 +74,7 @@ export type StrategyLearningJobOptions = {
   now?: () => Date;
 };
 
-export type StrategyLearningWindow = { projectId: string; from: string; to: string };
+export type StrategyLearningWindow = { projectId: string; from: string; to: string; cmsAgentProjectId?: string };
 
 export type StrategyLearningJobResult =
   | { status: "skipped_unconfigured"; reason: string; connection: TrackingSinkConnectionState }
@@ -117,12 +123,14 @@ export async function runStrategyLearningJob(options: StrategyLearningJobOptions
   }
 
   const defaults = trailingUtcDays(STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS, options.now?.() ?? new Date());
-  const window: StrategyLearningWindow = { projectId, from: options.from?.trim() || defaults.from, to: options.to?.trim() || defaults.to };
+  const cmsAgentProjectId = options.cmsAgentProjectId?.trim() || env[CMS_AGENT_PROJECT_ID_ENV]?.trim();
+  // Reported on the window so `--dry-run` answers "whose playbooks will this teach?" before it runs.
+  const window: StrategyLearningWindow = { projectId, from: options.from?.trim() || defaults.from, to: options.to?.trim() || defaults.to, ...(cmsAgentProjectId ? { cmsAgentProjectId } : {}) };
   if (options.dryRun) return { status: "dry_run", window, targetNodes: [...STRATEGY_PLAYBOOK_TARGET_NODES], connection };
 
   bootstrapWorkspaceStore();
   const result = await ingestStrategyRollups(
-    { projectId: window.projectId, from: window.from, to: window.to },
+    { projectId: window.projectId, from: window.from, to: window.to, ...(window.cmsAgentProjectId ? { cmsAgentProjectId: window.cmsAgentProjectId } : {}) },
     {
       learningRepository: options.learningRepository ?? repositoryManager.getLearningRepository(),
       improvementRepository: options.improvementRepository ?? repositoryManager.getImprovementRepository(),

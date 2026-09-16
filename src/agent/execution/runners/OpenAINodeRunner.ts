@@ -1,7 +1,7 @@
 import { Agent, run, tool, OpenAIProvider } from "@openai/agents";
 import { recordModelUsage, summarizeModelUsage, estimateModelCost } from "../../observability/modelUsage.js";
 import { buildAgentModel, resolveProvider } from "../providers/providerRegistry.js";
-import { renderPlaybookForPrompt } from "../../improvement/playbook.js";
+import { composePlaybookForDispatch } from "../../improvement/playbookRetrieval.js";
 import { repositoryManager } from "../../runtime/repositories.js";
 import { getTool, resolveEffectiveToolsForNode } from "../../tools/toolResolver.js";
 import { toolInputJsonSchema } from "../../tools/toolJsonSchema.js";
@@ -424,8 +424,10 @@ export class OpenAINodeRunner implements NodeRunner {
     // Node-scoped ACE playbook replaces the old inject-every-global-observation behavior
     // (data-model-gaps §6): curated, deduplicated, size-budgeted lessons for THIS node only.
     // Synthetic improvement nodes have no playbook, so judge prompts stay uncontaminated.
-    const playbook = await repositoryManager.getImprovementRepository().getPlaybook(node.id).catch(() => undefined);
-    const playbookText = playbook ? renderPlaybookForPrompt(playbook) : "";
+    // C2 part 2 — the node's lessons FOR THIS TENANT, composed with the fleet's: site first, then
+    // fleet, deduplicated, under one budget (composePlaybookForDispatch). A tenant with no lessons of
+    // its own reads exactly what it read before scope existed.
+    const playbookText = (await composePlaybookForDispatch(node.id, { site: context.run.projectId }, repositoryManager.getImprovementRepository())).text;
     // B1 — the Responses API refuses a response_format schema with a ROOT combinator ("schema must
     // not have allOf at the top level"), which is exactly how the four DTC handoff contracts express
     // their invariants. Send the derived schema; keep node.outputSchema whole for the post-turn

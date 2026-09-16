@@ -3,7 +3,7 @@ import { runStallFacts, HALTED_EXECUTION_STATUSES, type ApprovalRequired, type E
 import { resolveProjectConnection } from "../projects/projectMcpAdapter.js";
 import { RunConcurrencyError, type ExecutionRepository, type RunSummaryRecord } from "../repository/interfaces/ExecutionRepository.js";
 import { saveNodeAdvance } from "./nodeAdvanceSave.js";
-import { pinSkillSelection } from "../skills/runSkillSelection.js";
+import { pinSkillSelection, runScopeContext } from "../skills/runSkillSelection.js";
 import { beginDispatchHeartbeat, DISPATCH_HEARTBEAT_GRACE_MS, DISPATCH_HEARTBEAT_INTERVAL_MS, endDispatchHeartbeat, isDispatchHeartbeatSilent, resolveDispatchHeartbeatRepository, type DispatchHeartbeat } from "./dispatchHeartbeat.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { WorkspaceRepository } from "../repository/interfaces/WorkspaceRepository.js";
@@ -265,7 +265,7 @@ const recordDryRunNodeUsage = async (run: WorkflowExecutionRecord, node: Workspa
   metadata: { dryRun: true, source: "workflow.run_next_node", estimateMethod: "deterministic_mock_length" }
 });
 
-export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string; commissionedBy?: string; commissioningRationale?: string; outputMode?: RunOutputMode };
+export type StartDryRunInput = { projectId: string; input?: unknown; workflowId?: string; executionMode?: ExecutionMode; entrypoint?: WorkflowEntrypoint; budgetUsd?: number; requestId?: string; commissionedBy?: string; commissioningRationale?: string; outputMode?: RunOutputMode; objective?: string };
 export type ListRunsInput = { projectId?: string; workflowId?: string };
 
 // Session A (2026-08-03) — cursor pagination + filters on workflow.list_runs. PR #105 made each row
@@ -611,6 +611,8 @@ const buildInitialRun = (data: StartDryRunInput, nodes: WorkspaceNode[], runId =
     requestId,
     workflowId: data.workflowId ?? WORKFLOW_ID,
     projectId: data.projectId,
+    // C2 part 2 — absent unless the caller named one; never defaulted, never derived.
+    ...(data.objective ? { objective: data.objective } : {}),
     status: anyQueued ? "queued" : "completed",
     currentNodeId: firstRunnable?.id,
     startedAt: timestamp,
@@ -1327,7 +1329,7 @@ export async function resetRun(runId: string, store: ExecutionRepository = repos
     // money already spent), and left the platform's adoption sweep unable to see it at all — so the
     // article would publish with no accountable origin anywhere, which is precisely the state the
     // stamp exists to make impossible.
-    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd, commissionedBy: existing.commissionedBy, commissioningRationale: existing.commissioningRationale, outputMode: existing.outputMode }, nodes, runId, existing.requestId);
+    const rebuilt = buildInitialRun({ projectId: existing.projectId, input: existing.initialInput, workflowId: existing.workflowId, executionMode: existing.executionMode, entrypoint: existing.entrypoint, budgetUsd: existing.budgetUsd, commissionedBy: existing.commissionedBy, commissioningRationale: existing.commissioningRationale, outputMode: existing.outputMode, objective: existing.objective }, nodes, runId, existing.requestId);
     return store.resetRun(runId, {
       ...rebuilt,
       ...(existing.operatorPublishDecision ? { operatorPublishDecision: existing.operatorPublishDecision, operatorDecisionSource: existing.operatorDecisionSource ?? "explicit" } : {}),
@@ -3652,7 +3654,10 @@ async function dispatchRunnableNode(initialRun: WorkflowExecutionRecord, nextNod
     // what makes it correct: the claim is the moment this node became this driver's to execute, so
     // it is the moment its policy stops being negotiable. Write-once — a reclaim or a retry finds
     // the existing entry and leaves it alone.
-    await pinSkillSelection(run, nextNode, repositoryManager.getSkillRepository());
+    // C2 part 2 — and the pin NARROWS, using the run's own situation: site = projectId, task =
+    // nodeId, objective = the run's when it declared one (runScopeContext). The scope filter runs
+    // here, once, at the same moment and on the same read as the version stamp.
+    await pinSkillSelection(run, nextNode, repositoryManager.getSkillRepository(), { context: runScopeContext(run, nextNode.id) });
     run = await store.saveRun(run);
     state = stateById(run).get(nextNode.id) as NodeExecutionState;
   }

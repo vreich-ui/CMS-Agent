@@ -40,7 +40,7 @@ import { dialectObjectTypes, renderContractDigestBlock, resolveContractDigests, 
 import { prefetchObjectDossier, renderObjectDossier } from "./objectDossier.js";
 import { SAFE_READ_FAILURES, safeWarningCode } from "./safeReason.js";
 import { renderChatOrigin, runFactsFrom, type ChatOriginFacts, type ConversationOrigin } from "./chatOrigin.js";
-import { clientManagerPlaybookNodeId, renderHouseLessons } from "./houseLessons.js";
+import { readClientManagerPlaybook, renderHouseLessons } from "./houseLessons.js";
 
 /**
  * The plan's ceiling, in the same rough currency the rest of this repo estimates tokens in
@@ -254,7 +254,7 @@ export const assembleBriefing = async (params: AssembleBriefingParams, deps: Bri
       resolveContractDigests({ projectId: config.projectId, runId: cacheKeyRunId, objectTypes: dialectObjectTypes(config) }, { ...deps, cache: briefingReadCache })) ?? [];
 
     const lessons = deps.improvementRepository
-      ? renderHouseLessons(await attempt("house lessons", degradations, () => deps.improvementRepository!.getPlaybook(clientManagerPlaybookNodeId(config.projectId))))
+      ? renderHouseLessons(await attempt("house lessons", degradations, () => readClientManagerPlaybook(config.projectId, deps.improvementRepository!)))
       : "";
 
     let boundObject: string | undefined;

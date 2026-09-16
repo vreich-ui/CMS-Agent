@@ -44,6 +44,7 @@ import type { LearningRepository } from "../repository/interfaces/LearningReposi
 import type { ImprovementRepository } from "../repository/interfaces/ImprovementRepository.js";
 import type { LearningObservation } from "../mcp/workspace/store.js";
 import { applyPlaybookDelta } from "./playbook.js";
+import { FLEET_SCOPE_KEY, scopeKey, type PolicyScope } from "../scope/policyScope.js";
 import type { PlaybookDelta, PlaybookItem, PlaybookItemKind } from "./improvementTypes.js";
 import { fetchRollupRows, metricsFromRow, trackingSinkConnectionState, type RollupFetchDeps } from "./trackingIngest.js";
 
@@ -550,6 +551,8 @@ export function contradictingStrategySightings(sightings: StrategySignalSighting
 // ── promotion ────────────────────────────────────────────────────────────────
 
 export type StrategyPromotionOutcome = {
+  /** C2 (part 2) — WHOSE playbooks this pass wrote to, in the scope vocabulary's own key form. */
+  scopeKey: string;
   promoted: Array<{ nodeId: string; signal: string; text: string }>;
   reinforced: Array<{ nodeId: string; signal: string; itemId: string }>;
   countered: Array<{ nodeId: string; signal: string; itemId: string }>;
@@ -570,20 +573,33 @@ const findItemByPrefix = (items: PlaybookItem[], prefix: string): PlaybookItem |
  *     invented here, and nothing is deleted behind an operator's back.
  *
  * Never throws: a repository that refuses one node's playbook is recorded and the rest still run.
+ *
+ * C2 (part 2) — AND IT WRITES INTO A SCOPE. This function is reached from a PER-PROJECT ingest
+ * (StrategyLearningParams.projectId): the signals are one tenant's measured outcomes, from one
+ * tenant's tracking rollups. Until the scope vocabulary existed there was nowhere to put them except
+ * `getPlaybook(nodeId)` — the one global playbook for that node — so dr-lurie's measured outcomes
+ * were injected into every other tenant's dispatch of `draft_writer`, and nothing on the record said
+ * whose evidence it was. That is the leak `houseLessons.ts` had already dodged by hand for the chat
+ * path, and it is the reason this half of C2 exists.
+ *
+ * An omitted scope still writes the fleet playbook. That is not a default so much as a statement: a
+ * caller with no project to name has produced fleet evidence, and has to say so by not naming one.
  */
 export async function promoteStrategySignals(
   sightings: StrategySignalSighting[],
   deps: { improvementRepository: ImprovementRepository },
-  nodeIds: readonly string[] = STRATEGY_PLAYBOOK_TARGET_NODES
+  options: { scope?: PolicyScope; nodeIds?: readonly string[] } = {}
 ): Promise<StrategyPromotionOutcome> {
-  const outcome: StrategyPromotionOutcome = { promoted: [], reinforced: [], countered: [], errors: [] };
+  const nodeIds = options.nodeIds ?? STRATEGY_PLAYBOOK_TARGET_NODES;
+  const scope = options.scope;
+  const outcome: StrategyPromotionOutcome = { scopeKey: scopeKey(scope), promoted: [], reinforced: [], countered: [], errors: [] };
   const stable = stableStrategySignals(sightings);
   const contradictions = contradictingStrategySightings(sightings);
   if (!stable.length && !contradictions.length) return outcome;
 
   for (const nodeId of nodeIds) {
     try {
-      const existing = await deps.improvementRepository.getPlaybook(nodeId);
+      const existing = await deps.improvementRepository.getPlaybook(nodeId, scope);
       const items = existing?.items ?? [];
       const delta: PlaybookDelta = {};
       const add: NonNullable<PlaybookDelta["add"]> = [];
@@ -617,7 +633,7 @@ export async function promoteStrategySignals(
       if (markHarmful.size) delta.markHarmful = [...markHarmful];
       if (!delta.add && !delta.markHelpful && !delta.markHarmful) continue;
 
-      await deps.improvementRepository.savePlaybook(applyPlaybookDelta(existing, nodeId, delta, now()));
+      await deps.improvementRepository.savePlaybook(applyPlaybookDelta(existing, nodeId, delta, now(), scope));
       for (const entry of promotedThisPass) outcome.promoted.push({ nodeId, ...entry });
     } catch (error) {
       outcome.errors.push({ scope: nodeId, error: error instanceof Error ? error.message : String(error) });
@@ -628,7 +644,27 @@ export async function promoteStrategySignals(
 
 // ── the ingest ───────────────────────────────────────────────────────────────
 
-export type StrategyLearningParams = { projectId: string; from: string; to: string };
+export type StrategyLearningParams = {
+  /** The TRACKING partition to read — the sink's own id (`drlurie`), in the sink's namespace. */
+  projectId: string;
+  from: string;
+  to: string;
+  /**
+   * C2 (part 2) — the CMS-AGENT project id (`dr-lurie`) these lessons belong to, and the ONLY id
+   * that may become a playbook scope.
+   *
+   * A SEPARATE field from `projectId` for the same reason `TrackingIngestParams.cmsAgentProjectId`
+   * is separate from its own: the two ids name the same tenant in two different namespaces, and a
+   * run's scope context is built from `run.projectId`, which is the CMS-Agent spelling. Scoping by
+   * the sink's spelling would write a playbook at `site=drlurie` that no dispatch ever reads — a
+   * lesson stored nowhere, which is harder to notice than a lesson stored everywhere.
+   *
+   * Omitted means the promotion writes the FLEET playbook, exactly as it did before scope existed.
+   * That is stated rather than defaulted away: an ingest that cannot name the tenant in CMS-Agent's
+   * namespace has not earned the right to file lessons under one.
+   */
+  cmsAgentProjectId?: string;
+};
 export type StrategyLearningDeps = RollupFetchDeps & {
   learningRepository: LearningRepository;
   improvementRepository: ImprovementRepository;
@@ -662,7 +698,7 @@ export type StrategyLearningResult = {
   errors: Array<{ scope?: string; error: string }>;
 };
 
-const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], promotion: { promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
 
 /** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
  * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
@@ -744,7 +780,15 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   // to the full observed history and not just to what this run happened to fetch.
   try {
     const stored = await deps.learningRepository.listObservations();
-    result.promotion = await promoteStrategySignals(strategySightingsFromObservations(stored, params.projectId), deps);
+    // The ingest is per project, so its promotion is per project: these lessons belong to this
+    // tenant's playbooks and to no other tenant's.
+    result.promotion = await promoteStrategySignals(
+      strategySightingsFromObservations(stored, params.projectId),
+      deps,
+      // The sightings are read by the SINK's id; the playbook is written under CMS-AGENT's. See
+      // StrategyLearningParams.cmsAgentProjectId for why those must not be the same field.
+      params.cmsAgentProjectId ? { scope: { site: params.cmsAgentProjectId } } : {}
+    );
   } catch (error) {
     result.errors.push({ scope: "promotion", error: error instanceof Error ? error.message : String(error) });
   }
