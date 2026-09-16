@@ -316,8 +316,11 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
 // write them that way — cloneEngine.ts passes those straight through without re-authoring them, and
 // this function still has to make sense of them.
 //
-// An argument that is in NEITHER the engine nor the wire allowlist for this tool is a TYPED REFUSAL,
-// never a silent drop and never a pass-through to the platform's additionalProperties:false schema.
+// Any argument key that is neither a field's engine name nor its wire name is a typed refusal, not a
+// silently dropped or silently forwarded field: an unrecognized key is far more likely a miscased
+// mistake (the exact bug class this module exists to end) than a deliberate new field, and letting it
+// through would either violate the platform's `additionalProperties: false` at the wire or, worse,
+// collide with nothing and vanish.
 export function toWireArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {
   const spec = TOOL_WIRE_SPECS[tool];
   if (!spec) {
