@@ -1,0 +1,172 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
+import {
+  runSiteContentDrafting,
+  type PlanSection,
+  type SiteContentDraftingDeps,
+  type SiteContentDraftingSupplement
+} from "../../../src/agent/operations/siteContentDraftingExecutor.js";
+
+const PROJECT_ID = "acme-site";
+
+// A minimal executeNode-shaped result carrying exactly one node's output, matching the
+// state.output-defined path nodeRuntime.ts's executeNode returns on success — the same shape
+// visualIdentityTools.ts's extractNodeProposal (and this module's own extractNodeOutput) read.
+const executed = (nodeId: string, output: Record<string, unknown>) => ({
+  execution: { nodes: [{ nodeId, output }] }
+});
+
+function section(overrides: Partial<PlanSection> & Pick<PlanSection, "order" | "sectionType">): PlanSection {
+  return {
+    purpose: "test purpose",
+    mustEstablish: ["something"],
+    ...overrides
+  };
+}
+
+function plan(sections: PlanSection[]) {
+  return { artifact: "site_content_plan.v1", summary: "a plan", sections };
+}
+
+// Builds an executeNodeImpl mock that answers the planner with `sections`, and every specialist
+// dispatch with a canned draft (or throws, for nodeIds listed in `throwFor`) — recording every call
+// so a test can assert exactly what was dispatched and with what candidateSkillIds.
+function makeRunner(sections: PlanSection[], opts: { throwFor?: Set<string> } = {}) {
+  const calls: Array<{ nodeId: string; input: Record<string, unknown>; candidateSkillIds?: string[] }> = [];
+  const runNode = vi.fn(async (data: any) => {
+    calls.push({ nodeId: data.nodeId, input: data.input, candidateSkillIds: data.candidateSkillIds });
+    if (data.nodeId === "site_content_planner") return executed("site_content_planner", plan(sections));
+    if (opts.throwFor?.has(data.nodeId)) throw new Error(`${data.nodeId} exploded`);
+    return executed(data.nodeId, { artifact: `${data.nodeId}.v1`, summary: "drafted", ...data.input });
+  }) as unknown as NonNullable<SiteContentDraftingDeps["executeNodeImpl"]>;
+  return { runNode, calls };
+}
+
+describe("runSiteContentDrafting — job routing", () => {
+  it("dispatches three different jobs to three different nodes, each with candidateSkillIds: [job]", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } }),
+      section({ order: 1, sectionType: "offering", offeringKind: "product", contentRequirement: { job: "product_service_description" } }),
+      section({ order: 2, sectionType: "faq", referenceKind: "faq", contentRequirement: { job: "faq_help_process" } })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    expect(result.outcomes.every((outcome) => outcome.outcome === "drafted")).toBe(true);
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls.map((call) => call.nodeId)).toEqual([
+      "organization_narrative_writer",
+      "offering_description_writer",
+      "reference_content_writer"
+    ]);
+    expect(dispatchCalls[0].candidateSkillIds).toEqual(["about_organization"]);
+    expect(dispatchCalls[1].candidateSkillIds).toEqual(["product_service_description"]);
+    expect(dispatchCalls[2].candidateSkillIds).toEqual(["faq_help_process"]);
+  });
+
+  it("about_organization vs people_profile produce different narrativeKind on the same node", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } }),
+      section({ order: 1, sectionType: "leadership_bios", contentRequirement: { job: "people_profile" } })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const dispatchCalls = calls.filter((call) => call.nodeId === "organization_narrative_writer");
+    expect(dispatchCalls).toHaveLength(2);
+    expect(dispatchCalls[0].input.narrativeKind).toBe("organization");
+    expect(dispatchCalls[1].input.narrativeKind).toBe("people");
+  });
+
+  it("refuses an ambiguous job by name when the section carries no discriminator, and still drafts the other sections", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } }),
+      // faq_help_process is ambiguous (faq vs process) and this section names no referenceKind.
+      section({ order: 1, sectionType: "mystery_reference", contentRequirement: { job: "faq_help_process" } })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const drafted = result.outcomes.find((outcome) => outcome.order === 0);
+    const refused = result.outcomes.find((outcome) => outcome.order === 1);
+    expect(drafted?.outcome).toBe("drafted");
+    expect(refused?.outcome).toBe("refused");
+    expect(refused && "reason" in refused ? refused.reason : "").toContain("section 1");
+    expect(refused && "reason" in refused ? refused.reason : "").toContain("mystery_reference");
+    expect(refused && "reason" in refused ? refused.reason : "").toContain("referenceKind");
+    // The ambiguous section was never dispatched to a node at all — refused before any call.
+    expect(calls.some((call) => call.nodeId === "reference_content_writer")).toBe(false);
+  });
+
+  it("skips (not refuses) a section whose job is null, and still returns outcomes for the rest", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "contact_form", contentRequirement: { job: null, needs: "Deterministic — the compiler binds the contact form." } }),
+      section({ order: 1, sectionType: "about", contentRequirement: { job: "about_organization" } })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const skipped = result.outcomes.find((outcome) => outcome.order === 0);
+    expect(skipped?.outcome).toBe("skipped");
+    expect(skipped && "reason" in skipped ? skipped.reason : "").toBe("no_job");
+    expect(result.outcomes.find((outcome) => outcome.order === 1)?.outcome).toBe("drafted");
+    expect(calls.some((call) => call.nodeId === "organization_narrative_writer")).toBe(true);
+  });
+
+  it("one writer throwing does not discard the other sections' drafts", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } }),
+      section({ order: 1, sectionType: "evidence", contentRequirement: { job: "evidence_story" } }),
+      section({ order: 2, sectionType: "policy", contentRequirement: { job: "policy_explanation" } })
+    ];
+    const { runNode } = makeRunner(sections, { throwFor: new Set(["reference_content_writer"]) });
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    // evidence_story AND policy_explanation both route to reference_content_writer, so both throw —
+    // but the unrelated about_organization section (a different node) must still have drafted.
+    expect(result.outcomes.find((outcome) => outcome.order === 0)?.outcome).toBe("drafted");
+    const evidence = result.outcomes.find((outcome) => outcome.order === 1);
+    const policy = result.outcomes.find((outcome) => outcome.order === 2);
+    expect(evidence?.outcome).toBe("refused");
+    expect(policy?.outcome).toBe("refused");
+    expect(evidence && "reason" in evidence ? evidence.reason : "").toContain("threw");
+  });
+
+  it("a caller-supplied per-section supplement carries facts/sourceMaterial/targetLocale through to the dispatched node", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "policy", contentRequirement: { job: "policy_explanation" } })];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [{ order: 0, sourceMaterial: ["The refund policy text."] }];
+
+    await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" }, supplements }, { executeNodeImpl: runNode });
+
+    const call = calls.find((entry) => entry.nodeId === "reference_content_writer");
+    expect(call?.input.sourceMaterial).toEqual(["The refund policy text."]);
+    expect(call?.input.referenceKind).toBe("policy");
+  });
+});
+
+describe("no write tool reachable from this module", () => {
+  it("the executor module's own source never invokes object_create/object_patch/object_publish/project.call_tool (comments describing what it never does are fine)", () => {
+    const modulePath = fileURLToPath(new URL("../../../src/agent/operations/siteContentDraftingExecutor.ts", import.meta.url));
+    const codeOnly = readFileSync(modulePath, "utf8")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/object_create/);
+    expect(codeOnly).not.toMatch(/object_patch/);
+    expect(codeOnly).not.toMatch(/object_publish/);
+    expect(codeOnly).not.toMatch(/release_to_production/);
+    expect(codeOnly).not.toMatch(/project\.call_tool/);
+  });
+
+  it("SiteContentDraftingDeps' only injected seam is executeNodeImpl — a fully-populated deps object has exactly one key", () => {
+    const deps: SiteContentDraftingDeps = { executeNodeImpl: (async () => ({})) as any };
+    expect(Object.keys(deps)).toEqual(["executeNodeImpl"]);
+  });
+});

@@ -52,6 +52,7 @@ import { filterRecordsByProject } from "../../improvement/projectScope.js";
 import { createSiteDuplicationTools } from "./siteDuplicationTools.js";
 import { createSiteCredentialTools } from "./siteCredentialTools.js";
 import { createVisualIdentityTools } from "./visualIdentityTools.js";
+import { createSiteContentTools } from "./siteContentTools.js";
 import { createOperationTools } from "./operationTools.js";
 import { createPlannerTools } from "./plannerTools.js";
 import { FORBIDDEN_PROJECT_VERBS } from "../../tools/forbiddenProjectVerbs.js";
@@ -1845,6 +1846,11 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     // SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts) precisely so `node_execute` never has to be:
     // it takes no nodeId, no executionMode, and writes nothing. See visualIdentityTools.ts.
     ...createVisualIdentityTools({ workspaceRepository, executionRepository, projectRepository }),
+    // C4 — the one narrow, site-scoped door to the site-content specialist roster
+    // (siteContentSpecialistNodes.ts), dispatched by job through
+    // operations/siteContentDraftingExecutor.ts. Present in SITE_CLIENT_MANAGER_TOOLS
+    // (siteGenesis.ts) precisely so `node_execute` never has to be — see siteContentTools.ts.
+    ...createSiteContentTools({ projectRepository }),
     ...createAgentTools({ workspaceRepository, projectRepository, conversationTurnRepository: repositoryManager.getConversationTurnRepository(), usageRepository, skillRepository, executionRepository, improvementRepository: repositoryManager.getImprovementRepository() }),
     ...createChangesTools({ workspaceRepository, changeRepository, meta }),
     ...createConstellationTools({ workspaceRepository, executionRepository, usageRepository, skillRepository, projectRepository }),
