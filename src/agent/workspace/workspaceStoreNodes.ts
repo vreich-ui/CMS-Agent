@@ -3,6 +3,7 @@ import { deriveStoredExecutionFields } from "./nodeExecution.js";
 import { captureConductorNodes } from "./captureConductorNodes.js";
 import { cloneConductorNodes } from "./cloneConductorNodes.js";
 import { visualIdentityNodes } from "./visualIdentityNodes.js";
+import { siteContentSpecialistNodes } from "./siteContentSpecialistNodes.js";
 import type { WorkspaceNode } from "./nodeTypes.js";
 
 // T15.16 (#195) — the workspace STORE's own governance-visible node set, as distinct from a
@@ -58,16 +59,17 @@ const cloneNode = (node: WorkspaceNode): WorkspaceNode => ({
   metadata: node.metadata ? structuredClone(node.metadata) : undefined
 });
 
-// The four sources, in the order they appear in a fresh union: publishing's own canonical set first
+// The five sources, in the order they appear in a fresh union: publishing's own canonical set first
 // (unchanged ordering/behavior for every existing publishing-only caller), then capture_conductor's
-// own upstream nodes, then clone_conductor's own upstream nodes, then (C5) visual_identity's pair.
+// own upstream nodes, then clone_conductor's own upstream nodes, then (C5) visual_identity's pair,
+// then (C3) site_content_specialists' five.
 //
-// visual_identity's two nodes are listed RAW for the same reason capture's and clone's are, and the
-// reason is even simpler here: this workflow composes no publishing tail at all, so its array declares
-// no shared-tail node and can collide with nothing.
-const workspaceStoreSources = (): WorkspaceNode[] => [...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes];
+// visual_identity's two nodes and site_content_specialists' five are listed RAW for the same reason
+// capture's and clone's are, and the reason is even simpler for both: neither workflow composes a
+// publishing tail at all, so their arrays declare no shared-tail node and can collide with nothing.
+const workspaceStoreSources = (): WorkspaceNode[] => [...listWorkspaceNodes(), ...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes, ...siteContentSpecialistNodes];
 
-// Duplicate ids across the three sources are not expected (verified by
+// Duplicate ids across the five sources are not expected (verified by
 // workspaceStoreNodes.test.ts) — this defensive dedup keeps the FIRST occurrence (publishing's own
 // tail definition wins over anything a future capture/clone edit might accidentally declare under
 // the same id) rather than throwing, so a governance-surface read degrades to "one of the two", never

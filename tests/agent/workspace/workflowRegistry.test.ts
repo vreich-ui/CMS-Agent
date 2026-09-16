@@ -21,7 +21,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 
 describe("§2.23 workflow registry", () => {
   it("ships publishing_conductor, capture_conductor, clone_conductor, visual_identity and pdf_template_studio as the registered workflows, resolving the canonical arrays", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio", "asset_lookup_studio"]);
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio", "asset_lookup_studio", "site_content_specialists"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
     expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toContain("clone_intake");
@@ -51,6 +51,15 @@ describe("§2.23 workflow registry", () => {
       "image_revision_compile_preview",
       "image_revision_apply",
       "image_revision_report"
+    ]);
+    // C3 — site_content_specialists: five independent writer/planner nodes, also no composed tail
+    // (none of them publishes; see siteContentSpecialistNodes.ts's own riskLevel comment).
+    expect(getWorkflowDefinition("site_content_specialists")?.canonicalNodes().map((node) => node.id)).toEqual([
+      "site_content_planner",
+      "organization_narrative_writer",
+      "offering_description_writer",
+      "reference_content_writer",
+      "site_content_reviewer"
     ]);
     expect(getWorkflowDefinition("money_page")).toBeUndefined();
   });
