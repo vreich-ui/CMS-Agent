@@ -181,3 +181,111 @@ describe("run.objective", () => {
     expect((await resetRun(named.runId, store)).objective).toBe("q4_launch");
   });
 });
+
+
+/**
+ * C3 — a recipe narrows a node's candidates for ONE dispatch, never widens them.
+ *
+ * `reference_content_writer` will carry several task skills — different JOBS on one node, not
+ * variants of one job — that the scope vocabulary cannot tell apart (its `task` dimension is the
+ * nodeId, shared by all of them). `candidateSkillIds` lets the recipe that knows which job this
+ * dispatch is say so, without touching the node's assignment.
+ */
+describe("pinSkillSelection, candidateSkillIds", () => {
+  const CRAFT = "editorial_craft";
+  const SEO = "seo_review";
+  const node = (assigned: string[]) => ({ ...listWorkspaceNodes().find((n) => n.id === "input_triage")!, assignedSkills: assigned, allowedTools: [] });
+  const run = (over: Partial<WorkflowExecutionRecord> = {}) =>
+    ({ runId: "run_test", workflowId: "publishing_conductor", projectId: "dr-lurie", stageOutputs: {}, nodes: [], artifacts: [], errors: [], ...over }) as unknown as WorkflowExecutionRecord;
+
+  beforeEach(async () => {
+    vi.stubEnv("WORKSPACE_STORE", "memory");
+    resetRepositoryManager();
+  });
+  afterEach(() => { resetRepositoryManager(); vi.unstubAllEnvs(); });
+
+  it("narrows to the supplied subset but refuses any id the node was not assigned, recording why", async () => {
+    // A recipe invoking the policy_explanation job must not be able to smuggle in a skill this node
+    // was never assigned — the assignment is the sole authority, this is only a filter on top of it.
+    const skills = repositoryManager.getSkillRepository();
+    const record = run();
+
+    const pinned = await pinSkillSelection(record, node([CRAFT]), skills, { candidateSkillIds: [CRAFT, "faq_help_process"] });
+
+    expect(pinned.skillIds).toEqual([CRAFT]);
+    expect(pinned.dropped).toEqual([
+      { skillId: "faq_help_process", reason: "not_assigned", detail: expect.stringContaining("faq_help_process") }
+    ]);
+  });
+
+  it("never mutates node.assignedSkills, and the pin's skillIds is never that same array instance", async () => {
+    const skills = repositoryManager.getSkillRepository();
+    const record = run();
+    const theNode = node([CRAFT, SEO]);
+    const original = theNode.assignedSkills;
+    const originalCopy = [...original];
+
+    const pinned = await pinSkillSelection(record, theNode, skills, { candidateSkillIds: [CRAFT] });
+
+    expect(theNode.assignedSkills).toBe(original);
+    expect(theNode.assignedSkills).toEqual(originalCopy);
+    expect(pinned.skillIds).not.toBe(theNode.assignedSkills);
+  });
+
+  it("still runs the supplied subset through scope narrowing — a recipe does not bypass the vocabulary", async () => {
+    const skills = repositoryManager.getSkillRepository();
+    await skills.update(SEO, { scope: { site: "fernwell" } as PolicyScope });
+    const record = run();
+
+    const pinned = await pinSkillSelection(record, node([CRAFT, SEO]), skills, { candidateSkillIds: [CRAFT, SEO] });
+
+    expect(pinned.skillIds).toEqual([CRAFT]);
+    expect(pinned.dropped).toEqual([{ skillId: SEO, reason: "out_of_scope", detail: expect.stringContaining("site fernwell") }]);
+  });
+
+  it("records source as recipe_candidates and keeps the supplied subset on the pin", async () => {
+    const skills = repositoryManager.getSkillRepository();
+    const record = run();
+
+    const pinned = await pinSkillSelection(record, node([CRAFT, SEO]), skills, { candidateSkillIds: [CRAFT] });
+
+    expect(pinned.source).toBe("recipe_candidates");
+    expect(pinned.candidateSkillIds).toEqual([CRAFT]);
+  });
+
+  it("is still write-once: a retry with a different candidateSkillIds returns the first answer untouched", async () => {
+    const skills = repositoryManager.getSkillRepository();
+    const record = run();
+    const first = await pinSkillSelection(record, node([CRAFT, SEO]), skills, { candidateSkillIds: [CRAFT] });
+    const second = await pinSkillSelection(record, node([CRAFT, SEO]), skills, { candidateSkillIds: [SEO] });
+
+    expect(second).toBe(first);
+    expect(second.skillIds).toEqual([CRAFT]);
+  });
+
+  it("treats an empty candidateSkillIds as a real answer — this dispatch uses no skills", async () => {
+    const skills = repositoryManager.getSkillRepository();
+    const record = run();
+
+    const pinned = await pinSkillSelection(record, node([CRAFT, SEO]), skills, { candidateSkillIds: [] });
+
+    expect(pinned.skillIds).toEqual([]);
+    expect(pinned.source).toBe("recipe_candidates");
+    expect(pinned.candidateSkillIds).toEqual([]);
+  });
+
+  it("degraded: the recipe's narrowing still applies with no store read, but scope narrowing does not", async () => {
+    // The recipe's candidates are a caller-supplied fact, not something read from the skill
+    // repository — an unreadable store cannot touch them. What it costs is the scope pass, which
+    // never runs, so `degradedReason` still says the set is wider than the vocabulary would have
+    // made it.
+    const broken = { ...repositoryManager.getSkillRepository(), list: async () => { throw new Error("store unreachable"); } } as never;
+    const record = run();
+
+    const pinned = await pinSkillSelection(record, node([CRAFT, SEO]), broken, { candidateSkillIds: [CRAFT] });
+
+    expect(pinned.skillIds).toEqual([CRAFT]);
+    expect(pinned.source).toBe("recipe_candidates");
+    expect(pinned.degradedReason).toContain("scope narrowing was not applied");
+  });
+});
