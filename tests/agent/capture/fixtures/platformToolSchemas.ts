@@ -29,7 +29,7 @@
 // OWN tool manifest (mirroring scripts/twoPlaneDrift.ts's approach) for cms-agent to read
 // mechanically instead of re-capturing by hand.
 
-// ───────────────────────────────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // STALENESS GUARD METADATA (read by tests/agent/capture/mcpBoundaryConformance.test.ts).
 //
 // CAPTURED:     2026-08-24
@@ -225,7 +225,7 @@ export const PLATFORM_TOOL_SCHEMAS: Record<string, unknown> = {
     type: "object"
   },
 
-  // ─────────────────────────────────────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
   // SECOND CAPTURE — 2026-09-15, same provenance as the block above: the live platform MCP
   // connector's own tools/list (connector "Kugel-Platform"), pasted verbatim, not retyped from
   // memory and not paraphrased. These four are the verbs Milestone A remainder runner 3a's
