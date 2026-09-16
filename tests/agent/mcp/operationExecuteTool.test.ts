@@ -35,10 +35,12 @@ describe("operation.execute (A4) — READ-ONLY GATED execution entrypoint", () =
   // non-read effect is covered by this same loop without anyone editing this test.
   it("refuses EVERY currently-registered operation whose descriptor declares a non-read effect, naming the offending effect(s)", async () => {
     const nonReadOperations = listOperations().filter((descriptor) => descriptor.effects.some((effect) => effect.riskLevel !== "read"));
-    // Sanity: this is the five write/publish operations the task brief names, not an empty set that
-    // would make the loop below vacuously pass.
+    // Sanity: this is every write/publish operation the catalog holds today, not an empty set that
+    // would make the loop below vacuously pass. T3 (2026-09-16 annotate-bridge plan) added
+    // image_annotation, whose annotate_image effect is riskLevel "write" — so the gate covers it
+    // too, by construction rather than by anyone remembering to list it.
     expect(nonReadOperations.map((d) => d.operationId).sort()).toEqual(
-      ["asset_lookup_adopt", "document_render", "image_template_revision", "pdf_template_family", "visual_identity_review_change"].sort()
+      ["asset_lookup_adopt", "document_render", "image_annotation", "image_template_revision", "pdf_template_family", "visual_identity_review_change"].sort()
     );
 
     for (const descriptor of nonReadOperations) {
