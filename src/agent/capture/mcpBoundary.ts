@@ -252,6 +252,54 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
       { engine: "idempotencyKey", wire: "idempotency_key" }
     ],
     required: ["site_id", "owner_object_type", "owner_object_id"]
+  },
+  // T5 (2026-09-16 annotate-bridge plan) — the three bridge verbs image_annotation_studio speaks.
+  // All three are site-scoped pdf-tool bridge verbs in the same vocabulary as document_render above
+  // (site_id/request_id), with the artifact named by the bridge's own `public_path`/`sha256` pair —
+  // camelCase-free ON THE WIRE for the path, exactly as the captured schemas state. Every field below
+  // is copied verbatim from the live tool schemas captured on 2026-09-16 into
+  // tests/agent/capture/fixtures/platformToolSchemas.ts.
+  analyze_image_layout: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "requestId", wire: "request_id" },
+      { engine: "publicPath", wire: "public_path" },
+      { engine: "sha256", wire: "sha256" }
+    ],
+    required: ["site_id", "request_id"]
+  },
+  annotate_image: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "requestId", wire: "request_id" },
+      { engine: "publicPath", wire: "public_path" },
+      { engine: "sha256", wire: "sha256" },
+      // The AnnotationSpec document is forwarded to pdf-tool VERBATIM and validated only there — the
+      // same opaque posture object_patch's `ops` and preview_pdf_template_fixture's `template_json`
+      // take. This boundary positions it; it never looks inside it.
+      { engine: "spec", wire: "spec", opaque: true },
+      { engine: "slot", wire: "slot" },
+      { engine: "deviceScaleFactor", wire: "device_scale_factor" },
+      { engine: "format", wire: "format" },
+      { engine: "quality", wire: "quality" },
+      { engine: "filename", wire: "filename" },
+      { engine: "label", wire: "label" },
+      { engine: "tags", wire: "tags" },
+      { engine: "idempotencyKey", wire: "idempotency_key" }
+    ],
+    required: ["site_id", "request_id", "spec"]
+  },
+  check_image_text: {
+    fields: [
+      { engine: "siteId", wire: "site_id" },
+      { engine: "requestId", wire: "request_id" },
+      { engine: "publicPath", wire: "public_path" },
+      { engine: "sha256", wire: "sha256" },
+      { engine: "mode", wire: "mode" },
+      { engine: "expect", wire: "expect" },
+      { engine: "languages", wire: "languages" }
+    ],
+    required: ["site_id", "request_id", "mode"]
   }
 };
 
@@ -268,11 +316,8 @@ const TOOL_WIRE_SPECS: Record<string, ToolWireSpec> = {
 // write them that way — cloneEngine.ts passes those straight through without re-authoring them, and
 // this function still has to make sense of them.
 //
-// Any argument key that is neither a field's engine name nor its wire name is a typed refusal, not a
-// silently dropped or silently forwarded field: an unrecognized key is far more likely a miscased
-// mistake (the exact bug class this module exists to end) than a deliberate new field, and letting it
-// through would either violate the platform's `additionalProperties: false` at the wire or, worse,
-// collide with nothing and vanish.
+// An argument that is in NEITHER the engine nor the wire allowlist for this tool is a TYPED REFUSAL,
+// never a silent drop and never a pass-through to the platform's additionalProperties:false schema.
 export function toWireArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {
   const spec = TOOL_WIRE_SPECS[tool];
   if (!spec) {
