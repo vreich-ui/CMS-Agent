@@ -21,7 +21,7 @@ import { validateOutput } from "../../../src/agent/execution/outputValidator.js"
 
 describe("§2.23 workflow registry", () => {
   it("ships publishing_conductor, capture_conductor, clone_conductor, visual_identity and pdf_template_studio as the registered workflows, resolving the canonical arrays", () => {
-    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio", "asset_lookup_studio", "site_content_specialists"]);
+    expect(listRegisteredWorkflowIds()).toEqual([publishingConductorWorkflowId, "capture_conductor", "clone_conductor", "visual_identity", "pdf_template_studio", "image_template_revision_studio", "document_render_studio", "asset_lookup_studio", "image_annotation_studio", "site_content_specialists"]);
     expect(getWorkflowDefinition(publishingConductorWorkflowId)?.canonicalNodes()).toEqual(listWorkspaceNodes());
     expect(getWorkflowDefinition("capture_conductor")?.canonicalNodes().map((node) => node.id)).toContain("capture_crawl");
     expect(getWorkflowDefinition("clone_conductor")?.canonicalNodes().map((node) => node.id)).toContain("clone_intake");
@@ -46,6 +46,14 @@ describe("§2.23 workflow registry", () => {
     expect(getWorkflowDefinition("document_render_studio")?.canonicalNodes().map((node) => node.id)).toEqual(["document_render_execute", "document_render_report"]);
     // A5 (Milestone A remainder) — asset_lookup_studio: one node per declared effect, read then write.
     expect(getWorkflowDefinition("asset_lookup_studio")?.canonicalNodes().map((node) => node.id)).toEqual(["asset_lookup_search", "asset_lookup_adopt"]);
+    // T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio: one node per declared effect
+    // (analyze_image_layout reads, annotate_image writes), plus the terminal node that READS the
+    // operation's own completion evidence out of check_image_text rather than asserting it.
+    expect(getWorkflowDefinition("image_annotation_studio")?.canonicalNodes().map((node) => node.id)).toEqual([
+      "image_annotation_analyze",
+      "image_annotation_draw",
+      "image_annotation_verify"
+    ]);
     expect(getWorkflowDefinition("image_template_revision_studio")?.canonicalNodes().map((node) => node.id)).toEqual([
       "image_revision_intake",
       "image_revision_compile_preview",
