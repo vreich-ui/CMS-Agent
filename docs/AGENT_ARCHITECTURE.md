@@ -114,6 +114,8 @@ Every `agent_converse` turn assembles a system prompt in `conversationalRunner.t
 
 Size is bounded at **6,000 estimated tokens** (`MAX_BRIEFING_TOKENS`, `chars/4` as elsewhere in this repo). Over budget, sections are dropped from the bottom — tools first, then lessons, then contracts; the tenant half and the operations menu are never dropped, because they are the two things the model cannot recover without spending the round trips the briefing exists to remove.
 
+**When a tool refuses (rev 10).** The first live smoke of rev 9 found the gap: an expired checkout lock returned `lock_required`, and the agent re-sent the identical publish and then invented a concurrency explanation the backend had not given. Rev 10 adds a refusal contract — act on the remedy the refusal names (`lock_required` → re-checkout with a fresh token), reproduce the backend's own code and message, retry at most once, and report a second identical failure as a blockage. The underlying lock-lifetime defect is Platform's and is filed as KNOWN_ISSUES **C-20**.
+
 **The menu makes no approval claim.** A descriptor's declared `effects[].riskLevel` describes what running an operation would do and gates nothing (`operations/operationTypes.ts`); deriving a per-operation "starts without asking" from it was already wrong for `image_template_revision`, whose bound workflow runs a publish-risk node behind a registered gate. The house's autonomy is stated once, from the project record, in the block header.
 
 **Baseline:** `npm run chat:audit` reports, per conversation, `toolCallsBeforeFirstAnswer`, `questionsAsked`, `turnsToFirstAction`, `catalogReads` and `contractReads` from the conversation-turn store.

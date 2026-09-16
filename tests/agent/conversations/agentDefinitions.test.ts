@@ -70,7 +70,7 @@ describe("canonical client_manager workspace definition", () => {
   // aggression inputs and media request are carried, the request id is caller-supplied, and a
   // blocked/failed run is reported reusable-first.
   it("rev 3 carries the 'Starting and reporting production' rules and rev 2 is superseded", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
     expect(CLIENT_MANAGER_PROMPT).toContain("## Starting and reporting production");
     expect(CLIENT_MANAGER_PROMPT).toContain("pass the editor's brief verbatim as `input.instructions` — never summarise or shorten it");
     expect(CLIENT_MANAGER_PROMPT).toContain("Set `trafficSource` and `awarenessStage` (ask if unknown)");
@@ -78,7 +78,7 @@ describe("canonical client_manager workspace definition", () => {
     expect(CLIENT_MANAGER_PROMPT).toContain("Supply `requestId` in the client's request-id form when the tool requires one.");
     expect(CLIENT_MANAGER_PROMPT).toContain("first name what was produced and is reusable (for example a completed draft), then what failed.");
     // Every earlier canonical text (rev 1 through rev 6) is superseded and upgradeable.
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(8);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(9);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).toContain("## Candidates in learning mode");
     expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS[1]).not.toContain("## Starting and reporting production");
@@ -96,7 +96,7 @@ describe("canonical client_manager workspace definition", () => {
   // the contract is authoritative, and work on the bound object. If a future edit can delete one of
   // these lines and still pass, the wall is gone — the heading is the only thing allowed to change.
   it("rev 4 carries read-before-you-write (rev 9: 'Verify, don't discover') and the single article production path", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
 
     // Contract-first: the block platform's systemPrompt() used to send and CA6 left behind.
     expect(CLIENT_MANAGER_PROMPT).toContain("## Verify, don't discover");
@@ -132,7 +132,7 @@ describe("canonical client_manager workspace definition", () => {
   // regression wall on the HISTORY (any tenant still on that exact text upgrades cleanly), not on
   // what ships today. Whether this feature returns to the live prompt is a separate editorial call.
   it("rev 5 routed a one-off look through a named standard, never through words in the brief (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## A one-off look for a set of articles");
@@ -165,7 +165,7 @@ describe("canonical client_manager workspace definition", () => {
   // W5 (2026-09-13): same situation as rev 5 above — this section lives only in the rev-6
   // historical text now (index 5), not in the live CLIENT_MANAGER_PROMPT.
   it("rev 6 forbade assembling an object id and made an empty list an answer, not a dead end (historical, superseded by rev 7)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
     const rev6Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[5];
 
     expect(rev6Text).toContain("## Object ids you were not given");
@@ -197,7 +197,7 @@ describe("canonical client_manager workspace definition", () => {
   // SUPERSEDED_CLIENT_MANAGER_PROMPTS[6] — this test moved with it rather than being deleted, the
   // same pattern the rev 5/rev 6 historical tests above already follow.
   it("rev 7 landed the live-store operator edit verbatim, byte for byte (historical, superseded by rev 8)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
     const rev7Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[6];
     const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
     expect(sha256(rev7Text)).toBe("fa143f797dbc827e5519cbdccb011212cea4123ebb1897eefb2bc7873a73ef77");
@@ -233,7 +233,7 @@ describe("canonical client_manager workspace definition", () => {
   // than being deleted. The sha256 below is unchanged from when rev 8 was live, which is the proof
   // that landing rev 9 carried rev 8's bytes across untouched.
   it("rev 8 taught the chat-controls protocol v2 (historical, superseded by rev 9)", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
     const rev8Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[7];
     const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
     expect(sha256(rev8Text)).toBe("c3109cb6c011787fea898c3795f24a1235b8791a723a8752d1bf570c51609027");
@@ -263,7 +263,7 @@ describe("canonical client_manager workspace definition", () => {
   // INPUT (the menu replaces catalog discovery, never preflight), and a write is still checked
   // before it lands (the dry-run replaces the re-read, never the check).
   it("rev 9 replaces discovery with a house briefing, and keeps preflight and the dry-run as the gates", () => {
-    expect(createCanonicalClientManagerAgent().rev).toBe(9);
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
 
     // W3.1 — the menu IS the catalog.
     expect(CLIENT_MANAGER_PROMPT).toContain("## You already know the house");
@@ -324,7 +324,7 @@ describe("canonical client_manager workspace definition", () => {
 
     // The upgrade path still works for every canonical text this agent has ever shipped.
     expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
-    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(8);
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(9);
     for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) {
       expect(classifyConversationalAgentPrompt(superseded)).toBe("superseded");
       expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: superseded }])).toEqual([
@@ -332,6 +332,64 @@ describe("canonical client_manager workspace definition", () => {
       ]);
     }
     expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: "An operator wrote this." }])).toEqual([]);
+  });
+
+  // CMP-FOLLOWUP (2026-09-16) — rev 10. THE DEFECT THIS WALLS OFF IS NOT HYPOTHETICAL: the first live
+  // smoke of rev 9 on a real tenant hit an expired checkout lock, and the agent re-sent the identical
+  // publish call, failed identically, and then told the editor the system "will allow only one publish
+  // attempt at a time" — a concurrency explanation the backend never gave. The backend had said
+  // `lock_required` (HTTP 423: the call's lock_token must match a LIVE lock), whose remedy is to check
+  // the object out again and carry the fresh token.
+  //
+  // Rev 9 already held this discipline for production STARTS. Rev 10 generalises it to any refusal,
+  // and each assertion below is one half of what went wrong: act on the remedy, do not re-send, do not
+  // invent a cause, and stop after one retry.
+  it("rev 10 teaches how to handle a tool refusal, so an expired lock self-heals instead of repeating", () => {
+    expect(createCanonicalClientManagerAgent().rev).toBe(10);
+
+    expect(CLIENT_MANAGER_PROMPT).toContain("## When a tool refuses");
+    // Never repeat, never invent.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never re-send the identical call/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never describe the failure in words the backend did not use/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/reproduce its own code and message/i);
+    // The lock case by name, with the remedy and the trap that produced it.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/lock_required/);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/check it out again/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/expires on a timer/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/retrying with the same token never is/i);
+    // The wrong explanation the live agent actually gave must not be reachable as a rule.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/never means another editor is holding it unless the refusal itself says so/i);
+    // Bounded retries.
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/retry at most once/i);
+    expect(CLIENT_MANAGER_PROMPT).toMatch(/a second identical failure is a blockage to report/i);
+
+    // Rev 9's sections all survive — this was an insertion, not a rewrite.
+    for (const section of [
+      "## You already know the house",
+      "## Verify, don't discover",
+      "## House operating manual",
+      "## Question budget",
+      "## Push through when allowed",
+      "## Editor-facing language",
+      "## Lifecycle vocabulary",
+      "## One production path for articles",
+      "## Starting and reporting production"
+    ]) expect(CLIENT_MANAGER_PROMPT).toContain(section);
+
+    // Rev 9 is superseded rather than deleted, and did NOT carry this section.
+    const rev9Text = SUPERSEDED_CLIENT_MANAGER_PROMPTS[8];
+    expect(rev9Text).toContain("## You already know the house");
+    expect(rev9Text).not.toContain("## When a tool refuses");
+    expect(classifyConversationalAgentPrompt(rev9Text)).toBe("superseded");
+
+    expect(CLIENT_MANAGER_PROMPT).not.toMatch(/dr-lurie|fernwell|platform|zilberman/i);
+    expect(classifyConversationalAgentPrompt(CLIENT_MANAGER_PROMPT)).toBe("canonical");
+    expect(SUPERSEDED_CLIENT_MANAGER_PROMPTS).toHaveLength(9);
+    for (const superseded of SUPERSEDED_CLIENT_MANAGER_PROMPTS) {
+      expect(pendingCanonicalPromptUpgrades([{ ...createCanonicalClientManagerAgent(), prompt: superseded }])).toEqual([
+        { id: "agt_client_manager", prompt: CLIENT_MANAGER_PROMPT }
+      ]);
+    }
   });
 
   // The mechanism the report cites: an existing workspace's stored rev is NOT force-set to the code
