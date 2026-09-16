@@ -3,7 +3,11 @@
 // contract was supposed to buy, each of which was structurally impossible while the operation had no
 // id at all.
 //   1. the catalog holds it, so planner_plan / operation_preflight can select it;
-//   2. preflight reports the honest executable:false with a remedy naming T4, rather than silence;
+//   2. preflight reports the honest executable:false with a remedy naming T4, rather than silence —
+//      SUPERSEDED BY T5, which shipped that implementation (image_annotation_studio); the test below
+//      now pins the flipped fact (executable:true, a real binding, no workflow_binding gap), which is
+//      what "the remedy was named and then delivered" looks like from the other side. The RUN itself
+//      is exercised in imageAnnotationStudio.test.ts; nothing here still runs an annotation;
 //   3. THE POINT — operation_list_capability_gaps can finally RECORD a gap for this capability,
 //      because a gap record is keyed on (tenant, operationId@version, capability) and
 //      capabilityGapRecorder.ts additionally drops any gap whose capability the closed vocabulary
@@ -103,18 +107,21 @@ describe("image_annotation — the registered contract", () => {
     expect(withoutGrant.evidence).toMatchObject({ requiredToolName: "annotate_image" });
   });
 
-  // Honest and expected until T4: the capability is there, the implementation is not, and preflight
-  // says which — with the task named, not a bare "not supported".
-  it("reports executable:false with a not_supported workflow_binding gap naming T4, even on a fully-capable tenant", () => {
+  // T3 pinned the honest executable:false here, with a not_supported workflow_binding gap naming T4:
+  // the capability was there and the implementation was not. T5 shipped that implementation
+  // (image_annotation -> image_annotation_studio, operationWorkflowBindings.ts), so this assertion
+  // FLIPS — and what it now asserts is the same fact from the other side: there is no
+  // workflow_binding gap left to report, because there is a registered workflow preflight would
+  // genuinely run. The gap MECHANISM is unchanged and still exercised by bindingInputContract's own
+  // tests; it simply has no complaint to make about this operation any more.
+  it("reports executable:true and a real binding on a fully-capable tenant, with no workflow_binding gap left", () => {
     const result = preflightOperation({ operationId: "image_annotation", tenantId: "dr-lurie", input: validInput }, capabilitySourceFor(drLurieFacts()));
-    expect(result.executable).toBe(false);
-    expect(result.binding).toBeNull();
+    expect(result.executable).toBe(true);
+    expect(result.binding).toMatchObject({ operationId: "image_annotation", workflowId: "image_annotation_studio", inputMapping: {} });
     expect(result.executorBinding).toBeNull();
-    // The CAPABILITY is not the thing missing — that is the whole difference this task made.
+    // The CAPABILITY was never the thing missing — that was T3's whole point, and it still holds.
     expect(result.capabilityGaps.some((gap) => gap.capability === "image_annotate")).toBe(false);
-    const gap = result.capabilityGaps.find((entry) => entry.capability === "workflow_binding");
-    expect(gap).toMatchObject({ reason: "not_supported", requiredBy: "image_annotation" });
-    expect(gap?.remedy).toContain("T4 of the 2026-09-16 annotate-bridge plan");
+    expect(result.capabilityGaps.some((gap) => gap.capability === "workflow_binding")).toBe(false);
   });
 
   // THE ACCEPTANCE THIS TASK EXISTS FOR. A tenant that cannot annotate now produces a DURABLE,
