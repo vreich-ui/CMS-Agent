@@ -16,7 +16,12 @@
 # roles/run.invoker ON THE JOB, every fire fails with gRPC code 7 PERMISSION_DENIED and nothing
 # anywhere says the tick has stopped -- the scheduler reports its own failures, the job reports
 # nothing because it never started, and the queue just stops draining. This script does not widen
-# IAM; it prints the reminder because that binding is the failure mode.
+# IAM; it VERIFIES the run.jobs.run grant (roles/run.invoker carries it -- this is a bare run with
+# no overrides) via scripts/lib/assert-scheduler-run-permission.sh before writing the schedule,
+# rather than only printing the reminder and hoping. #329 found this repo had been advising IAM
+# permissions rather than checking them, in the one schedule script whose call shape actually needed
+# a DIFFERENT permission than the one advised -- an operator followed the advice and still 403'd on
+# every fire for five days. This script previously carried the same advisory-only shape.
 
 set -euo pipefail
 
@@ -39,6 +44,9 @@ command -v gcloud >/dev/null || die "gcloud is not on PATH."
 
 gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1 \
   || die "Cloud Run Job $JOB does not exist in $PROJECT/$REGION; run scripts/deploy-continuation-tick.sh first."
+
+# shellcheck source=lib/assert-scheduler-run-permission.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/assert-scheduler-run-permission.sh"
 
 RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${JOB}:run"
 
@@ -79,6 +87,12 @@ if [[ "$APPLY" != "1" ]]; then
   exit 1
 fi
 
+REQUIRED_PERMISSION="run.jobs.run"
+GRANT_COMMAND="gcloud run jobs add-iam-policy-binding $JOB --project $PROJECT --region $REGION --member \"serviceAccount:$SCHEDULER_SA\" --role roles/run.invoker"
+assert_scheduler_run_permission "$PROJECT" "$REGION" "$JOB" "$SCHEDULER_SA" "$REQUIRED_PERMISSION" \
+  "roles/run.invoker carries it — this call is a bare run with no overrides" \
+  "$GRANT_COMMAND"
+
 if gcloud scheduler jobs describe "$SCHEDULER_JOB" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
   say "Updating $SCHEDULER_JOB."
   gcloud scheduler jobs update http "${COMMON[@]}"
@@ -88,5 +102,4 @@ else
 fi
 
 say "Configured $SCHEDULER_JOB to fire $JOB (project $PROJECT, region $REGION) on \"$CRON\" (UTC)."
-say "Verify $SCHEDULER_SA holds roles/run.invoker on the JOB before the next fire -- without it every"
-say "fire fails with PERMISSION_DENIED and the queue stops draining silently. This script never widens IAM."
+scheduler_permission_footer "$REQUIRED_PERMISSION" "$JOB" "$SCHEDULER_SA"

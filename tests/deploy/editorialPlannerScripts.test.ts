@@ -74,6 +74,18 @@ describe("scripts/deploy-editorial-planner-schedule.sh", () => {
     expect(script).toContain("scheduler jobs pause");
     expect(script).toContain("commissioning.enabled false");
   });
+
+  it("verifies run.jobs.run via the shared #329 mechanism before writing the schedule, instead of only advising it", () => {
+    expect(script).toContain("scripts/lib/assert-scheduler-run-permission.sh");
+    expect(script).toContain('REQUIRED_PERMISSION="run.jobs.run"');
+    const bodyCode = commands(script);
+    const assertIndex = bodyCode.indexOf("assert_scheduler_run_permission");
+    expect(assertIndex).toBeGreaterThan(-1);
+    expect(assertIndex).toBeLessThan(bodyCode.indexOf("gcloud scheduler jobs create"));
+    // The original defect shape must be gone: a bare "Verify ... IAM permission" footer with
+    // nothing above it ever checking anything.
+    expect(script).not.toMatch(/say\s+"Verify \$SCHEDULER_SA has run\.jobs\.run on \$JOB \(roles\/run\.invoker\) before the first scheduled fire — this script does not widen IAM\."/);
+  });
 });
 
 describe("scripts/jobs-repin.sh", () => {

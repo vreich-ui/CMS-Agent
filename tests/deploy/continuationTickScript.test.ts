@@ -137,8 +137,29 @@ describe("scripts/deploy-continuation-tick-schedule.sh", () => {
     expect(scheduleCode.indexOf("gcloud scheduler jobs update")).toBeGreaterThan(guard);
   });
 
-  it("does not widen IAM, and says so", () => {
-    expect(scheduleCode).not.toMatch(/add-iam-policy-binding/);
+  it("does not widen IAM itself, and says so", () => {
+    // scripts/lib/assert-scheduler-run-permission.sh's GRANT_COMMAND is advisory text handed to a
+    // die() message an operator reads and runs BY HAND — not a command this script executes itself.
+    // Assert that distinction directly: no line in the script INVOKES add-iam-policy-binding: every
+    // occurrence of that string must sit inside a variable assignment (GRANT_COMMAND=...), never as
+    // the command a line actually runs.
+    const executesAddIamPolicyBinding = codeLines(schedule).some(
+      (line) => /^\s*gcloud\b/.test(line) && line.includes("add-iam-policy-binding"),
+    );
+    expect(executesAddIamPolicyBinding).toBe(false);
     expect(scheduleCode).toContain("roles/run.invoker");
+  });
+
+  it("sources the shared IAM-verification library and asserts run.jobs.run before writing the schedule", () => {
+    // #329: an advisory-only footer let a scheduler that could never fire look "Enabled" for five
+    // days. This script must not repeat that shape — it verifies via the shared mechanism instead.
+    expect(scheduleCode).toContain("lib/assert-scheduler-run-permission.sh");
+    expect(scheduleCode).toContain('REQUIRED_PERMISSION="run.jobs.run"');
+    const assertIndex = scheduleCode.indexOf("assert_scheduler_run_permission");
+    const createIndex = scheduleCode.indexOf("gcloud scheduler jobs create");
+    const updateIndex = scheduleCode.indexOf("gcloud scheduler jobs update");
+    expect(assertIndex).toBeGreaterThan(-1);
+    expect(assertIndex).toBeLessThan(createIndex);
+    expect(assertIndex).toBeLessThan(updateIndex);
   });
 });
