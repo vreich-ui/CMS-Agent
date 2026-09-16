@@ -102,8 +102,17 @@ export type ReducedContractVisualStandard = {
 // unchanged and still called brandTokens, and its only sanctioned writer is still site_apply_theme.
 export type ReducedContractBrandPalette = { colors?: Record<string, string>; fonts?: Record<string, string> };
 
-/** The site's logo, bounded to what a look-writer needs: where the mark is, and what it is called. */
-export type ReducedContractSiteLogo = { url: string; alt?: string };
+// The site's logo, bounded to what a look-writer needs: where the mark is, and what it is called.
+//
+// `url` is OPTIONAL (admin logo upload branch): a wordmark-only site (`{ text }`, no image half) is a
+// real, valid, common configuration, and sitePrefetch.ts's extractSiteLogo now returns `{ alt: text }`
+// for one rather than `undefined` — so a consumer knows a wordmark exists even with nothing to render
+// as an image. Every consumer of this type must treat `url` as possibly absent; check its presence
+// rather than assuming a `ReducedContractSiteLogo` always names something fetchable. When `url` IS
+// present, it is a ROOT-RELATIVE path (`/img/...` or `/pdf/...`) for an image-backed logo, or whatever
+// verbatim string a tolerated alias substrate carried — see sitePrefetch.ts's extractSiteLogo for the
+// full rule.
+export type ReducedContractSiteLogo = { url?: string; alt?: string };
 
 export type ReducedContractPdfTemplate = {
   templateId: string;

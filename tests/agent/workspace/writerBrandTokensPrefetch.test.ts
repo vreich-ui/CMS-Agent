@@ -86,9 +86,13 @@ describe("the writer's site prefetch carries the site's brandTokens and logo (FI
     });
     expect(input.prefetchedContract!.logo).toEqual({ url: "https://cdn.example/dr-lurie/mark.svg", alt: "Dr Lurie Science" });
     // A site that HAS both says nothing on the run: the absence warnings below are for absence only.
+    // This fixture's logo carries a `url` (SITE_BODY's `imageAssetRef` above), so neither the
+    // no-logo-at-all code (site_logo_absent) NOR the wordmark-only code (site_logo_image_absent, added
+    // by the admin logo upload work) applies — checked below now that there are two to rule out.
     const degraded = (state.warnings ?? []).filter((warning) => warning.startsWith("site_prefetch_degraded:site_"));
     expect(degraded).not.toContain("site_prefetch_degraded:site_brand_tokens_absent");
     expect(degraded).not.toContain("site_prefetch_degraded:site_logo_absent");
+    expect(degraded).not.toContain("site_prefetch_degraded:site_logo_image_absent");
   });
 
   it("treats an absent brandTokens/logo as a named warning, never a failed node", async () => {
@@ -106,6 +110,9 @@ describe("the writer's site prefetch carries the site's brandTokens and logo (FI
     expect(state.input).toBeDefined();
     const warnings = state.warnings ?? [];
     expect(warnings).toContain("site_prefetch_degraded:site_brand_tokens_absent");
+    // Unchanged by the admin logo upload split: this fixture's siteBody carries no `logo` key at all
+    // (case (a), not the wordmark-only case (b)), so site_logo_absent is still the correct code here —
+    // site_logo_image_absent is for a site that HAS a wordmark and lacks only the image half.
     expect(warnings).toContain("site_prefetch_degraded:site_logo_absent");
     // Absent, not defaulted: nothing invents a palette for a site that declares none.
     const input = state.input as { prefetchedContract?: Record<string, unknown> };
