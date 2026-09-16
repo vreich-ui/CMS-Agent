@@ -26,7 +26,6 @@
 //         The run-level `publishingPolicySnapshot.publishableTypes` that looks like a divergence is
 //         the same value on both. Comparing it would mint a permanent false positive, and "widening"
 //         it is forbidden by the publish charter (ADR-2026-08-25-structure-studio §2.2).
-import { ROUTE_MANIFESTS } from "../workspace/routeRegistry.js";
 import { drLurieProjectConfig } from "./drLurie/definition.js";
 import { GENESIS_TENANT_DEFINITION_VERSION, GENESIS_WITHHELD_ROUTE_VERBS, isGenesisMintedProject } from "./genesisTenantProfile.js";
 import { genesisNetlifySiteName } from "./genesisSiteName.js";
@@ -39,16 +38,11 @@ export const PARITY_REFERENCE_PROJECT_ID = drLurieProjectConfig.projectId;
 
 /** Every tenant verb the engine's own route manifests declare a run will speak. Derived, never
  *  hand-listed — a route that starts speaking a new verb makes this check fail rather than stalling
- *  a tenant at runtime, which is the lesson W4.3 already paid for once. */
-export const declaredRouteVerbs = (): string[] =>
-  [
-    ...new Set(
-      ROUTE_MANIFESTS.flatMap((manifest) => [
-        ...(manifest.requiredTools ?? []).map((tool) => tool.verb),
-        ...manifest.phases.flatMap((phase) => (phase.requiredTools ?? []).map((tool) => tool.verb))
-      ])
-    )
-  ].sort();
+ *  a tenant at runtime, which is the lesson W4.3 already paid for once. Moved to routeRegistry.ts
+ *  (2026-09-16) so tenant-policy modules can derive from the manifests without an import cycle
+ *  through here; re-exported for callers that already import it from this module. */
+import { declaredRouteVerbs } from "../workspace/routeRegistry.js";
+export { declaredRouteVerbs } from "../workspace/routeRegistry.js";
 
 export type ParityDivergence = {
   /** Stable machine key, so a script's output can be diffed run over run. */

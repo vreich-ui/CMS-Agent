@@ -16,14 +16,19 @@ import { describe, expect, it } from "vitest";
 import { deriveOperatorToolPolicies, managedPolicyBaseline, migrateDefaultProjectConfig } from "../../../src/agent/projects/defaultMigration.js";
 import { genesisParityDivergences, declaredRouteVerbs } from "../../../src/agent/projects/genesisParity.js";
 import { runGenesisReconcile } from "../../../src/agent/capture/genesisReconcile.js";
-import { GENESIS_TENANT_DEFINITION_VERSION, GENESIS_WITHHELD_ROUTE_VERBS, genesisTenantProfile } from "../../../src/agent/projects/genesisTenantProfile.js";
+import { GENESIS_TENANT_DEFINITION_VERSION, genesisTenantProfile } from "../../../src/agent/projects/genesisTenantProfile.js";
 import { GENESIS_DEFAULT_OBJECT_TYPE, GENESIS_REQUEST_ID_PATTERN } from "../../../src/agent/capture/siteGenesis.js";
 import { drLurieProjectConfig } from "../../../src/agent/projects/drLurie/definition.js";
 import { updateProject } from "../../../src/agent/projects/projectAdmin.js";
 import { effectiveToolPermission, toToolPolicyMap, type ProjectConnectionConfig } from "../../../src/agent/projects/projectTypes.js";
 import type { ProjectRepository } from "../../../src/agent/repository/interfaces/ProjectRepository.js";
 
-const VERB = "site_apply_brand_imagery";
+// The fixture verb is one the managed baseline does NOT name, which is the whole premise of an
+// operator overlay. It WAS `site_apply_brand_imagery` — the verb whose disappearing grant found this
+// bug — until the same day's tenant-route-parity change made the profile grant that verb to every
+// tenant. `ownership_transfer` is a real tenant verb no route declares and no baseline grants, so it
+// plays the same role without being hostage to a policy decision made elsewhere.
+const VERB = "ownership_transfer";
 
 const mintedTenant = (overrides: Partial<ProjectConnectionConfig> = {}): ProjectConnectionConfig => ({
   projectId: "zilberman",
@@ -79,9 +84,9 @@ describe("operator tool-policy overlay", () => {
     const migrated = migrateDefaultProjectConfig(stale);
     expect(migrated.changed).toBe(true);
     expect(migrated.config.definitionVersion).toBe(GENESIS_TENANT_DEFINITION_VERSION);
-    // The managed map was rewritten to the profile, and the profile deliberately withholds the verb...
+    // The managed map was rewritten to the profile, and the profile does not name this verb at all...
     expect(migrated.config.toolPolicies?.[VERB]).toBeUndefined();
-    expect(GENESIS_WITHHELD_ROUTE_VERBS).toContain(VERB);
+    expect(genesisTenantProfile().toolPolicies[VERB]).toBeUndefined();
     // ...and the operator's decision still stands.
     expect(effectiveToolPermission(migrated.config, VERB)).toBe("allowed");
   });

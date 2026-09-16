@@ -437,3 +437,21 @@ export const routeRequiredToolsFor = (routeId: string, phaseId?: string): RouteR
 export const multiPhaseRouteIds = (): string[] => ROUTE_MANIFESTS
   .filter((manifest) => (manifest.phaseKind ?? "sequential") === "sequential" && manifest.phases.length > 1)
   .map((manifest) => manifest.id);
+
+// TENANT ROUTE PARITY (2026-09-16) — every tenant MCP verb any deterministic route can speak, derived
+// from the manifests rather than hand-kept. Moved here from genesisParity.ts so the tenant policy
+// modules can read it without importing the parity checker (a cycle: parity reads the profile).
+//
+// This is the list a tenant must be able to speak to run the fleet's workflows at all, and the reason
+// it is DERIVED: a route that starts speaking a new verb grants it on every tenant at the next deploy
+// instead of stalling one tenant at a time, months apart, with an ok:true on every config write in
+// between.
+export const declaredRouteVerbs = (): string[] =>
+  [
+    ...new Set(
+      ROUTE_MANIFESTS.flatMap((manifest) => [
+        ...(manifest.requiredTools ?? []).map((tool) => tool.verb),
+        ...manifest.phases.flatMap((phase) => (phase.requiredTools ?? []).map((tool) => tool.verb))
+      ])
+    )
+  ].sort();

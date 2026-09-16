@@ -7,6 +7,41 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 const defaultProjectsById = new Map(defaultProjectConnections.map((project) => [project.projectId, project]));
 
+/**
+ * Projects that are SERVICES this workspace calls, not publishing tenants it runs workflows on:
+ * pdf-tool is the artifact/PDF foundry, monetizer is the offer index. No conductor route targets them,
+ * so their deny-all posture is correct and they are excluded from the route-policy union by name —
+ * not by a heuristic that could quietly swallow a real tenant.
+ */
+export const SERVICE_PROJECT_IDS: readonly string[] = Object.freeze(["pdf-tool", "monetizer"]);
+
+/**
+ * TENANT ROUTE PARITY (2026-09-16, Wolf: "core wide ... all tenants as well as future ones").
+ *
+ * Union the derived tenant route policy into a code-defined TENANT's map. One place, applied on every
+ * read, rather than a list per definition file — which is how `fernwell` ended up declaring seven read
+ * verbs and deny-all underneath (every write route refused pre-transport, invisible because that record
+ * is disabled), and `platform` ended up holding two site-wide apply verbs at "needs_approval", which a
+ * deterministic route cannot satisfy and is refused exactly like "blocked".
+ *
+ * GAPS ONLY — a definition row WINS over the derived set. The union closes the case where nobody ever
+ * wrote a row (fernwell: every write route refused because the map simply did not mention them); it
+ * does not overrule a row somebody wrote on purpose. `platform` holding the two site-wide apply verbs
+ * at "needs_approval" is such a row, and reversing it from here would widen what a node can do to a
+ * live site with no operator in the loop — the one thing CLAUDE.md says to stop and ask about. That
+ * gap stays visible instead: the capability audit reports it, and tenantRouteParity.test.ts carries it
+ * as a named exception with a reason. Withholding therefore has three honest homes, all of them
+ * readable: the fleet-wide `GENESIS_WITHHELD_ROUTE_VERBS`, a tenant's own definition row, and a
+ * per-tenant `operatorToolPolicies` pin, which outranks everything here and survives every migration.
+ *
+ * Lazy by construction — called from functions, never at module load — because the route manifests sit
+ * in the workspace layer, whose own import tree reaches back into this one.
+ */
+export function applyTenantRoutePolicy(config: ProjectConnectionConfig): ProjectConnectionConfig {
+  if (SERVICE_PROJECT_IDS.includes(config.projectId)) return config;
+  return { ...config, toolPolicies: { ...genesisTenantProfile().toolPolicies, ...(config.toolPolicies ?? {}) } };
+}
+
 export function migrateDefaultProjectConfig(config: ProjectConnectionConfig): { config: ProjectConnectionConfig; changed: boolean } {
   const defaultConfig = defaultProjectsById.get(config.projectId);
   if (!defaultConfig) {
@@ -36,7 +71,7 @@ export function migrateDefaultProjectConfig(config: ProjectConnectionConfig): { 
   const preserved = config.operatorToolPolicies && Object.keys(config.operatorToolPolicies).length > 0
     ? { operatorToolPolicies: clone(config.operatorToolPolicies) }
     : {};
-  return { config: { ...clone(defaultConfig), ...preserved }, changed: true };
+  return { config: applyTenantRoutePolicy({ ...clone(defaultConfig), ...preserved }), changed: true };
 }
 
 /**
@@ -99,5 +134,5 @@ export function deriveOperatorToolPolicies(config: ProjectConnectionConfig): Rec
 }
 
 export function defaultProjectConfigs(): ProjectConnectionConfig[] {
-  return defaultProjectConnections.map((project) => clone(project));
+  return defaultProjectConnections.map((project) => applyTenantRoutePolicy(clone(project)));
 }

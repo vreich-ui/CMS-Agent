@@ -21,7 +21,21 @@ export const FERNWELL_OBJECT_DIALECT: ProjectObjectDialect = {
   voiceObjectId: "voice_fernwell"
 };
 
-export const FERNWELL_DEFINITION_VERSION = 1;
+// TENANT ROUTE PARITY (2026-09-16, Wolf). Fernwell was declared with SEVEN read verbs and no
+// defaultToolPolicy, which resolves to deny-all: every write route — capture emit, artifact
+// materialization, pdf template mint/publish, theme bind, visual standard apply, publish, release —
+// was refused pre-transport on this tenant. It never showed up as a broken run because the record is
+// `status: "disabled"` and the capability audit skips disabled projects, so it would have surfaced as
+// "why does nothing work on fernwell" on the day somebody enabled it.
+//
+// The fix is not a list in this file. `applyTenantRoutePolicy` (defaultMigration.ts) unions THE tenant
+// route policy — derived from the route manifests — into every code-defined tenant as it is read, so
+// fernwell inherits exactly what dr-lurie, platform and every minted tenant get, and a route that
+// starts speaking a new verb reaches all of them at once with no per-tenant edit. This file keeps only
+// what is fernwell's own: its read list, its dialect, its identity.
+//
+// Bumped 1 -> 2 (2026-09-16) so the live record re-seeds and picks that union up.
+export const FERNWELL_DEFINITION_VERSION = 2;
 
 export const fernwellProjectConfig: ProjectConnectionConfig = {
   projectId: "fernwell",
@@ -31,6 +45,7 @@ export const fernwellProjectConfig: ProjectConnectionConfig = {
   authMode: "bearer_env",
   tokenEnvVar: "FERNWELL_MCP_TOKEN",
   allowedTools: [...FERNWELL_SAFE_READ_ONLY_TOOLS],
+  defaultToolPolicy: "blocked",
   contentContract: {
     contentContract: "content_source.v1"
   },
