@@ -191,6 +191,18 @@ export function useProjects(options?: Options<Project[]>) {
   return useQuery({ queryKey: ['projects'], queryFn: verbs.projectList, ...options });
 }
 
+/**
+ * W5 T4 — one run's tool-execution ledger. `enabled` on a real runId so opening the Runs screen on
+ * another tab, or with no run bound, does not pay for the read.
+ */
+export function useRunToolExecutions(runId: string | null) {
+  return useQuery({
+    queryKey: ['runToolExecutions', runId],
+    queryFn: () => verbs.toolListExecutions({ runId: runId as string }),
+    enabled: !!runId,
+  });
+}
+
 export function useTools(options?: Options<ToolDef[]>) {
   return useQuery({ queryKey: ['tools'], queryFn: verbs.toolList, ...options });
 }

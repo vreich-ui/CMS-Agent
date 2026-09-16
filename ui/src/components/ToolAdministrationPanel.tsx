@@ -112,16 +112,32 @@ export function ToolAdministrationPanel({ client }: Props) {
     </p>
     {audits !== null && summary && <p className="muted">
       {summary.nodeCount} resolved nodes · {summary.deterministicNodes} deterministic · {summary.nodesWithDeadGrants} carrying{" "}
-      {summary.deadGrantCount} grants that can never fire · {summary.nodesReachingTenantFromEngine} reaching a tenant from engine code.
+      {summary.deadGrantCount} grants that can never fire · {summary.nodesReachingTenantFromEngine} reaching a tenant from engine code
+      {/* W5 T2 — stated separately from the counts above because it is a different KIND of fact: the
+          others describe an accountability gap in something that works, this one names routes that
+          will stop on a named tenant. Rendered only when there are any, so a healthy fleet says
+          nothing rather than "0 blocked". */}
+      {/* PAIRS, not verbs: the summary list is one entry per (project, verb), so one verb blocked on
+          three tenants is three entries. Calling that "3 route verbs" would overstate the spread of
+          the problem to an operator deciding how urgent it is. */}
+      {summary.routeToolsBlockedByPolicy && summary.routeToolsBlockedByPolicy.length > 0
+        ? <> · <strong>{summary.routeToolsBlockedByPolicy.length} route verb/tenant pair(s) a tenant's own policy blocks or holds</strong></>
+        : null}.
     </p>}
     {audits !== null && drift.length === 0 && <p className="empty-state">No drift: every node's grants match what it can do.</p>}
     {drift.length > 0 && <div className="capability-drift" aria-label="Capability drift findings">
-      <p className="muted">{driftTotals.total} finding(s) across {driftTotals.nodes.length} node(s){driftTotals.high > 0 ? `, ${driftTotals.high} at publish or admin risk` : ""}.</p>
-      {drift.map((row) => <div key={`${row.nodeId}:${row.code}:${row.items.join(",")}`} className="capability-drift-finding">
+      <p className="muted">
+        {driftTotals.total} finding(s) across {driftTotals.nodes.length} node(s){driftTotals.high > 0 ? `, ${driftTotals.high} high severity (a publish/admin-risk verb reached from engine code, or a route a tenant refuses)` : ""}
+        {driftTotals.blockedProjects.length > 0 ? ` · blocked routes on ${driftTotals.blockedProjects.join(", ")}` : ""}.
+      </p>
+      {drift.map((row) => <div key={`${row.nodeId}:${row.code}:${row.projectId ?? ""}:${row.items.join(",")}`} className="capability-drift-finding">
         <div>
           <code>{row.nodeId}</code>{" "}
           <span className={`risk-badge risk-badge--${row.severity === "high" ? "admin" : "write"}`}>{row.severity}</span>{" "}
           <code>{row.code}</code>
+          {/* The tenant is part of the identity of a policy finding — the same node can be fine on one
+              client and blocked on the next, and a row that did not say which would be unreadable. */}
+          {row.projectId ? <> · <code>{row.projectId}</code></> : null}
         </div>
         <div className="muted">{row.detail}</div>
         {row.items.length > 0 && <div>{row.items.map((item) => <code key={item}>{item} </code>)}</div>}

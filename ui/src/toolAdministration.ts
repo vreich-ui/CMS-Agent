@@ -90,7 +90,7 @@ export const usedByEmptyReason = (usedBy: ProjectUsedBy | null | undefined): str
 
 // ---------------------------------------------------------------------------- capability drift
 
-export type CapabilityFinding = { code: string; detail: string; verbs?: string[]; grants?: string[] };
+export type CapabilityFinding = { code: string; detail: string; verbs?: string[]; grants?: string[]; projectId?: string; issues?: string[] };
 export type CapabilityAudit = {
   nodeId: string;
   executionKind: "model" | "deterministic";
@@ -108,6 +108,8 @@ export type CapabilityAuditSummary = {
   deadGrantCount: number;
   nodesReachingTenantFromEngine: number;
   nodesReachingHighRiskVerbs: string[];
+  /** W5 T2 — `route_tool_blocked_by_policy:<project>:<verb>` for every pair, across the graph. */
+  routeToolsBlockedByPolicy?: string[];
 };
 
 export type DriftSeverity = "high" | "medium";
@@ -118,12 +120,18 @@ export type DriftRow = {
   severity: DriftSeverity;
   detail: string;
   items: string[];
+  /** W5 T2 — set only on route_tool_blocked_by_policy rows: which tenant's policy blocks it. */
+  projectId?: string;
 };
 
 // Severity is by CODE, not by count: one admin-risk verb reached past every check outranks twenty
 // dead grants, which are untidy rather than dangerous.
 const SEVERITY_BY_CODE: Record<string, DriftSeverity> = {
   high_risk_engine_verb: "high",
+  // W5 T2 — HIGH, and not by analogy: this is the only drift code that names a run that WILL stop.
+  // The others describe an accountability gap in something that works; a route whose verb the tenant
+  // refuses is a node that cannot complete on that tenant, knowable before anyone starts the run.
+  route_tool_blocked_by_policy: "high",
   engine_tenant_calls_unlisted: "medium",
   grants_never_fire: "medium"
 };
@@ -137,7 +145,10 @@ export function buildDriftRows(audits: CapabilityAudit[] | null | undefined): Dr
         code: finding.code,
         severity: SEVERITY_BY_CODE[finding.code] ?? "medium",
         detail: finding.detail,
-        items: finding.verbs ?? finding.grants ?? []
+        // `issues` first: a policy finding's own `route_tool_blocked_by_policy:<project>:<verb>` ids
+        // are what an operator copies into a ticket, and they carry the tenant the bare verb does not.
+        items: finding.issues ?? finding.verbs ?? finding.grants ?? [],
+        ...(finding.projectId ? { projectId: finding.projectId } : {})
       });
     }
   }
@@ -149,5 +160,8 @@ export function buildDriftRows(audits: CapabilityAudit[] | null | undefined): Dr
 export const summarizeDrift = (rows: DriftRow[]) => ({
   total: rows.length,
   high: rows.filter((row) => row.severity === "high").length,
-  nodes: [...new Set(rows.map((row) => row.nodeId))].sort()
+  nodes: [...new Set(rows.map((row) => row.nodeId))].sort(),
+  // W5 T2 — the tenants named by at least one blocked-route row, so the panel can say WHICH client is
+  // affected without the operator reading every row.
+  blockedProjects: [...new Set(rows.filter((row) => row.code === "route_tool_blocked_by_policy" && row.projectId).map((row) => row.projectId as string))].sort()
 });

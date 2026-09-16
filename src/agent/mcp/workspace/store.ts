@@ -3,6 +3,10 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { listWorkspaceNodes, sortWorkspaceNodes } from "../../workspace/nodes.js";
 import { workspaceNodeStatuses, workspaceRiskLevels, type WorkspaceEvent, type NodeDefaultOutput, type WorkspaceNode, type WorkspaceVersionSnapshot } from "../../workspace/nodeTypes.js";
+// K-A9 — derive-on-load for the stored executionKind/route fields. Imported from nodeExecution.ts
+// rather than routeRegistry.ts on purpose: the registry reaches nodeTimings -> the repository
+// manager -> this module, and that is a cycle. nodeExecution.ts imports nothing but the node type.
+import { deriveStoredExecutionFields } from "../../workspace/nodeExecution.js";
 import { validateWorkspaceGraph } from "../../workspace/nodes.js";
 import { workspaceStoreCanonicalIds, workspaceStoreSeedNodes } from "../../workspace/workspaceStoreNodes.js";
 import { relationshipDirections, relationshipKinds, type WorkspaceRelationship, type WorkspaceRelationshipsUpdate } from "../../workspace/relationshipTypes.js";
@@ -174,8 +178,22 @@ const workspaceNodeSchema = z.object({
     updatedAt: z.string().datetime(),
     updatedBy: z.enum(["human", "agent", "system"]),
     schemaValidAt: z.string().datetime().nullable().optional()
-  }).optional()
-}).passthrough().transform((node) => ({ ...node, outputSchema: node.outputSchema ?? node.schema ?? { type: "object" } }));
+  }).optional(),
+  // K-A9 — HOW THE NODE RUNS, declared rather than left to .passthrough() for the same reason
+  // defaultOutput is: a malformed route written by a direct document edit must be rejected at load,
+  // not reach the executor. Both optional; see the transform below for what an ABSENT pair means.
+  executionKind: z.enum(["model", "deterministic"]).optional(),
+  route: z.object({ id: z.string().min(1), mode: z.string().min(1).optional() }).strict().optional()
+}).passthrough().transform((node) => ({
+  ...node,
+  outputSchema: node.outputSchema ?? node.schema ?? { type: "object" },
+  // K-A9 DERIVE-ON-LOAD, for one release. A row whose metadata names a deterministic route but which
+  // predates the fields gets them filled in here, so the very next update_node_metadata write — which
+  // replaces `metadata` wholesale — can no longer take the route away with it. A row that names NO
+  // route gets nothing added (deriveStoredExecutionFields returns {}), so it keeps resolving through
+  // the legacy metadata scan and behaves exactly as it did before this change.
+  ...deriveStoredExecutionFields(node as Pick<WorkspaceNode, "metadata" | "executionKind" | "route">)
+}));
 const conversationalAgentSchema: z.ZodType<ConversationalAgentDefinition> = z.object({
   id: z.string().regex(/^agt_[a-z0-9_]+$/),
   role: z.literal("client_manager"),
@@ -248,7 +266,11 @@ const normalizeNode = (node: WorkspaceNode): WorkspaceNode => ({
   dependsOn: node.dependsOn ?? [],
   inputSchema: node.inputSchema ?? { type: "object" },
   outputSchema: node.outputSchema ?? node.schema ?? { type: "object" },
-  updatedAt: node.updatedAt ?? now()
+  updatedAt: node.updatedAt ?? now(),
+  // K-A9 — the write-side half of derive-on-load: a node arriving through create_node/update_node
+  // with route metadata but no route field gets the field, so it is protected from the first
+  // metadata replace onwards rather than from its first re-read.
+  ...deriveStoredExecutionFields(node)
 });
 
 // Coerce a node argument to a plain object before it is spread into the store. MCP clients may send

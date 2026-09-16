@@ -50,12 +50,17 @@ and preserves every key omitted, so `model`, `timeout`, `maxTurns` and `maxOutpu
 untouched. Re-running an op is a no-op. Verify against `workspace_get_node` first and apply only
 where the store disagrees.
 
-> **Applying these:** `npm run nodes:apply` parses only `workspace_update_node_{input_schema,
-> output_schema,prompt,metadata}` and `workspace_create_node` — it has **no model-config op**, so it
-> cannot apply this doc. Run the two calls below directly against the live workspace, or extend
-> `scripts/applyNodeOps.ts` with a `model_config` kind first (the merge semantics above make that a
-> contained change). This is stated rather than worked around: silently hand-editing node literals
-> would put the store and canonical out of sync, which is the drift `store:check` exists to catch.
+> **Applying these:** `npm run nodes:apply` gained a `model_config` op in W5 (2026-09-16), so this doc
+> applies like any other:
+>
+> ```
+> WORKSPACE_STORE=gcs GCS_BUCKET=<bucket> npm run nodes:apply -- docs/plan/2026-09-budget-node-ops.md
+> WORKSPACE_STORE=gcs GCS_BUCKET=<bucket> npm run nodes:apply -- docs/plan/2026-09-budget-node-ops.md --write
+> ```
+>
+> The op MERGES, exactly as the verb does, so re-running is a no-op and `model`, `timeout`, `maxTurns`
+> and `maxOutputTokens` are untouched. Do not hand-edit node literals to achieve this: that puts the
+> store and canonical out of sync, which is the drift `store:check` exists to catch.
 
 ### 1. `workspace_update_node_model_config` — node `narrative_movement`
 

@@ -73,7 +73,7 @@ import { loadTenantCapabilityFacts } from "../operations/capabilityFactsLoader.j
 import { deriveTenantCapabilityAvailability } from "../operations/capabilityReadiness.js";
 import { listRequiredCapabilitiesForWorkflow } from "../operations/operationWorkflowBindings.js";
 import { recordNodeTimingCompletion, type NodeTimingOutcome } from "./nodeTimings.js";
-import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
+import { ARTICLE_BODY_VALIDATION_PHASE_TIMEOUT_MS, declaresDeterministicRoute, deterministicStageTimeoutMs, nodeTimeoutMs, phaseTimeoutMsFor, resolveNodeExecution, resolveRouteEra, STALL_MARGIN_MS, type PhaseClaim } from "./routeRegistry.js";
 import { buildNodeExecutionProvenance } from "./nodeExecutionProvenance.js";
 import { tenantCallToolFor } from "../tools/tenantInvoke.js";
 import type { ToolExecutionRecord } from "../tools/toolTypes.js";
@@ -139,19 +139,19 @@ export const runModeSummary = (run: Pick<WorkflowExecutionRecord, "executionMode
   const live = executionMode === "openai";
   const source = nodeSource();
   return {
-    executionMode,
-    live,
-    declared,
-    nodeSource: source,
-    notice: [
-      live
-        ? "LIVE MODEL RUN: node outputs came from the configured model provider."
-        : "MOCK RUN: every node output is a deterministic placeholder generated from the node's outputSchema. No model was called and these artifacts must not be treated as real content.",
-      declared ? undefined : "This run record predates execution-mode stamping; the mode shown is the current default, not what the run recorded.",
-      source === "store"
-        ? "Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in this run. Topology — edges, riskLevel, new nodes — is pinned to the canonical definitions and still requires a deliberate re-seed (npm run nodes:update) plus redeploy."
-        : "WORKSPACE_NODES_SOURCE=static: node definitions came from the compiled definitions, so workspace edits made over MCP are NOT in this run until nodes.ts is re-seeded and redeployed."
-    ].filter(Boolean).join(" ")
+      executionMode,
+      live,
+      declared,
+      nodeSource: source,
+      notice: [
+        live
+          ? "LIVE MODEL RUN: node outputs came from the configured model provider."
+          : "MOCK RUN: every node output is a deterministic placeholder generated from the node's outputSchema. No model was called and these artifacts must not be treated as real content.",
+        declared ? undefined : "This run record predates execution-mode stamping; the mode shown is the current default, not what the run recorded.",
+        source === "store"
+          ? "Node definitions were overlaid from the workspace store, so authoring edits (prompt, schemas, tools, skills, model config) are in this run. Topology — edges, riskLevel, new nodes — is pinned to the canonical definitions and still requires a deliberate re-seed (npm run nodes:update) plus redeploy."
+          : "WORKSPACE_NODES_SOURCE=static: node definitions came from the compiled definitions, so workspace edits made over MCP are NOT in this run until nodes.ts is re-seeded and redeployed."
+      ].filter(Boolean).join(" ")
   };
 };
 
@@ -473,33 +473,58 @@ const pinRouteMetadataToCanonical = (merged: Record<string, unknown> | undefined
 // Adding a field to overlayStoreNode's override list means REMOVING it here, in the same change.
 export const CANONICAL_OWNED_FIELDS = ["id", "kind", "dependsOn", "requiredInputs", "produces", "riskLevel", "position", "status"] as const;
 
-const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): WorkspaceNode => ({
-  ...canonical,
-  name: stored.name ?? canonical.name,
-  description: stored.description ?? canonical.description,
-  prompt: stored.prompt ?? canonical.prompt,
-  schema: stored.schema ?? canonical.schema,
-  inputSchema: stored.inputSchema ?? canonical.inputSchema,
-  outputSchema: stored.outputSchema ?? canonical.outputSchema,
-  allowedTools: stored.allowedTools ? [...stored.allowedTools] : canonical.allowedTools,
-  assignedSkills: stored.assignedSkills ? [...stored.assignedSkills] : canonical.assignedSkills,
-  modelConfig: stored.modelConfig ?? canonical.modelConfig,
-  executionConfig: stored.executionConfig ?? canonical.executionConfig,
-  // node-default-output — STORE-OWNED, exactly like prompt/outputSchema above, and carried here for
-  // the same reason those are: a field the store owns that a run never sees is a write-only lie (the
-  // defect T5's canonical-field guard exists to end). Canonical never declares a default, so there is
-  // nothing to fall back to — an absent store value means the node has no default, full stop.
-  defaultOutput: stored.defaultOutput,
-  // MERGE, not replace: a store row that sets one metadata key (approvalRequired: false) must not
-  // erase the canonical keys it did not mention (voicePrefetch, contractPrefetch, skipWhen). A stored
-  // key still wins where both declare it — EXCEPT the route-selecting keys pinned to canonical just
-  // above (A10-D5).
-  metadata: pinRouteMetadataToCanonical(
+const overlayStoreNode = (canonical: WorkspaceNode, stored: WorkspaceNode): WorkspaceNode => {
+  // Computed once and used twice below (the node's own metadata, and the route derived from it), so
+  // the dispatched node's route can never disagree with the metadata it is rendered beside.
+  const mergedMetadata = pinRouteMetadataToCanonical(
     canonical.metadata === undefined && stored.metadata === undefined ? undefined : { ...(canonical.metadata ?? {}), ...(stored.metadata ?? {}) },
     canonical.metadata
-  ),
-  updatedAt: stored.updatedAt ?? canonical.updatedAt
-});
+  );
+  const execution = resolveNodeExecution({
+    metadata: mergedMetadata,
+    executionKind: stored.executionKind ?? canonical.executionKind,
+    route: stored.route ?? canonical.route
+  });
+  return {
+    ...canonical,
+    name: stored.name ?? canonical.name,
+    description: stored.description ?? canonical.description,
+    prompt: stored.prompt ?? canonical.prompt,
+    schema: stored.schema ?? canonical.schema,
+    inputSchema: stored.inputSchema ?? canonical.inputSchema,
+    outputSchema: stored.outputSchema ?? canonical.outputSchema,
+    allowedTools: stored.allowedTools ? [...stored.allowedTools] : canonical.allowedTools,
+    assignedSkills: stored.assignedSkills ? [...stored.assignedSkills] : canonical.assignedSkills,
+    modelConfig: stored.modelConfig ?? canonical.modelConfig,
+    executionConfig: stored.executionConfig ?? canonical.executionConfig,
+    // node-default-output — STORE-OWNED, exactly like prompt/outputSchema above, and carried here for
+    // the same reason those are: a field the store owns that a run never sees is a write-only lie (the
+    // defect T5's canonical-field guard exists to end). Canonical never declares a default, so there is
+    // nothing to fall back to — an absent store value means the node has no default, full stop.
+    defaultOutput: stored.defaultOutput,
+    // MERGE, not replace: a store row that sets one metadata key (approvalRequired: false) must not
+    // erase the canonical keys it did not mention (voicePrefetch, contractPrefetch, skipWhen). A stored
+    // key still wins where both declare it — EXCEPT the route-selecting keys pinned to canonical just
+    // above (A10-D5).
+    metadata: mergedMetadata,
+    // K-A9 — HOW THE NODE RUNS, carried onto the dispatched node.
+    //
+    // STORE-OWNED with a canonical fallback, exactly like modelConfig above, and NOT in
+    // CANONICAL_OWNED_FIELDS: a route is authored and promoted like a prompt, and pinning it to
+    // canonical would make `workspace.update_node_execution` another write-only lie of the kind T5's
+    // guard exists to end.
+    //
+    // The fallback is DERIVED from the merged node rather than read off a canonical literal, and that
+    // is what makes this change behaviour-identical: until `npm run nodes:update` carries the fields
+    // into nodes.ts, canonical declares its route in metadata only, and deriving from the merged
+    // metadata (already route-pinned above) reproduces exactly the scan the executor did before.
+    // `route` is set explicitly rather than spread so a resolution of "model" cannot leave a stale
+    // route behind from `...canonical`.
+    executionKind: execution.executionKind,
+    route: execution.route,
+    updatedAt: stored.updatedAt ?? canonical.updatedAt
+  };
+};
 
 // Resolve the conductor node list. Static mode (default) is exactly listWorkspaceNodes(). Store mode
 // overlays each canonical node with its stored counterpart when present; a canonical node MISSING from

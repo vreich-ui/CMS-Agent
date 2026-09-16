@@ -31,6 +31,7 @@
 // editor decided — which is exactly the confusion `provenance` exists to prevent. Thin, labelled, and
 // marked `set_by: "genesis_default"` beats plausible and unmarked.
 import { ProjectMcpAdapter } from "./projectMcpAdapter.js";
+import { invokeTenantReadTool } from "../tools/tenantInvoke.js";
 import { getProjectHooks } from "./projectHooks.js";
 import { conventionalStrategyObjectId, type ProjectConnectionConfig } from "./projectTypes.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
@@ -311,11 +312,13 @@ export async function getEditorialStrategy(params: StrategyResolutionParams, dep
       const call = deps.callReadTool
         ? await deps.callReadTool(config, "object_get", arguments_)
         : await (async () => {
-            const adapter = new ProjectMcpAdapter(config);
+            // W5 T3 — through the choke point (tenantInvoke.ts) rather than a bare adapter, so this
+            // prefetch appears in tool.list_executions like every other engine-invoked tenant call.
+            // The timeout/abort seam is unchanged: invokeTenantReadTool forwards the signal.
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), STRATEGY_PREFETCH_TIMEOUT_MS);
             try {
-              return await adapter.callReadTool("object_get", arguments_, controller.signal);
+              return await invokeTenantReadTool({ projectId: config.projectId, project: config, toolId: "object_get", args: arguments_, caller: "engine", signal: controller.signal });
             } finally {
               clearTimeout(timer);
             }

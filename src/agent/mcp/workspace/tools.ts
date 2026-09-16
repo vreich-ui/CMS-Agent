@@ -9,7 +9,7 @@ import { type WorkspaceActor, type WorkspaceChangeSource } from "../../workspace
 import { coerceJsonObjectInput, metaJson, mutationMeta, objectSchema, ok, tool, toolError, type JsonSchema, type WorkspaceTool, MissingPatchFieldError } from "./toolKit.js";
 export { metaJson, mutationMeta, objectSchema, ok, tool, toolError, workspaceActorSchema } from "./toolKit.js";
 export type { JsonSchema, WorkspaceTool } from "./toolKit.js";
-import { assertNoCanonicalOwnedFieldWrite, CANONICAL_OWNED_WRITE_REFUSED_FIELDS } from "./canonicalNodeFieldGuard.js";
+import { assertNoCanonicalOwnedFieldWrite, assertNoExecutionFieldWrite, CANONICAL_OWNED_WRITE_REFUSED_FIELDS } from "./canonicalNodeFieldGuard.js";
 import { createChangesTools } from "./changesTools.js";
 import { createConstellationTools } from "./constellationTools.js";
 import { createImprovementTools } from "./improvementTools.js";
@@ -32,7 +32,7 @@ import { runDeterministicPublishPayload } from "../../workspace/publishPayload.j
 import { executeNode, getEffectivePrompt, getNodeDetails, listNodeExecutions, listNodeOutputs, prepareNodeExecution, validateAgainstNodeSchema } from "../../workspace/nodeRuntime.js";
 import { getBudgetStatus, recordModelUsage, recordModelUsageSchema, summarizeModelUsage, usageFiltersSchema } from "../../observability/modelUsage.js";
 import { aggregateNodeTimingsByNode, aggregateNodeTimingsByEra } from "../../workspace/nodeTimings.js";
-import { auditNodeCapabilities, summarizeCapabilityAudit } from "../../workspace/nodeCapabilityAudit.js";
+import { auditNodeCapabilities, summarizeCapabilityAudit, type ProjectPolicyView } from "../../workspace/nodeCapabilityAudit.js";
 import { toProjectSummary, validateHandoff } from "../../projects/projectRegistry.js";
 import { getProjectHooks } from "../../projects/projectHooks.js";
 import { bearerEnvClientSiteBindingAdvisory, createProject, deleteProject, projectCreateSchema, projectRegistrationContract, projectUpdateSchema, updateProject } from "../../projects/projectAdmin.js";
@@ -52,6 +52,8 @@ import { createVisualIdentityTools } from "./visualIdentityTools.js";
 import { createOperationTools } from "./operationTools.js";
 import { createPlannerTools } from "./plannerTools.js";
 import { FORBIDDEN_PROJECT_VERBS } from "../../tools/forbiddenProjectVerbs.js";
+import { invokeTenantReadTool, invokeTenantTool } from "../../tools/tenantInvoke.js";
+import type { ProjectConnectionConfig } from "../../projects/projectTypes.js";
 import { dispatchToolContext } from "../../execution/dispatchAuthorization.js";
 
 const emptyInput = z.object({}).strict();
@@ -386,8 +388,8 @@ const publishPayloadSchema = z.object({
 const nodeId = z.object({ id: z.string().min(1) }).strict();
 // W3.1 — workspace.audit_capabilities takes an OPTIONAL id: with one it reports that node, without
 // one it summarizes the whole graph. Its own schema rather than reusing nodeId, which requires the id.
-const optionalNodeId = z.object({ id: z.string().min(1).optional() }).strict();
-const optionalNodeIdJsonSchema = objectSchema({ id: { type: "string", minLength: 1 } }, []);
+const optionalNodeId = z.object({ id: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
+const optionalNodeIdJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1, description: "Check route requiredTools against THIS project's tool policy only. Omit for every registered active project." } }, []);
 // T15.16 (#195) — workspace.get_graph's optional workflowId. Omitted, it keeps returning the flat
 // store's own nodes/edges (now inclusive of capture_conductor's and clone_conductor's own nodes once
 // ensureWorkspaceNodeSeeds has run — see that tool below); a real registered workflowId instead
@@ -410,6 +412,9 @@ const createNodeInput = z.object({ node: z.any(), ...mutationMeta }).strict();
 const deleteNodeInput = z.object({ id: z.string().min(1), ...mutationMeta }).strict();
 const cloneNodeInput = z.object({ id: z.string().min(1), newId: z.string().min(1), ...mutationMeta }).strict();
 const updateNodeInput = z.object({ id: z.string().min(1), patch: z.record(z.string(), z.unknown()), ...mutationMeta }).strict();
+// K-A9 — workspace.update_node_execution. Flat rather than patch-shaped on purpose: this verb has
+// exactly two fields and a patch envelope would let a caller send `{}` and mean nothing.
+const updateNodeExecutionInput = z.object({ id: z.string().min(1), executionKind: z.enum(["model", "deterministic"]), route: z.object({ id: z.string().min(1), mode: z.string().min(1).optional() }).strict().optional(), ...mutationMeta }).strict();
 
 // R-1 — data-loss guard for the single-field node writers. Runs BEFORE T5's canonical-ownership
 // refusal, so all five writers keep one uniform contract for a malformed patch and the ownership
@@ -469,12 +474,19 @@ const assertGraphUpdateKeepsCanonicalTopology = (toolName: string, update: { cre
     const id = isPlainRecord(raw) && typeof raw.id === "string" ? raw.id : undefined;
     if (id) assertNoCanonicalOwnedFieldWrite(toolName, id, CANONICAL_OWNED_WRITE_REFUSED_FIELDS);
   }
-  for (const patch of update.update ?? []) assertNoCanonicalOwnedFieldWrite(toolName, patch.id, Object.keys(patch).filter((key) => key !== "id"));
+  for (const patch of update.update ?? []) {
+    assertNoCanonicalOwnedFieldWrite(toolName, patch.id, Object.keys(patch).filter((key) => key !== "id"));
+    // K-A9 — a graph update is still a node patch, and the route must not be reachable through it.
+    assertNoExecutionFieldWrite(toolName, Object.keys(patch));
+  }
   for (const nodeId of Object.keys(update.dependencies ?? {})) assertNoCanonicalOwnedFieldWrite(toolName, nodeId, ["dependsOn"]);
 };
 
 const updateGraphInput = z.object({ create: z.array(z.any()).optional(), update: z.array(z.record(z.string(), z.unknown()).and(z.object({ id: z.string().min(1) }))).optional(), delete: z.array(z.string().min(1)).optional(), dependencies: z.record(z.string(), z.array(z.string().min(1))).optional(), orderedNodeIds: z.array(z.string().min(1)).optional(), positions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(), allowCanonicalNodeRemoval: z.boolean().optional(), adminApproved: z.boolean().optional(), ...mutationMeta }).strict();
-const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional() }).strict();
+// W5 T2 — `projectId` narrows the project-policy check to ONE tenant. Omitted, every registered
+// ACTIVE project is checked, because "which of my four tenants can actually run this node" is the
+// question an operator has, and asking it four times is not an answer.
+const validateNodeInput = z.object({ node: z.any().optional(), id: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
 const importWorkspace = z.object({ nodes: z.array(workspaceNodeImport).optional(), stageOutputs: z.array(stageOutputImport).optional(), learningObservations: z.array(learningObservationImport).optional() }).strict();
 // W3 (node-default-output, 2026-09-15) — TWO FORMS, ONE VERB, because the Workbench's override modal
 // has been sending the second one since it shipped and the server rejected it as unrecognised keys.
@@ -647,7 +659,7 @@ const effectiveToolsInput = z.object({ nodeId: z.string().min(1), runId: z.strin
 const toolExecutionInput = z.object({ toolExecutionId: z.string().min(1), runId: z.string().min(1).optional() }).strict();
 // W4.1 — caller/routeId. An engine-invoked tenant verb was unfindable before the choke point existed;
 // these are the two filters that make "what did this route actually call" answerable.
-const listToolExecutionsInput = z.object({ runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), toolId: z.string().min(1).optional(), caller: z.enum(["model", "engine"]).optional(), routeId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
+const listToolExecutionsInput = z.object({ runId: z.string().min(1).optional(), nodeId: z.string().min(1).optional(), toolId: z.string().min(1).optional(), caller: z.enum(["model", "engine", "operator"]).optional(), routeId: z.string().min(1).optional(), projectId: z.string().min(1).optional() }).strict();
 // W3.3 — node.get_effective_tools takes an optional runId so it can answer against the SAME
 // authorization the dispatch would run under (dispatchToolContext). Without one it keeps its old
 // context-free answer, which is the honest reply to "what does this node declare" as distinct from
@@ -672,6 +684,7 @@ const updatePromptJsonSchema = objectSchema({ id: { type: "string", minLength: 1
 // previous permit-anything `{}`, so a client has the type information it needs not to stringify it.
 // coerceSchemaInput still accepts a stringified schema for the clients that do it anyway (R-3).
 const updateSchemaJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, schema: { type: ["object", "boolean"] }, ...metaJson }, ["id", "schema"]);
+const updateNodeExecutionJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, executionKind: { type: "string", enum: ["model", "deterministic"], description: "model = a model dispatch; deterministic = engine code runs it with zero model calls." }, route: { type: "object", description: "Required when executionKind is \"deterministic\". `id` is the declaring route key (e.g. \"releaseExecutorDeterministic\", \"captureStageDeterministic\"); `mode` is the stage of a staged route (e.g. \"crawl\").", properties: { id: { type: "string", minLength: 1 }, mode: { type: "string", minLength: 1 } }, required: ["id"] }, ...metaJson }, ["id", "executionKind"]);
 const updateNodeDefaultOutputJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, value: { description: "The standing output for this node, in the shape its outputSchema declares. `null` CLEARS the default." }, note: { type: "string", maxLength: 2000, description: "Why this default exists — shown next to it in the Workbench." }, force: { type: "boolean", description: "Store the value even though it fails the node's outputSchema. The operator is the authority and a schema can be wrong; the stored default is then stamped schemaValidAt: null." }, ...metaJson }, ["nodeId", "value"]);
 const adoptOutputAsDefaultJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1, description: "Adopt the output this node produced in THIS run. Omit for the node's most recent output across all runs." }, executionId: { type: "string", minLength: 1 }, note: { type: "string", maxLength: 2000 }, force: { type: "boolean" }, ...metaJson }, ["nodeId"]);
 const mutationJsonSchema = objectSchema({ id: { type: "string", minLength: 1 }, newId: { type: "string", minLength: 1 }, node: {}, patch: { type: "object" }, create: { type: "array" }, update: { type: "array" }, delete: { type: "array", items: { type: "string" } }, dependencies: { type: "object" }, orderedNodeIds: { type: "array", items: { type: "string" } }, positions: { type: "object" }, ...metaJson });
@@ -870,7 +883,7 @@ const effectiveToolsJsonSchema = objectSchema({ nodeId: { type: "string", minLen
 // shared schema previously advertised all four fields as optional on both, so a caller following
 // the advertisement got validation_error either way.
 const getToolExecutionJsonSchema = objectSchema({ toolExecutionId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 } }, ["toolExecutionId"]);
-const listToolExecutionsJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, toolId: { type: "string", minLength: 1 }, caller: { type: "string", enum: ["model", "engine"] }, routeId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 } });
+const listToolExecutionsJsonSchema = objectSchema({ runId: { type: "string", minLength: 1 }, nodeId: { type: "string", minLength: 1 }, toolId: { type: "string", minLength: 1 }, caller: { type: "string", enum: ["model", "engine", "operator"] }, routeId: { type: "string", minLength: 1 }, projectId: { type: "string", minLength: 1 } });
 const nodeToolJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, runId: { type: "string", minLength: 1 } }, ["nodeId"]);
 const nodeValidateJsonSchema = objectSchema({ nodeId: { type: "string", minLength: 1 }, value: {} }, ["nodeId", "value"]);
 // Per-tool node JSON schemas. Each advertises EXACTLY what its Zod schema accepts, so a client is
@@ -963,6 +976,19 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
   const driverHealthRepository = repositoryManager.getDriverHealthRepository();
   const learningRepository = repositoryManager.getLearningRepository();
   const projectRepository = repositoryManager.getProjectRepository();
+
+  // W5 T2 — the tenant policies the capability audit checks route requiredTools against. Disabled
+  // projects are excluded: a route that cannot run on a tenant nobody runs is not drift. A repository
+  // read failure yields NO policies rather than an error, which is the fail-open direction — the
+  // audit's other findings must not disappear because the project store was briefly unreadable.
+  const projectPolicyViews = async (projectId?: string): Promise<ProjectPolicyView[]> => {
+    try {
+      const configs = projectId ? [await projectRepository.get(projectId)].filter(Boolean) as ProjectConnectionConfig[] : (await projectRepository.list()).filter((project) => project.status !== "disabled");
+      return configs.map((project) => ({ projectId: project.projectId, allowedTools: project.allowedTools, defaultToolPolicy: project.defaultToolPolicy, toolPolicies: project.toolPolicies }));
+    } catch {
+      return [];
+    }
+  };
   const skillRepository = repositoryManager.getSkillRepository();
   const requireProject = async (id: string) => {
     const config = await projectRepository.get(id);
@@ -1044,7 +1070,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       // W3.1's audit is what makes the second computable; before it, "23 nodes carry grants that can
       // never fire" was a sentence in a brief rather than something a tool could answer.
       const nodes = await workspaceRepository.getNodes();
-      const audits = nodes.map(auditNodeCapabilities);
+      const audits = nodes.map((node) => auditNodeCapabilities(node));
       const grantedBy = new Map<string, string[]>();
       const reachableFrom = new Map<string, string[]>();
       for (const audit of audits) {
@@ -1161,7 +1187,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.create_node", description: "Create a workspace node. An id canonical defines is refused — that row is code-owned and is re-seeded automatically.", zodSchema: createNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = createNodeInput.parse(input); const node = data.node as WorkspaceNode; if (isPlainRecord(node) && typeof node.id === "string") assertNoCanonicalOwnedFieldWrite("workspace.create_node", node.id, CANONICAL_OWNED_WRITE_REFUSED_FIELDS); return ok(await workspaceRepository.createNode(node, meta(data))); } }),
     tool({ name: "workspace.delete_node", description: "Delete an unreferenced workspace node.", zodSchema: deleteNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = deleteNodeInput.parse(input); return ok(await workspaceRepository.deleteNode(data.id, meta(data))); } }),
     tool({ name: "workspace.clone_node", description: "Clone a workspace node.", zodSchema: cloneNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = cloneNodeInput.parse(input); return ok(await workspaceRepository.cloneNode(data.id, data.newId, meta(data))); } }),
-    tool({ name: "workspace.update_node", description: "Patch a workspace node. Store-owned fields only: a patch touching a canonical-owned field (id, kind, dependsOn, requiredInputs, produces, riskLevel, status) on a node canonical defines is refused — those reach a run only via nodes.ts + redeploy.", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); assertNoCanonicalOwnedFieldWrite("workspace.update_node", data.id, Object.keys(data.patch)); return ok(await workspaceRepository.updateNode(data.id, data.patch as Partial<WorkspaceNode>, meta(data))); } }),
+    tool({ name: "workspace.update_node", description: "Patch a workspace node. Store-owned fields only: a patch touching a canonical-owned field (id, kind, dependsOn, requiredInputs, produces, riskLevel, status) on a node canonical defines is refused — those reach a run only via nodes.ts + redeploy. A patch naming executionKind or route is also refused: how a node runs is changed through workspace.update_node_execution (K-A9).", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); assertNoCanonicalOwnedFieldWrite("workspace.update_node", data.id, Object.keys(data.patch)); assertNoExecutionFieldWrite("workspace.update_node", Object.keys(data.patch)); return ok(await workspaceRepository.updateNode(data.id, data.patch as Partial<WorkspaceNode>, meta(data))); } }),
     tool({ name: "workspace.update_node_prompt", description: "Update a node prompt.", zodSchema: updatePrompt, inputSchema: updatePromptJsonSchema, execute: async (input) => { const data = updatePrompt.parse(input); return ok(await workspaceRepository.updateNodePrompt(data.id, data.prompt, meta(data))); } }),
     tool({ name: "workspace.update_node_input_schema", description: "Update node input JSON Schema.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); return ok(await workspaceRepository.updateNode(data.id, { inputSchema: schema }, meta(data), "node.input_schema_updated")); } }),
     // node-default-output (2026-09-15) — SET or CLEAR a node's standing output. Store-owned, exactly
@@ -1198,6 +1224,29 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
     tool({ name: "workspace.update_node_output_schema", description: "Update node output JSON Schema draft 2020-12.", zodSchema: updateSchema, inputSchema: updateSchemaJsonSchema, execute: async (input) => { const data = updateSchema.parse(input); const schema = coerceSchemaInput(data.schema); const issues = validateJsonSchema(schema); if (issues.length) throw new Error(issues.join("; ")); const lint = openAiResponseSchemaLint(schema); const result = await workspaceRepository.updateNode(data.id, { outputSchema: schema, schema }, meta(data), "node.output_schema_updated"); return ok(lint ? { ...result, warnings: [lint] } : result); } }),
     ...[["workspace.update_node_tools", "allowedTools", "node.tools_updated"], ["workspace.update_node_skills", "assignedSkills", "node.skills_updated"], ["workspace.update_node_dependencies", "dependsOn", "node.dependencies_updated"]].map(([name, field, eventType]) => tool({ name, description: `Update node ${field}.${field === "dependsOn" ? " Refused on a node canonical defines: overlayStoreNode pins dependsOn to nodes.ts, so the write cannot rewire the graph." : ""}`, zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); const value = requirePatchField(data.patch, field, name); assertNoCanonicalOwnedFieldWrite(name, data.id, [field]); return ok(await workspaceRepository.updateNode(data.id, { [field]: value } as Partial<WorkspaceNode>, meta(data), eventType)); } })),
     tool({ name: "workspace.update_node_metadata", description: "Update node metadata.", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); return ok(await workspaceRepository.updateNode(data.id, { metadata: requirePatchField(data.patch, "metadata", "workspace.update_node_metadata") } as Partial<WorkspaceNode>, meta(data), "node.updated")); } }),
+    // K-A9 (2026-09-16) — THE ONE VERB THAT CHANGES HOW A NODE RUNS.
+    //
+    // Before this, the answer lived in `metadata` and every metadata write was a chance to lose it by
+    // omission. `executionKind`/`route` are fields now, and this is the only door to them: a write
+    // here is a named, reasoned, change-history-visible act, which is exactly what flipping the
+    // release step between an idempotency-ledgered engine call and a free model turn should be.
+    //
+    // `executionKind: "model"` CLEARS the route and suppresses any route metadata the row still
+    // carries — the operator asked for a model turn and gets one, rather than a field and a flag
+    // disagreeing. `executionKind: "deterministic"` requires a route, because "deterministic, but we
+    // will not say which program" is not a thing the executor can dispatch.
+    tool({ name: "workspace.update_node_execution", description: "Set HOW a node runs: executionKind (model | deterministic) and, for a deterministic node, its route {id, mode?} — where `id` is the declaring route key (\"releaseExecutorDeterministic\", \"captureStageDeterministic\") and `mode` the stage of a staged route (\"crawl\"). This is the ONLY verb that changes a node's route: workspace.update_node and workspace.update_node_metadata both refuse it, so a metadata write can no longer flip a tail node off its deterministic route by omission (docs/KNOWN_ISSUES.md K-A9/K-A1). Setting executionKind \"model\" clears the route and overrides any legacy route flag still in the node's metadata.", zodSchema: updateNodeExecutionInput, inputSchema: updateNodeExecutionJsonSchema, execute: async (input) => {
+      const data = updateNodeExecutionInput.parse(input);
+      if (data.executionKind === "deterministic" && !data.route) throw new Error("workspace.update_node_execution: executionKind \"deterministic\" requires a route {id, mode?} — the executor dispatches a named program, not an unnamed one.");
+      const existing = await workspaceRepository.getNode(data.id);
+      if (!existing) throw new Error(`Unknown node: ${data.id}`);
+      const patch: Partial<WorkspaceNode> = data.executionKind === "model"
+        // `route: undefined` rather than a delete: updateNode patches by spread, and an undefined
+        // value is dropped by the document serializer, so the field does not survive the write.
+        ? { executionKind: "model", route: undefined }
+        : { executionKind: "deterministic", route: data.route };
+      return ok(await workspaceRepository.updateNode(data.id, patch, meta(data), "node.execution_updated"));
+    } }),
     // See the deepMergeRecords comment above requirePatchField for why this tool does not share the
     // wholesale-replace handler the array-valued node writers use.
     tool({ name: "workspace.update_node_model_config", description: "Update node modelConfig. Recursively MERGES the given keys onto the node's existing modelConfig — keys the patch omits are preserved, not dropped; a key present in the patch overwrites (nested plain objects merge key-by-key, any other value including arrays replaces outright).", zodSchema: updateNodeInput, inputSchema: mutationJsonSchema, execute: async (input) => { const data = updateNodeInput.parse(input); const incoming = requirePatchField(data.patch, "modelConfig", "workspace.update_node_model_config"); if (!isPlainRecord(incoming)) throw new Error("workspace.update_node_model_config: patch.modelConfig must be an object"); const existingNode = await workspaceRepository.getNode(data.id); if (!existingNode) throw new Error(`Unknown node: ${data.id}`); const merged = deepMergeRecords(existingNode.modelConfig ?? {}, incoming); return ok(await workspaceRepository.updateNode(data.id, { modelConfig: merged } as Partial<WorkspaceNode>, meta(data), "node.model_config_updated")); } }),
@@ -1221,7 +1270,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       await skillRepository.ensureSkillSeeds();
       const node = data.node ?? (data.id ? await workspaceRepository.getNode(data.id) : undefined);
       const valid = !!node && validateJsonSchema((node as WorkspaceNode).inputSchema).length === 0 && validateJsonSchema((node as WorkspaceNode).outputSchema).length === 0;
-      const capabilities = node ? auditNodeCapabilities(node as WorkspaceNode) : null;
+      const capabilities = node ? auditNodeCapabilities(node as WorkspaceNode, await projectPolicyViews(data.projectId)) : null;
       const readiness = node
         ? await (async () => {
           const policy = await resolveSkillsForNode(node as WorkspaceNode, skillRepository);
@@ -1242,7 +1291,7 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
         : null;
       return ok({ valid, capabilities, readiness });
     } }),
-    tool({ name: "workspace.audit_capabilities", description: "Whole-graph capability audit: how many nodes are model-dispatched vs deterministic, how many carry grants that can never fire, and which nodes reach publish- or admin-risk tenant verbs from engine code rather than through a granted tool. Read-only. Pass `id` for one node's detail; omit it for the summary across every resolved node.", zodSchema: optionalNodeId, inputSchema: optionalNodeIdJsonSchema, execute: async (input) => { const data = optionalNodeId.parse(input); await workspaceRepository.ensureWorkspaceNodeSeeds(); const nodes = await workspaceRepository.getNodes(); if (data.id) { const node = nodes.find((candidate) => candidate.id === data.id); return ok({ capabilities: node ? auditNodeCapabilities(node) : null }); } return ok({ summary: summarizeCapabilityAudit(nodes), nodes: nodes.map(auditNodeCapabilities).filter((audit) => audit.findings.length > 0) }); } }),
+    tool({ name: "workspace.audit_capabilities", description: "Whole-graph capability audit: how many nodes are model-dispatched vs deterministic, how many carry grants that can never fire, which nodes reach publish- or admin-risk tenant verbs from engine code rather than through a granted tool, and (W5 T2) which route requiredTools a registered tenant's own toolPolicies/defaultToolPolicy blocks or holds — reported as summary.routeToolsBlockedByPolicy, one `route_tool_blocked_by_policy:<project>:<verb>` issue per pair. Read-only. Pass `id` for one node's detail, `projectId` to check one tenant instead of every registered active one; omit both for the summary across every resolved node.", zodSchema: optionalNodeId, inputSchema: optionalNodeIdJsonSchema, execute: async (input) => { const data = optionalNodeId.parse(input); await workspaceRepository.ensureWorkspaceNodeSeeds(); const nodes = await workspaceRepository.getNodes(); const policies = await projectPolicyViews(data.projectId); if (data.id) { const node = nodes.find((candidate) => candidate.id === data.id); return ok({ capabilities: node ? auditNodeCapabilities(node, policies) : null }); } return ok({ summary: summarizeCapabilityAudit(nodes, policies), nodes: nodes.map((node) => auditNodeCapabilities(node, policies)).filter((audit) => audit.findings.length > 0) }); } }),
     // F3 — `assignedSkills` was raw ids only: an operator could not tell from this tool alone whether
     // an assigned id actually resolves, to which version, or whether it is active — exactly the gap
     // that let a node read fine here while blocking at dispatch. `effectiveSkills`/`skillConflicts`
@@ -1594,6 +1643,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       };
       return ok({ project: { ...toProjectSummary(config), driverHealth: (await driverHealthRepository.getTenantHealth(projectId).catch(() => undefined)) ?? null }, knowledge: getProjectHooks(projectId)?.knowledge ?? null, usedBy });
     } }),
+    // W5 T3 — project.test_connection / project.list_tools stay on the plain adapter and are NOT
+    // ledgered: neither calls a tenant verb (one is an MCP `initialize` handshake, the other a
+    // tools/list), so there is no verb, no arguments and no outcome for a ledger row to be about.
+    // The same line toolRegistry.ts already draws on the model path.
     tool({ name: "project.test_connection", description: "Run a primitive MCP initialize against a project's external server. Read-only; no publishing side effects.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok({ connection: await new ProjectMcpAdapter(config).testConnection() }); } }),
     tool({ name: "project.list_tools", description: "List a project's remote MCP tools via tools/list. Returns safe tool names and descriptions only.", zodSchema: projectIdInput, inputSchema: projectIdJsonSchema, execute: async (input) => { const config = await requireProject(projectIdInput.parse(input).projectId); return ok(await new ProjectMcpAdapter(config).listTools()); } }),
     tool({ name: "project.call_tool", description: "Call an approved tool on a registered project MCP server. The config permission model plus the project's executable policy apply: legacy artifact fallback tools and fallback artifact-source arguments (remote image URLs, copied artifact refs, repo paths, hand-authored blob keys) are blocked before any transport, even when the config marks the tool allowed.", zodSchema: projectCallToolInput, inputSchema: projectCallToolJsonSchema, execute: async (input) => {
@@ -1624,7 +1677,21 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       if (FORBIDDEN_PROJECT_VERBS.has(data.tool)) {
         return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, error: `publish_verb_not_permitted: "${data.tool}" may not be called through project_call_tool. This surface has no run, no publish gate and no operator decision behind it. Publish through workflow_publish_run, or through a run whose publish_executor/release_executor dispatch reaches the verb.` } });
       }
-      return ok({ call: await adapter.callTool(data.tool, data.arguments) });
+      // W5 T3 (2026-09-16) — THE WIRE SURFACE JOINS THE LEDGER.
+      //
+      // W3.2.1 put every model-invoked and engine-invoked tenant call through invokeTenantTool; this
+      // surface — an operator or a script calling the tenant by hand with a full bearer — was the one
+      // caller still outside it, so `tool.list_executions` could show what the engine did and what a
+      // model did and nothing at all about what a person did. It now records under
+      // `caller: "operator"`, which is a THIRD value rather than a relabelling of either of the other
+      // two: "a human did this, outside any run" is the distinction an operator reading the ledger
+      // after an incident most needs.
+      //
+      // Behaviour is unchanged. The denylist above still refuses before this line; the choke point's
+      // own forbidden-verb rule only fires when the call states a nodeId, and this surface has no
+      // node — which is correct here, because the refusal that matters on this surface is the
+      // stronger, exemption-free one immediately above.
+      return ok({ call: await invokeTenantTool({ projectId: data.projectId, project: config, toolId: data.tool, args: data.arguments ?? {}, caller: "operator" }) });
     } }),
     // Read-only split of project.call_tool. project.call_tool covers both read-only contract
     // discovery and external writes, and is approval-gated (node-execution side) because of the
@@ -1641,7 +1708,10 @@ export function createWorkspaceTools(context: WorkspaceToolContext = {}): Worksp
       const policyFindings = getProjectHooks(data.projectId)?.enforceCallToolPolicy?.({ tool: data.tool, arguments: data.arguments }) ?? [];
       const blocking = policyFindings.filter((finding) => finding.severity === "error");
       if (blocking.length) return ok({ call: { ok: false, projectId: data.projectId, connection: adapter.connectionState(), tool: data.tool, permission: "blocked" as const, blockedByPolicy: true, policyFindings: blocking, error: `Blocked by executable project policy: ${blocking.map((finding) => finding.code).join(", ")}` } });
-      return ok({ call: await adapter.callReadTool(data.tool, data.arguments) });
+      // W5 T3 — same as project.call_tool above. The adapter's fixed READ_TOOL_ALLOWLIST still decides
+      // what qualifies, and invokeTenantReadTool deliberately does not apply the forbidden-verb rule
+      // (the allowlist is strictly narrower and contains none of those verbs — see tenantInvoke.ts).
+      return ok({ call: await invokeTenantReadTool({ projectId: data.projectId, project: config, toolId: data.tool, args: data.arguments ?? {}, caller: "operator" }) });
     } }),
     tool({ name: "project.validate_handoff", description: "Dry structural validation of a handoff against the project content_source.v1 / client_object.v1 contract. Read-only; no publishing.", zodSchema: validateHandoffInput, inputSchema: validateHandoffJsonSchema, execute: async (input) => { const data = validateHandoffInput.parse(input); const config = await requireProject(data.projectId); return ok({ validation: validateHandoff(config, { contentSource: coerceJsonObjectInput(data.contentSource), articleBody: coerceJsonObjectInput(data.articleBody) }) }); } }),
     tool({ name: "project.get_registration_contract", description: "Machine-readable contract for onboarding a new publishing client: field rules, env-var naming conventions, and the step-by-step registration flow.", zodSchema: emptyInput, inputSchema: emptyJsonSchema, execute: async (input) => { emptyInput.parse(input); return ok({ contract: projectRegistrationContract() }); } }),

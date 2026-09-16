@@ -93,7 +93,10 @@ export const REQUIRED_FIELDS = ["id", "name", "kind", "description", "prompt", "
 
 // Key order in the emitted literal. Fixed so a re-run produces a byte-identical file and `--check` reports
 // real drift instead of key shuffling.
-const KEY_ORDER = [...REQUIRED_FIELDS, "updatedAt", "metadata"];
+// K-A9 — executionKind/route sit next to metadata, which is what they replace as the answer to "how
+// does this node run". orderKeys carries unknown keys through anyway, so listing them here fixes
+// WHERE they render in the literal rather than whether they render at all.
+const KEY_ORDER = [...REQUIRED_FIELDS, "updatedAt", "metadata", "executionKind", "route"];
 
 const say = (message: string) => process.stdout.write(`${message}\n`);
 const die = (message: string, detail: string[] = []): never => {

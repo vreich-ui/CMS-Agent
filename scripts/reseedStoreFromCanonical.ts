@@ -108,7 +108,11 @@ export const TOPOLOGY_FIELDS = CANONICAL_OWNED_FIELDS;
 
 // Fields overlayStoreNode lets the store override wholesale. Only fields in this set are ever
 // candidates for RESEED_ALLOWLIST entries below.
-const STORE_OWNED_FIELDS = ["name", "description", "prompt", "schema", "inputSchema", "outputSchema", "allowedTools", "assignedSkills", "modelConfig", "executionConfig", "metadata"] as const;
+// K-A9 — `executionKind` and `route` join this set because overlayStoreNode overlays them from the
+// store exactly as it overlays modelConfig: they are authored, promoted and re-seedable, not pinned.
+// Adding them here is what makes a RESEED_ALLOWLIST entry able to push a canonical route back over a
+// store row that was taken off it — the restore path K-A9's fix entry asks for.
+const STORE_OWNED_FIELDS = ["name", "description", "prompt", "schema", "inputSchema", "outputSchema", "allowedTools", "assignedSkills", "modelConfig", "executionConfig", "metadata", "executionKind", "route"] as const;
 export type ReseedField = typeof STORE_OWNED_FIELDS[number];
 
 export type ReseedAllowlistEntry = { nodeId: string; field: ReseedField; note: string };

@@ -5,6 +5,7 @@ import {
   CONTINUATION_TICK_INTERVAL_MS,
   DEPLOYED_TICK_DEFAULTS,
   continuationTickEnabled,
+  continuationTickIntervalMs,
   decideRunContinuation,
   runContinuationTick,
   selectContinuableRuns
@@ -100,15 +101,22 @@ describe("T5 continuation selector — which runs a scheduled tick re-enters", (
     for (const verdict of [...reenter, ...skipped]) expect(verdict.reason.length).toBeGreaterThan(0);
   });
 
-  // W1.2 — these two constants have no runtime consumer; they exist so a reader knows the cadence,
-  // which makes a value that does not match the deployed schedule simply false. They said every
-  // minute while Cloud Scheduler had been running every two, and the stall analysis reasoned from
-  // them. They now state the deployed cadence, and scripts/twoPlaneDrift.ts asserts it against
-  // deploy-continuation-tick-schedule.sh so they cannot drift apart again unnoticed.
-  it("publishes the cadence the tick is actually deployed with", () => {
+  // W5 T6 — THE PIN MOVED, and what is left here is the part this module actually owns.
+  //
+  // This used to restate two literals ("*/2 * * * *" and 120_000) and call that a guarantee. It was
+  // not one: a unit test that hardcodes the same numbers as the module proves they agree with the
+  // test, never that either agrees with Cloud Scheduler. scripts/twoPlaneDrift.ts (`npm run
+  // test:drift`) now owns the pin, against scripts/deploy-continuation-tick-schedule.sh itself —
+  // edit the script's CRON default and drift fails, which is the acceptance for W5 T6.
+  //
+  // What remains is the DERIVATION, which is this module's own logic and has nothing to do with the
+  // deploy scripts: an interval that follows the cron, and a shape it does not understand leaving the
+  // published value alone rather than guessing.
+  it("derives the published cadence from the cron rather than restating it", () => {
     expect(CONTINUATION_TICK_CRON).toBe(DEPLOYED_TICK_DEFAULTS.cron);
-    expect(CONTINUATION_TICK_CRON).toBe("*/2 * * * *");
-    expect(CONTINUATION_TICK_INTERVAL_MS).toBe(120_000);
+    expect(CONTINUATION_TICK_INTERVAL_MS).toBe(continuationTickIntervalMs(DEPLOYED_TICK_DEFAULTS.cron));
+    expect(continuationTickIntervalMs("*/5 * * * *")).toBe(300_000);
+    expect(continuationTickIntervalMs("0 * * * *")).toBeUndefined();
   });
 });
 

@@ -22,6 +22,7 @@
 // outcome. A daily job over every tenant must not lose tenant B because tenant A is misconfigured.
 import { getEditorialStrategy } from "../projects/genesisEditorialStrategy.js";
 import { ProjectMcpAdapter } from "../projects/projectMcpAdapter.js";
+import { invokeTenantReadTool } from "../tools/tenantInvoke.js";
 import { repositoryManager } from "../runtime/repositories.js";
 import type { ExecutionRepository } from "../repository/interfaces/ExecutionRepository.js";
 import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
@@ -193,7 +194,9 @@ const defaultReadTenant = async (projectRepository: ProjectRepository, projectId
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
-    const answer = await new ProjectMcpAdapter(config).callReadTool(tool, args, controller.signal);
+    // W5 T3 — the planner's tenant reads go through the choke point too, so a plan that quietly
+    // read a tenant is visible in tool.list_executions alongside the run that used it.
+    const answer = await invokeTenantReadTool({ projectId: config.projectId, project: config, toolId: tool, args, caller: "engine", signal: controller.signal });
     return answer.ok ? { ok: true, result: answer.result } : { ok: false, error: answer.error ?? answer.code };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

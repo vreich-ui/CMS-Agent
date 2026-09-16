@@ -239,6 +239,9 @@ export function createSiteDuplicationTools(deps: SiteDuplicationToolDeps): Works
     if (config.status === "provisioning") {
       throw new SiteDuplicationRefusal("duplicate_target_unreachable", `Target project "${projectId}" is still provisioning — its genesis did not complete. Re-run site.duplicate with its newSite arguments to finish the mint (every step adopts what exists), then duplicate into it.`);
     }
+    // W5 T3 — NOT routed through invokeTenantTool, deliberately: testConnection is a primitive MCP
+    // `initialize` handshake, not a tenant VERB. It calls no tool, changes nothing, and has no verb
+    // name to record — a ledger row for it would say "someone checked whether the server answered".
     const connection = await new ProjectMcpAdapter(config).testConnection();
     if (!connection.ok) {
       throw new SiteDuplicationRefusal("duplicate_target_unreachable", `Target project "${projectId}" is not reachable: ${connection.error ?? "MCP initialize failed"}. (Endpoint/token are read from ${config.mcpEndpointEnvVar}${config.tokenEnvVar ? ` / ${config.tokenEnvVar}` : ""} — values never transit MCP.)`);

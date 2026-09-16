@@ -6,6 +6,12 @@ export type WorkspaceNodeStatus = typeof workspaceNodeStatuses[number];
 
 export type WorkspaceNodePosition = { x: number; y: number };
 
+// K-A9 — re-exported from nodeExecution.ts, which owns the derivation and the fail-open rules. The
+// types live there rather than here because the store has to derive them at parse time and this
+// module is the one every layer already imports.
+export type { NodeExecutionKind, NodeRoute } from "./nodeExecution.js";
+import type { NodeExecutionKind, NodeRoute } from "./nodeExecution.js";
+
 export type WorkspaceNode = {
   id: string;
   name: string;
@@ -42,6 +48,21 @@ export type WorkspaceNode = {
   // the record says which of the two happened. Absent (undefined) never means "valid": it means the
   // field predates this stamp.
   defaultOutput?: NodeDefaultOutput;
+  // K-A9 (2026-09-16) — HOW THIS NODE RUNS, as a stored field instead of a metadata flag.
+  //
+  // STORE-OWNED, like prompt/outputSchema/modelConfig, and NOT in CANONICAL_OWNED_FIELDS: a node's
+  // route is authored, promoted and re-seeded exactly as those are. What changed is that it is no
+  // longer carried inside `metadata`, which `workspace.update_node_metadata` replaces wholesale — so
+  // a metadata write can no longer flip a tail node off its deterministic route by omission (K-A9)
+  // or by setting the old flag `false` (K-A1). `workspace.update_node_execution` is the one verb
+  // that changes it.
+  //
+  // ABSENT IS NOT "model". Both fields are optional and undefined means "this row predates the
+  // field", which resolves through the legacy metadata scan exactly as before — see
+  // nodeExecution.ts's resolveNodeExecution. An explicit `executionKind: "model"` is a different and
+  // much stronger statement: it SUPPRESSES any route metadata the row also carries.
+  executionKind?: NodeExecutionKind;
+  route?: NodeRoute;
 };
 
 export type NodeDefaultOutputAuthor = "human" | "agent" | "system";
