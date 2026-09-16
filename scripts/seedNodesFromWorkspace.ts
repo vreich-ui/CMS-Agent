@@ -52,6 +52,7 @@ import { fileURLToPath } from "node:url";
 import { captureConductorNodes } from "../src/agent/workspace/captureConductorNodes.js";
 import { cloneConductorNodes } from "../src/agent/workspace/cloneConductorNodes.js";
 import { visualIdentityNodes } from "../src/agent/workspace/visualIdentityNodes.js";
+import { siteContentSpecialistNodes } from "../src/agent/workspace/siteContentSpecialistNodes.js";
 import { CANONICAL_OWNED_FIELDS } from "../src/agent/workspace/executor.js";
 import { getWorkspaceNode, listWorkspaceNodes, validateWorkspaceGraph } from "../src/agent/workspace/nodes.js";
 import { publishingTailConformanceIssues } from "../src/agent/workspace/publishingTail.js";
@@ -138,8 +139,13 @@ const die = (message: string, detail: string[] = []): never => {
 // are dispatched (node_execute from the chat path, and a visual_identity run at site genesis), and
 // they belong exactly where they are. Excluded here for the same two reasons capture/clone are, and
 // read from the node module itself so a future visual_identity node is excluded automatically.
+//
+// C3 added site_content_specialists as the FIFTH workflow, unioned into the same store document by
+// workspaceStoreNodes.ts exactly like visual_identity's pair — same shape, same reason, same fix:
+// excluded here, read from the node module itself, so a future site_content_specialists node is
+// excluded automatically too.
 const OTHER_WORKFLOW_NODE_IDS = new Set(
-  [...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes].map((node) => node.id)
+  [...captureConductorNodes, ...cloneConductorNodes, ...visualIdentityNodes, ...siteContentSpecialistNodes].map((node) => node.id)
 );
 
 export const scopeToPublishingConductor = (source: WorkspaceNode[]): { scoped: WorkspaceNode[]; excluded: string[] } => {

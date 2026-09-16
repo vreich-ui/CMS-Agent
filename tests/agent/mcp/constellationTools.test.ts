@@ -26,8 +26,10 @@ describe("constellation.* MCP tools", () => {
     // capture/clone joined the governance-visible workspace store seed, so they are now first-class
     // constellation agents too, not just publishing_conductor's; clone_conductor's own upstream grew
     // from 9 to 13 with T15.34/#210's four pdf-template nodes), + C5's visual_identity pair
-    // (brand_imagery_writer, visual_standard_materializer), which joined the same seed.
-    expect(structure.agents).toHaveLength(51);
+    // (brand_imagery_writer, visual_standard_materializer) + C3's site_content_specialists five,
+    // which joined the same seed. This file imports nothing from workspaceStoreNodes.ts, so there is
+    // no in-file derivation to prefer over the literal; left hardcoded.
+    expect(structure.agents).toHaveLength(56);
     expect(structure.relationships).toEqual([]);
     const graph = await data("workspace.get_graph");
     expect(structure.derivedExecutionEdges).toHaveLength(graph.edges.length);
@@ -38,7 +40,7 @@ describe("constellation.* MCP tools", () => {
 
   it("returns honest empty-system shapes before any runs or usage exist", async () => {
     const metrics = await data("constellation.get_metrics");
-    expect(metrics.agents).toHaveLength(51); // see the node breakdown above (T15.16 / #195; T15.34 / #210; W8 adds artifact_materializer; C5 adds the visual_identity pair)
+    expect(metrics.agents).toHaveLength(56); // see the node breakdown above (T15.16 / #195; T15.34 / #210; W8 adds artifact_materializer; C5 adds the visual_identity pair; C3 adds site_content_specialists)
     for (const agent of metrics.agents) {
       expect(agent.usage.estimated.recordCount).toBe(0);
       expect(agent.usage.actual.recordCount).toBe(0);

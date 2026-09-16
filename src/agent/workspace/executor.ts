@@ -56,6 +56,10 @@ import "./pdfTemplateStudioWorkflow.js";
 import "./imageTemplateRevisionWorkflow.js";
 import "./documentRenderWorkflow.js";
 import "./assetLookupWorkflow.js";
+// C3 — same side-effect registration for site_content_specialists (the five site-content writer/
+// planner nodes). See siteContentSpecialistWorkflow.ts's own REVIEW comment for why this registers a
+// workflow ahead of the C4 conductor that will dispatch these nodes.
+import "./siteContentSpecialistWorkflow.js";
 import { readCaptureStage, runCaptureStage } from "./captureConductorRoutes.js";
 import { readCloneStage, runCloneStage } from "./cloneConductorRoutes.js";
 import { readVisualStandardMaterializer, runVisualStandardMaterialization } from "./visualStandardMaterialization.js";

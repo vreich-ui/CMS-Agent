@@ -112,9 +112,11 @@ describe("mcp endpoint", () => {
     expect(response.json.result.structuredContent.ok).toBe(true);
     // 24 publishing_conductor nodes (R-22 re-seed + §2.16 placement_resolver/monetization_strategy +
     // T15.6 release_executor) + 11 capture_conductor + 13 clone_conductor + C5's 2 visual_identity own
-    // nodes, additively seeded into the store by T15.16 (#195) so they are governance-visible through
-    // workspace.get_nodes too.
-    expect(response.json.result.structuredContent.data.nodes).toHaveLength(51);
+    // nodes + C3's 5 site_content_specialists own nodes, additively seeded into the store by T15.16
+    // (#195) so they are governance-visible through workspace.get_nodes too. This file imports nothing
+    // from workspaceStoreNodes.ts, so there is no in-file derivation to prefer over the literal
+    // (workspaceStoreSeedNodes().length would just restate the module under test); left hardcoded.
+    expect(response.json.result.structuredContent.data.nodes).toHaveLength(56);
     expect(response.json.result.structuredContent.data.nodes.map((node: { id: string }) => node.id)).toEqual(expect.arrayContaining(["input_triage", "contract_intelligence", "article_body", "artifact_plan", "publish_payload", "publication_controller", "publish_executor"]));
     // The client's fetched contract is the authority, and the envelope carries the provenance that proves
     // it was fetched rather than assumed.

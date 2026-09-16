@@ -21,6 +21,10 @@ import "./pdfTemplateStudioWorkflow.js";
 import "./imageTemplateRevisionWorkflow.js";
 import "./documentRenderWorkflow.js";
 import "./assetLookupWorkflow.js";
+// C3 — site_content_specialists, for the identical reason: this module's whole purpose is
+// single-node resolution WITHOUT the executor, so it needs its own side-effect import of every
+// registered workflow, including this one.
+import "./siteContentSpecialistWorkflow.js";
 
 // T12.15 — single-node resolution for EXECUTION, as opposed to resolveConductorNodes (executor.ts),
 // which resolves a whole run's node array.
