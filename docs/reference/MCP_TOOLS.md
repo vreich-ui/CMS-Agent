@@ -2381,6 +2381,14 @@ Execute exactly one node independently from the full workflow.
     "expectedWorkspaceVersion": {
       "type": "integer",
       "minimum": 0
+    },
+    "candidateSkillIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Narrow this node's assigned skills to a subset for THIS call only — for a node whose assignment spans more than one job (e.g. reference_content_writer's faq_help_process / policy_explanation / evidence_story), names which job this dispatch is. NEVER WIDENS: an id the node was not assigned is refused and recorded (skillSelection.dropped, reason not_assigned on node.execute; simply absent from resolvedSkills on node.prepare_execution) — the node's own assignment stays the sole authority. Omit the field entirely for \"no recipe narrowing, use the node's full assignment (subject to scope)\", the same as every caller before this field existed; pass [] for \"this dispatch uses no skills\" — presence, not length, decides, so an empty array is a real instruction, not a no-op. On node.execute this narrows the PIN: a runId that already carries a pinned selection for this node (a reused runId, e.g. a retry) ignores candidateSkillIds exactly as it ignores every other input to pinning — write-once, first dispatch wins."
     }
   },
   "required": [
@@ -2717,6 +2725,14 @@ Prepare one node execution without calling the model.
     },
     "modelConfig": {
       "type": "object"
+    },
+    "candidateSkillIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Narrow this node's assigned skills to a subset for THIS call only — for a node whose assignment spans more than one job (e.g. reference_content_writer's faq_help_process / policy_explanation / evidence_story), names which job this dispatch is. NEVER WIDENS: an id the node was not assigned is refused and recorded (skillSelection.dropped, reason not_assigned on node.execute; simply absent from resolvedSkills on node.prepare_execution) — the node's own assignment stays the sole authority. Omit the field entirely for \"no recipe narrowing, use the node's full assignment (subject to scope)\", the same as every caller before this field existed; pass [] for \"this dispatch uses no skills\" — presence, not length, decides, so an empty array is a real instruction, not a no-op. On node.execute this narrows the PIN: a runId that already carries a pinned selection for this node (a reused runId, e.g. a retry) ignores candidateSkillIds exactly as it ignores every other input to pinning — write-once, first dispatch wins."
     }
   },
   "required": [
@@ -4828,6 +4844,25 @@ Patch a registered project's safe fields (name, env var names, the stored mcpEnd
             }
           ],
           "description": "Per-site parameters of the object-native publish dialect, merged field-by-field onto whatever the project already carries (so one pointer can be moved without restating the rest); null on a field clears it, null on the whole object removes the dialect. voiceObjectId and strategyObjectId address this tenant's governed editorial_voice / editorial_strategy singletons; both default by convention (voice_<slug>, strat_<slug>), so setting them is an override for a tenant whose object is not at the conventional id. A patch that would leave the dialect missing siteObjectId, taxonomyRegistryObjectId or objectIdSource is refused (object_dialect_incomplete) rather than persisted."
+        },
+        "operatorToolPolicies": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "allowed",
+                  "needs_approval",
+                  "blocked"
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "DURABLE per-tool operator decisions for this tenant, outranking toolPolicies. You normally do NOT send this: any toolPolicies write derives it automatically by diffing against the managed baseline (the code definition, or the genesis profile for a minted tenant). Send it to pin verbs explicitly; null clears the overlay and returns those verbs to the managed baseline. Unlike toolPolicies, this field is never rewritten by migrateDefaultProjectConfig or genesis:reconcile — which is what makes a hand-granted verb survive a definitionVersion bump."
         },
         "autonomyMode": {
           "type": "string",

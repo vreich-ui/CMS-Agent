@@ -186,3 +186,86 @@ describe("executeNode — closes the node_execute skill-resolution gap", () => {
     expect(prep.resolvedSkills.skillIds.sort()).toEqual([...dispatched].sort());
   });
 });
+
+// C2/C3 — node.execute's missing candidateSkillIds parameter, closed. #365 built pinSkillSelection's
+// `options.candidateSkillIds`; nothing on the MCP surface could ever supply it, because
+// node.execute's (and node.prepare_execution's) schema had no field for it. These tests exercise
+// the parameter end to end from executeNode/prepareNodeExecution — the same boundary node.execute
+// and node.prepare_execution call through — not the already-covered pinSkillSelection unit itself.
+describe("executeNode/prepareNodeExecution — candidateSkillIds (C2/C3)", () => {
+  beforeEach(() => {
+    delete process.env.WORKSPACE_STORE;
+    resetRepositoryManager();
+  });
+
+  // The real three-family case named in the gap this closes: reference_content_writer is a
+  // CANONICAL node (siteContentSpecialistNodes.ts, resolved via resolveNodeForExecution's
+  // store-miss fallback — never seeded into the store here), assigned faq_help_process,
+  // policy_explanation and evidence_story — three different jobs sharing one node, each its own
+  // unscoped, fleet-neutral family (seededSkills.ts). A dispatch naming one of them as its
+  // candidate must resolve only that one, not the other two.
+  const REFERENCE_CONTENT_WRITER = "reference_content_writer";
+  const referenceInput = { referenceKind: "faq", brief: { audience: "unit test" } };
+
+  it("a dispatch naming one of reference_content_writer's three skills resolves only that one", async () => {
+    const result = await executeNode({
+      nodeId: REFERENCE_CONTENT_WRITER, input: referenceInput, executionMode: "mock",
+      runId: "run_candidate_narrows_real_node", candidateSkillIds: ["policy_explanation"]
+    }) as { execution: WorkflowExecutionRecord };
+    const pinned = result.execution.skillSelection?.[REFERENCE_CONTENT_WRITER];
+    expect(pinned?.skillIds).toEqual(["policy_explanation"]);
+    expect(pinned?.source).toBe("recipe_candidates");
+  });
+
+  it("a named skill the node was never assigned is dropped, not granted", async () => {
+    await createNode([CRAFT]);
+    const result = await executeNode({ nodeId: NODE_ID, input: {}, executionMode: "mock", candidateSkillIds: [SEO] }) as { execution: WorkflowExecutionRecord };
+    const pinned = result.execution.skillSelection?.[NODE_ID];
+    expect(pinned?.skillIds).toEqual([]);
+    expect(pinned?.dropped).toContainEqual(expect.objectContaining({ skillId: SEO, reason: "not_assigned" }));
+  });
+
+  it("[] resolves to no skills — presence, not length", async () => {
+    await createNode([CRAFT, SEO]);
+    const result = await executeNode({ nodeId: NODE_ID, input: {}, executionMode: "mock", candidateSkillIds: [] }) as { execution: WorkflowExecutionRecord };
+    const pinned = result.execution.skillSelection?.[NODE_ID];
+    expect(pinned?.skillIds).toEqual([]);
+    expect(pinned?.candidateSkillIds).toEqual([]);
+    expect(pinned?.source).toBe("recipe_candidates");
+  });
+
+  it("omitting the parameter behaves exactly as main does today", async () => {
+    await createNode([CRAFT, SEO]);
+    const result = await executeNode({ nodeId: NODE_ID, input: {}, executionMode: "mock" }) as { execution: WorkflowExecutionRecord };
+    const pinned = result.execution.skillSelection?.[NODE_ID];
+    expect(pinned?.skillIds.sort()).toEqual([CRAFT, SEO].sort());
+    expect(pinned?.candidateSkillIds).toBeUndefined();
+    expect(pinned?.source).not.toBe("recipe_candidates");
+  });
+
+  it("a reused runId with an existing pin ignores the candidate list", async () => {
+    await createNode([CRAFT, SEO]);
+    await seedRun("run_reused_ignores_candidates", { [NODE_ID]: seedSelection({ skillIds: [CRAFT] }) });
+    const result = await executeNode({ nodeId: NODE_ID, input: {}, executionMode: "mock", runId: "run_reused_ignores_candidates", candidateSkillIds: [SEO] }) as { execution: WorkflowExecutionRecord };
+    expect(result.execution.skillSelection?.[NODE_ID]?.skillIds).toEqual([CRAFT]);
+  });
+
+  it("prepareNodeExecution narrows by candidate the same way executeNode pins, so a preview never diverges from its dispatch", async () => {
+    await createNode([CRAFT, SEO, TASK_SCOPED]);
+    const prep = await prepareNodeExecution({ nodeId: NODE_ID, input: {}, candidateSkillIds: [CRAFT] }) as { resolvedSkills: { skillIds: string[] } };
+    // NARROWS TO THE CANDIDATE, not the full (scope-narrowed) assignment: TASK_SCOPED would
+    // otherwise survive scope narrowing (it is scoped to this exact node), so its absence here is
+    // what would fail if prepareNodeExecution stopped applying candidateSkillIds and fell back to
+    // scope narrowing alone.
+    expect(prep.resolvedSkills.skillIds).toEqual([CRAFT]);
+
+    const executed = await executeNode({ nodeId: NODE_ID, input: {}, executionMode: "mock", candidateSkillIds: [CRAFT] }) as { execution: WorkflowExecutionRecord };
+    expect(executed.execution.skillSelection?.[NODE_ID]?.skillIds).toEqual(prep.resolvedSkills.skillIds);
+  });
+
+  it("prepareNodeExecution never grants a candidate the node was not assigned", async () => {
+    await createNode([CRAFT]);
+    const prep = await prepareNodeExecution({ nodeId: NODE_ID, input: {}, candidateSkillIds: [SEO] }) as { resolvedSkills: { skillIds: string[] } };
+    expect(prep.resolvedSkills.skillIds).toEqual([]);
+  });
+});
