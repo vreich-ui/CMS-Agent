@@ -27,7 +27,7 @@ describe("capabilityVocabulary", () => {
     expect(first.length).toBeGreaterThan(0);
   });
 
-  it("carries every capability the nine required-by the six live descriptors require, nothing invented", () => {
+  it("carries every capability the live descriptors require, nothing invented", () => {
     const expected = [
       "site_inventory_read",
       "visual_identity_read",
@@ -37,7 +37,9 @@ describe("capabilityVocabulary", () => {
       "pdf_template_write",
       "pdf_template_publish",
       "image_search",
-      "image_template_write"
+      "image_template_write",
+      // T3 (2026-09-16 annotate-bridge plan) — required by descriptors/imageAnnotation.ts.
+      "image_annotate"
     ].sort();
     expect(listCapabilityIds()).toEqual(expected);
   });
@@ -55,7 +57,7 @@ describe("capabilityVocabulary", () => {
     expect(isKnownCapability("not_a_real_capability_xyz")).toBe(false);
   });
 
-  it("the six built-in descriptors all validate against the vocabulary (registerBuiltInOperations did not throw at import)", () => {
+  it("the built-in descriptors all validate against the vocabulary (registerBuiltInOperations did not throw at import)", () => {
     const requiredCapabilities = listOperations().flatMap((descriptor) => descriptor.requiredCapabilities);
     expect(requiredCapabilities.length).toBeGreaterThan(0);
     for (const capability of requiredCapabilities) {
@@ -81,7 +83,7 @@ describe("capabilityVocabulary", () => {
       };
       expect(() => registerOperation(badDescriptor)).toThrow(/unknown capability/i);
     } finally {
-      // Leave the module-level registry exactly as every other test file expects it: the six
+      // Leave the module-level registry exactly as every other test file expects it: the
       // production descriptors, re-registered into the freshly-cleared catalog.
       __resetOperationCatalogForTests();
       registerBuiltInOperations();
@@ -176,7 +178,7 @@ describe("deriveTenantCapabilityAvailability", () => {
     // the exception that contributes none: it contributes create_pdf_template (shared with
     // pdf_template_write, which is why the set is deduplicated).
     expect(CAPABILITY_EVIDENCE_TOOL_NAMES).toEqual(
-      expect.arrayContaining(["object_inventory", "object_get", "object_create", "search_artifacts", "document_render", "create_pdf_template", "publish_pdf_template", "search_images"])
+      expect.arrayContaining(["object_inventory", "object_get", "object_create", "search_artifacts", "document_render", "create_pdf_template", "publish_pdf_template", "search_images", "annotate_image"])
     );
   });
 });
