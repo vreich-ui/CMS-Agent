@@ -53,6 +53,13 @@ import {
   DOCUMENT_RENDER_BRIEF_KEY,
   DOCUMENT_RENDER_BRIEF_REQUIRED_OPERATION_FIELDS
 } from "../capture/documentRenderBriefBuilder.js";
+import { IMAGE_ANNOTATION_WORKFLOW_ID } from "./imageAnnotationWorkflow.js";
+import {
+  buildImageAnnotationBrief,
+  IMAGE_ANNOTATION_BRIEF_BUILDER_ID,
+  IMAGE_ANNOTATION_BRIEF_KEY,
+  IMAGE_ANNOTATION_BRIEF_REQUIRED_OPERATION_FIELDS
+} from "../capture/imageAnnotationBriefBuilder.js";
 import {
   buildPdfTemplateFamilyBrief,
   PDF_TEMPLATE_FAMILY_BRIEF_BUILDER_ID,
@@ -212,6 +219,33 @@ const BUILDERS: readonly WorkflowInitialInputBuilder[] = [
         };
       }
       return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [ASSET_LOOKUP_BRIEF_KEY]: built.brief } };
+    }
+  },
+  {
+    // T5 (2026-09-16 annotate-bridge plan) — image_annotation -> image_annotation_studio. Nested
+    // brief, same posture as the four above. The operation's flat fields (tenantId, image,
+    // annotations, slot?, deviceScaleFactor?) have no flat equivalent on the entry node
+    // (image_annotation_analyze), which reads ONE nested initialInput.imageAnnotationBrief.
+    builderId: IMAGE_ANNOTATION_BRIEF_BUILDER_ID,
+    workflowId: IMAGE_ANNOTATION_WORKFLOW_ID,
+    providesInitialInputFields: [IMAGE_ANNOTATION_BRIEF_KEY],
+    requiredOperationFields: [...IMAGE_ANNOTATION_BRIEF_REQUIRED_OPERATION_FIELDS],
+    conflictCode: "image_annotation_brief_conflict",
+    build: (input) => {
+      const built = buildImageAnnotationBrief(input);
+      if (!built.ok) return built;
+      const source = isRecord(input) ? input : {};
+      // Same clone_target_mismatch guard every builder above holds: state targetProjectId only when
+      // the caller supplied none; refuse a conflicting one rather than redirect the run.
+      const declaredTarget = typeof source.targetProjectId === "string" ? source.targetProjectId.trim() : "";
+      if (declaredTarget && declaredTarget !== built.tenantId) {
+        return {
+          ok: false,
+          code: "image_annotation_target_project_mismatch",
+          reason: `This run declares targetProjectId "${declaredTarget}" but the operation is scoped to tenant "${built.tenantId}". An annotation is never redirected to another project's artifact store; the two must name the same tenant.`
+        };
+      }
+      return { ok: true, initialInput: { ...source, targetProjectId: built.tenantId, [IMAGE_ANNOTATION_BRIEF_KEY]: built.brief } };
     }
   }
 ];

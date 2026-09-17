@@ -16,7 +16,8 @@
 // EVIDENCE — read from workflowRegistry.ts and every register*Workflow call, not assumed:
 // registered today are publishing_conductor (workflowRegistry.ts), capture_conductor
 // (captureConductorWorkflow.ts), clone_conductor (cloneConductorWorkflow.ts), visual_identity
-// (visualIdentityWorkflow.ts), and pdf_template_studio (pdfTemplateStudioWorkflow.ts). Of the six
+// (visualIdentityWorkflow.ts), pdf_template_studio (pdfTemplateStudioWorkflow.ts) and — T5
+// (2026-09-16 annotate-bridge plan) — image_annotation_studio (imageAnnotationWorkflow.ts). Of the
 // catalog operations:
 //
 //   visual_identity_review_change -> visual_identity — BOUND. visualIdentityWorkflow.ts registers
@@ -65,6 +66,7 @@ import { PDF_TEMPLATE_STUDIO_WORKFLOW_ID } from "../workspace/pdfTemplateStudioW
 import { IMAGE_TEMPLATE_REVISION_WORKFLOW_ID } from "../workspace/imageTemplateRevisionWorkflow.js";
 import { DOCUMENT_RENDER_WORKFLOW_ID } from "../workspace/documentRenderWorkflow.js";
 import { ASSET_LOOKUP_WORKFLOW_ID } from "../workspace/assetLookupWorkflow.js";
+import { IMAGE_ANNOTATION_WORKFLOW_ID } from "../workspace/imageAnnotationWorkflow.js";
 import { getOperation } from "./operationCatalog.js";
 import type { OperationId } from "./operationTypes.js";
 import { checkBindingInputContract, type BindingInputContractResult, type OperationInputContractSource } from "./bindingInputContract.js";
@@ -224,6 +226,43 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
     workflowId: ASSET_LOOKUP_WORKFLOW_ID,
     inputMapping: {},
     initialInputBuilder: declaredBuilderFor(ASSET_LOOKUP_WORKFLOW_ID)
+  },
+  {
+    // T5 (2026-09-16 annotate-bridge plan) — image_annotation -> image_annotation_studio — BOUND.
+    // imageAnnotationWorkflow.ts registers the three-node graph (imageAnnotationNodes.ts) this
+    // operation's own declared `effects` and `completion` describe, and the evidence this row rests
+    // on is the same kind every row above rests on — never naming similarity:
+    //   * the descriptor declares exactly two effects, analyze_image_layout (riskLevel "read") and
+    //     annotate_image (riskLevel "write", "saves the result as a NEW image artifact"), and the
+    //     graph is one node per effect: image_annotation_analyze calls exactly that read verb and
+    //     writes nothing, image_annotation_draw calls exactly that write verb once;
+    //   * the operation's one requiredCapability is image_annotate, which capabilityReadiness.ts
+    //     derives from the `annotate_image` grant — the very verb the draw node calls, and nothing
+    //     else;
+    //   * the operation's one completion criterion, annotation_text_verified with evidenceKind
+    //     image_text_check, is READ by image_annotation_verify from check_image_text {mode:"expect"}'s
+    //     own receipt over the NEW artifact, with the strings the AnnotationSpec actually drew —
+    //     never asserted by the workflow because the draw call returned. A receipt naming a missing
+    //     string, or carrying no verdict, reports the criterion unmet with the reason stated.
+    //
+    // THIS ROW IS WHY image_annotation IS NO LONGER IN UNBOUND_OPERATION_IMPLEMENTING_TASK BELOW.
+    // T3 (#368) registered the descriptor ahead of its implementation and parked it there naming T4;
+    // T4 shipped a SKILL teaching an agent the manual four-tool sequence and registered no workflow
+    // or executor, so the honest executable:false stood. Moving the id out of that map and into this
+    // table is exactly the procedure that map's own header prescribes for the day the implementation
+    // lands — and the map itself is deliberately kept, empty, for the next operation registered ahead
+    // of its own.
+    //
+    // inputMapping is EMPTY BY CONSTRUCTION, same reasoning as the four rows above: the operation's
+    // fields are CONSTRUCTED into initialInput.imageAnnotationBrief by `initialInputBuilder`
+    // (imageAnnotationBriefBuilder.ts, applied in startDryRun — it is also the one place the
+    // publicPath spelling of the base image is resolved into the requestId every bridge verb needs),
+    // and image_annotation_analyze's own inputSchema NAMES imageAnnotationBrief so the contract check
+    // has a real requirement to evaluate rather than an open schema to pass vacuously.
+    operationId: "image_annotation",
+    workflowId: IMAGE_ANNOTATION_WORKFLOW_ID,
+    inputMapping: {},
+    initialInputBuilder: declaredBuilderFor(IMAGE_ANNOTATION_WORKFLOW_ID)
   }
 ];
 
@@ -240,19 +279,19 @@ const BINDINGS: readonly OperationWorkflowBinding[] = [
 // (A8) and asset_lookup_adopt (A5) both moved OUT into BINDINGS above, which is exactly what this
 // map's own header says to do when a task ships a real implementing workflow. Every catalog
 // operation now has one — or, for site_inventory (A4), a registered executor.
-// T3 (2026-09-16 annotate-bridge plan) — image_annotation is the first entry this map has held
-// since the Milestone A remainder emptied it, and it is here for exactly the reason the paragraph
-// above describes: the operation is REGISTERED (descriptors/imageAnnotation.ts) ahead of the
-// executor that will run it. The underlying annotate path is not missing — it shipped and was
-// live-verified on 2026-09-16 — but no registered workflow or executor in THIS codebase drives it
-// yet, and claiming otherwise by binding it to a lookalike workflow is precisely what this module's
-// "never bind on similarity" discipline forbids. preflightOperation() therefore reports
-// executable:false with a named remedy pointing at T4, rather than a run that would die at
-// dispatch. When T4 ships, move this id OUT of here and into BINDINGS above (or into
-// operationExecutorBindings.ts, if it ships as an executor) with its own evidence comment.
-export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {
-  image_annotation: "T4 of the 2026-09-16 annotate-bridge plan"
-};
+// T3 (2026-09-16 annotate-bridge plan) held image_annotation here — the first entry this map had
+// since the Milestone A remainder emptied it — because the operation was REGISTERED
+// (descriptors/imageAnnotation.ts) ahead of the executor that would run it, and binding it to a
+// lookalike workflow is precisely what this module's "never bind on similarity" discipline forbids.
+// T4 then shipped a SKILL teaching an agent the manual four-tool sequence, which is not a registered
+// workflow or executor, so the honest executable:false and its named remedy stood.
+// T5 — image_annotation MOVED OUT, into BINDINGS above with its own evidence comment
+// (image_annotation -> image_annotation_studio, imageAnnotationWorkflow.ts). That is exactly the
+// procedure this map's header prescribes, and the map is EMPTY AGAIN AND DELIBERATELY KEPT rather
+// than deleted: it is the mechanism preflightOperation() uses to name a concrete remedy for an
+// operation with no implementation, and the next operation added to the catalog before its workflow
+// exists belongs here.
+export const UNBOUND_OPERATION_IMPLEMENTING_TASK: Readonly<Record<string, string>> = {};
 
 function assertBindingIsSound(binding: OperationWorkflowBinding): void {
   if (!listRegisteredWorkflowIds().includes(binding.workflowId)) {

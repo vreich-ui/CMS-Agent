@@ -145,6 +145,26 @@ describe("mcpBoundary conformance — toWireArguments output validates against t
   it("document_render", () =>
     assertConforms("document_render", toWireArguments("document_render", { siteId: "site_x", ownerObjectType: "content_item", ownerObjectId: "ci_1", templateId: "tpl_x" })));
 
+  // T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio's three bridge verbs.
+  it("analyze_image_layout", () =>
+    assertConforms("analyze_image_layout", toWireArguments("analyze_image_layout", { siteId: "site_x", requestId: "req_1", sha256: "a".repeat(64) })));
+
+  it("annotate_image", () =>
+    assertConforms(
+      "annotate_image",
+      toWireArguments("annotate_image", {
+        siteId: "site_x",
+        requestId: "req_1",
+        sha256: "a".repeat(64),
+        spec: { version: 1, canvas: { w: 1536, h: 1024 }, theme: { textColors: { title: "#111111" } }, elements: [{ id: "annotation_1", type: "text", content: "Hello", at: "B2", anchor: "tc", align: "center", style: "title" }], avoid: [] },
+        slot: "hero_annotated",
+        deviceScaleFactor: 2
+      })
+    ));
+
+  it("check_image_text", () =>
+    assertConforms("check_image_text", toWireArguments("check_image_text", { siteId: "site_x", requestId: "req_1", publicPath: "/img/req_1/" + "b".repeat(64) + ".png", mode: "expect", expect: ["Hello"] })));
+
   it('object_create — a fully-formed mint call (the "site" the spec\'s defect table names) conforms', () =>
     assertConforms(
       "object_create",
