@@ -18,6 +18,16 @@ const executed = (nodeId: string, output: Record<string, unknown>) => ({
   execution: { nodes: [{ nodeId, output }] }
 });
 
+// Same shape as `executed`, but also carrying the ids nodeRuntime.ts's real executeNode puts on
+// its return value — `execution.runId` (the saved WorkflowExecutionRecord) and a top-level
+// `executionId` sibling to `execution` (nodeRuntime.ts:380: `redactSecrets({ execution: await
+// repos.executionRepository.saveRun(run), executionId, ... })`). Used by the id-surfacing tests so
+// each dispatch can be given its own distinct runId/executionId.
+const executedWithIds = (nodeId: string, output: Record<string, unknown>, runId: string, executionId: string) => ({
+  execution: { runId, nodes: [{ nodeId, output }] },
+  executionId
+});
+
 function section(overrides: Partial<PlanSection> & Pick<PlanSection, "order" | "sectionType">): PlanSection {
   return {
     purpose: "test purpose",
@@ -40,6 +50,40 @@ function makeRunner(sections: PlanSection[], opts: { throwFor?: Set<string> } = 
     if (data.nodeId === "site_content_planner") return executed("site_content_planner", plan(sections));
     if (opts.throwFor?.has(data.nodeId)) throw new Error(`${data.nodeId} exploded`);
     return executed(data.nodeId, { artifact: `${data.nodeId}.v1`, summary: "drafted", ...data.input });
+  }) as unknown as NonNullable<SiteContentDraftingDeps["executeNodeImpl"]>;
+  return { runNode, calls };
+}
+
+// Like makeRunner, but every dispatch (planner included) gets its own distinct runId/executionId,
+// minted here as `${nodeId}-run-${n}` / `${nodeId}-exec-${n}` — so tests can assert two different
+// dispatches carry two different ids, not one value shared by accident. `noDraftFor` simulates a
+// node that ran (its executeNode result carries ids) but returned nothing extractNodeOutput can use
+// as a draft — the "node returned no draft" after-dispatch refusal. `throwFor` simulates a dispatch
+// whose promise rejects; the thrown value itself carries `execution`/`executionId` (the shape a
+// dispatch that minted a run before failing would throw), so ids are still recoverable from the
+// catch — the "node threw" after-dispatch case.
+function makeIdRunner(
+  sections: PlanSection[],
+  opts: { noDraftFor?: Set<string>; throwFor?: Set<string> } = {}
+) {
+  const calls: Array<{ nodeId: string; input: Record<string, unknown>; candidateSkillIds?: string[] }> = [];
+  let n = 0;
+  const runNode = vi.fn(async (data: any) => {
+    calls.push({ nodeId: data.nodeId, input: data.input, candidateSkillIds: data.candidateSkillIds });
+    n += 1;
+    const runId = `${data.nodeId}-run-${n}`;
+    const executionId = `${data.nodeId}-exec-${n}`;
+    if (opts.throwFor?.has(data.nodeId)) {
+      throw Object.assign(new Error(`${data.nodeId} exploded`), { execution: { runId }, executionId });
+    }
+    if (data.nodeId === "site_content_planner") return executedWithIds("site_content_planner", plan(sections), runId, executionId);
+    if (opts.noDraftFor?.has(data.nodeId)) {
+      // A node that ran (ids exist) but whose result carries no matching node state / output at
+      // all — extractNodeOutput's every fallback (state.output, stageOutputs, artifacts, errors)
+      // comes up empty, so this is "returned no draft", not "threw".
+      return { execution: { runId, nodes: [] }, executionId };
+    }
+    return executedWithIds(data.nodeId, { artifact: `${data.nodeId}.v1`, summary: "drafted", ...data.input }, runId, executionId);
   }) as unknown as NonNullable<SiteContentDraftingDeps["executeNodeImpl"]>;
   return { runNode, calls };
 }
@@ -662,5 +706,128 @@ describe("runSiteContentDrafting — supplement matching precedence (order wins 
 
     expect(result.supplementMatching).toBe("none");
     expect(result.supplementMatchingReason).toMatch(/no supplements/i);
+  });
+});
+
+// -------------------------------------------------------------------------------------------------
+// Run/execution ids surfaced from each dispatch (the live-verification finding: no dispatch returned
+// an id an operator could use to look up the run afterwards). See extractNodeIds and its call sites
+// in siteContentDraftingExecutor.ts.
+describe("runSiteContentDrafting — run/execution ids surfaced per dispatch", () => {
+  it("a drafted outcome carries its own dispatch's runId/executionId, and two sections carry two different execution ids", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } }),
+      section({ order: 1, sectionType: "evidence", contentRequirement: { job: "evidence_story" } })
+    ];
+    const { runNode } = makeIdRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const first = result.outcomes.find((o) => o.order === 0) as any;
+    const second = result.outcomes.find((o) => o.order === 1) as any;
+    expect(first.outcome).toBe("drafted");
+    expect(second.outcome).toBe("drafted");
+    expect(first.runId).toBe("organization_narrative_writer-run-2");
+    expect(first.executionId).toBe("organization_narrative_writer-exec-2");
+    expect(second.runId).toBe("reference_content_writer-run-3");
+    expect(second.executionId).toBe("reference_content_writer-exec-3");
+    // Different dispatches, different ids — not one value shared across both sections.
+    expect(first.runId).not.toBe(second.runId);
+    expect(first.executionId).not.toBe(second.executionId);
+  });
+
+  it("the planner's ids appear at the top level, and are the planner's own — not a writer's", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+    const { runNode } = makeIdRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    expect(result.plannerRunId).toBe("site_content_planner-run-1");
+    expect(result.plannerExecutionId).toBe("site_content_planner-exec-1");
+    const drafted = result.outcomes[0] as any;
+    expect(result.plannerRunId).not.toBe(drafted.runId);
+    expect(result.plannerExecutionId).not.toBe(drafted.executionId);
+  });
+
+  it("the ambiguous early return still carries the planner's ids, and no per-section ids", async () => {
+    const sections: PlanSection[] = [section({ order: 2, sectionType: "about" }), section({ order: 5, sectionType: "policy" })];
+    const { runNode, calls } = makeIdRunner(sections);
+    // order:2 matches a returned order, order:9 matches neither an order nor a valid position — the
+    // same ambiguous-pairing shape as the existing "partial match" test above.
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 2, job: "about_organization" },
+      { order: 9, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" }, supplements }, { executeNodeImpl: runNode });
+
+    expect(result.supplementMatching).toBe("ambiguous");
+    expect(result.plannerRunId).toBe("site_content_planner-run-1");
+    expect(result.plannerExecutionId).toBe("site_content_planner-exec-1");
+    // No writer was ever dispatched, and supplement_unmatched outcomes never carry id fields at all.
+    expect(calls.filter((call) => call.nodeId !== "site_content_planner")).toHaveLength(0);
+    expect(result.outcomes.every((outcome: any) => !("runId" in outcome) && !("executionId" in outcome))).toBe(true);
+  });
+
+  it("a section refused before dispatch (missing ambiguous discriminator) has runId/executionId null", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "mystery_reference", contentRequirement: { job: "faq_help_process" } })
+    ];
+    const { runNode, calls } = makeIdRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const refused = result.outcomes[0] as any;
+    expect(refused.outcome).toBe("refused");
+    expect(refused.runId).toBeNull();
+    expect(refused.executionId).toBeNull();
+    // Confirms this really is the before-dispatch path: no writer node was ever called.
+    expect(calls.some((call) => call.nodeId === "reference_content_writer")).toBe(false);
+  });
+
+  it("a section refused after dispatch (node returned no draft) carries the real ids from that dispatch", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+    const { runNode } = makeIdRunner(sections, { noDraftFor: new Set(["organization_narrative_writer"]) });
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const refused = result.outcomes[0] as any;
+    expect(refused.outcome).toBe("refused");
+    expect(refused.reason).toContain("returned no draft");
+    expect(refused.runId).toBe("organization_narrative_writer-run-2");
+    expect(refused.executionId).toBe("organization_narrative_writer-exec-2");
+  });
+
+  // DEFENSIVE PATH, not a production guarantee. nodeRuntime.ts attaches no execution context to the
+  // values it throws (its throw sites are guard clauses before the run is created, or an unwrapped
+  // runner rejection), so a real thrown dispatch yields null/null today. This test drives a mock that
+  // DOES attach ids, to prove the reader picks them up if a thrown value ever carries them — read it
+  // as coverage of extractNodeIds on the catch path, never as evidence that a thrown dispatch is
+  // traceable. Making it traceable needs nodeRuntime.ts to attach the context; see the PR body.
+  it("reads ids off a thrown value when it carries them (defensive path — real nodeRuntime throws carry none)", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+    const { runNode } = makeIdRunner(sections, { throwFor: new Set(["organization_narrative_writer"]) });
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const refused = result.outcomes[0] as any;
+    expect(refused.outcome).toBe("refused");
+    expect(refused.reason).toContain("threw");
+    expect(refused.runId).toBe("organization_narrative_writer-run-2");
+    expect(refused.executionId).toBe("organization_narrative_writer-exec-2");
+  });
+
+  it("a payload carrying no ids at all yields null everywhere and throws nothing", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+    const { runNode } = makeRunner(sections); // the plain helper — its `executed()` fixture carries no ids at all.
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    expect(result.plannerRunId).toBeNull();
+    expect(result.plannerExecutionId).toBeNull();
+    const drafted = result.outcomes[0] as any;
+    expect(drafted.outcome).toBe("drafted");
+    expect(drafted.runId).toBeNull();
+    expect(drafted.executionId).toBeNull();
   });
 });
