@@ -258,7 +258,10 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
       // GitHub's own API with cms-agent's CAPTURE_PREVIEW_GITHUB_TOKEN — not the project MCP — so
       // they are outside this manifest's vocabulary, which names tenant verbs only.
       { id: "score", description: "Score the emission. Local rubric + gap report; the visual half is dispatched to the platform capture-preview CI job and collected across advances.", timeout: "deterministic_stage", requiredTools: [] },
-      { id: "report", description: "Summarize the run. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
+      { id: "report", description: "Summarize the run. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      // The shared publishing tail's payload builder, retagged onto this route the same way
+      // clone_conductor retags its own copy. Local computation; see the clone_stage twin below.
+      { id: "publish_payload", description: "Assemble the deterministic object publish plan from the capture stages' reports. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },
   {
@@ -327,6 +330,53 @@ export const ROUTE_MANIFESTS: readonly RouteManifest[] = [
         { verb: "publish_pdf_template", risk: "publish", description: "Goes live in pdf-tool's template store. Gated by the executor's generic publish-risk gate on the node's own riskLevel, and by the project's publishEnabled kill switch." }
       ] },
       { id: "image_revision_report", description: "Assemble the terminal per-item ledger (one outcome per templateRef, partial/allFailed computed from it). Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      // A5 (Milestone A remainder) — asset_lookup_studio's two stages, attributed from source
+      // (capture/assetLookupEngine.ts). assetLookupSearchStep names search_artifacts and
+      // get_artifact_metadata; assetLookupAdoptStep names object_checkout, object_patch and
+      // object_checkin. Both are string LITERALS at the callProjectTool site, no dynamic dispatch.
+      { id: "asset_lookup_search", description: "Search the tenant's artifact store for a candidate and read its metadata. Reads only.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "search_artifacts", risk: "read", description: "Find candidate artifacts by tag." },
+        { verb: "get_artifact_metadata", risk: "read", description: "Read the chosen candidate's stored metadata." }
+      ] },
+      { id: "asset_lookup_adopt", description: "Adopt the chosen artifact onto the target object under a lock.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "object_checkout", risk: "write", description: "Lock the adopting object before patching." },
+        { verb: "object_patch", risk: "write", description: "Write the adopted artifact reference onto it." },
+        { verb: "object_checkin", risk: "write", description: "Release the lock." }
+      ] },
+      // A8 (gap-1 close) — document_render_studio's two stages, attributed from source
+      // (capture/documentRenderEngine.ts). documentRenderExecuteStep names document_render and
+      // nothing else; buildDocumentRenderReportStep is SYNCHRONOUS and is handed no deps at all, so
+      // its [] is a verified assertion rather than a default.
+      { id: "document_render_execute", description: "Render the owning object's document through the tenant's own render verb.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "document_render", risk: "write", description: "Renders the document and attaches it as an artifact under this request; publishes nothing." }
+      ] },
+      { id: "document_render_report", description: "Assemble the render's terminal ledger from the execute envelope. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
+      // T5 (2026-09-16 annotate-bridge plan) — image_annotation_studio's three stages, attributed
+      // from source (capture/imageAnnotationEngine.ts): imageAnnotationAnalyzeStep names
+      // analyze_image_layout, imageAnnotationDrawStep names annotate_image, imageAnnotationVerifyStep
+      // names check_image_text. One verb per stage, each a string literal at its callProjectTool site.
+      //
+      // THIS BLOCK IS THE ONE THAT PAID FOR THE PHASE-PARITY GUARD BELOW. image_annotation shipped
+      // live-verified (#368/#377) with no manifest phases, so `annotate_image` appeared in no route
+      // manifest, so `declaredRouteVerbs()` never named it, so the derived genesis profile never
+      // granted it — and every tenant carrying `defaultToolPolicy: "blocked"` reported
+      // `image_annotate: not_configured` while dr-lurie and platform (`defaultToolPolicy: "allowed"`)
+      // reported nothing at all. The derivation worked exactly as designed; what it derived FROM was
+      // incomplete, which is the failure the v4 header claimed to have ended and had not.
+      { id: "image_annotation_analyze", description: "Read the base image's 6x6 luminance/busyness grid and choose a placement per annotation. Writes nothing.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "analyze_image_layout", risk: "read", description: "Reads the grid and ranked safe zones; persists nothing." }
+      ] },
+      { id: "image_annotation_draw", description: "Draw the chosen placements over the base image, saving the result as a NEW image artifact.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "annotate_image", risk: "write", description: "Writes a NEW image artifact on the tenant's artifact plane; the base image is never modified and nothing is published." }
+      ] },
+      { id: "image_annotation_verify", description: "Read the drawn strings back out of the annotated image — the operation's own completion evidence.", timeout: "deterministic_stage", requiredTools: [
+        { verb: "check_image_text", risk: "read", description: "OCR read-back of the drawn strings; persists nothing and gates nothing." }
+      ] },
+      // The shared publishing tail's payload builder, retagged onto this route by
+      // cloneConductorNodes.ts. It reads prior stage envelopes and the project record's own
+      // publish-enabled kill switch, then assembles the plan locally — cloneConductorRoutes.ts's
+      // `publish_payload` case makes no callProjectTool at all, so [] is verified, not assumed.
+      { id: "publish_payload", description: "Assemble the deterministic object publish plan from the earlier stages' reports. Local computation.", timeout: "deterministic_stage", requiredTools: [] },
       { id: "report", description: "Summarize the clone. Local computation.", timeout: "deterministic_stage", requiredTools: [] }
     ]
   },
@@ -455,3 +505,51 @@ export const declaredRouteVerbs = (): string[] =>
       ])
     )
   ].sort();
+
+// ROUTE MANIFEST PHASE PARITY (2026-09-17) — the guard that makes `declaredRouteVerbs()` honest.
+//
+// THE DEFECT THIS EXISTS FOR, in one sentence: a new deterministic STAGE can ship without a manifest
+// PHASE, and when it does it contributes zero verbs to the derived tenant policy — silently, with
+// `ok:true` on every config write, exactly like the hand-kept list the derivation replaced.
+//
+// image_annotation is the instance that paid for it. Its three stages shipped live-verified with no
+// phases here, so `annotate_image` was in no manifest, so no tenant with `defaultToolPolicy:
+// "blocked"` was ever granted it — while dr-lurie and platform, which allow everything by default,
+// showed no symptom at all. asset_lookup and document_render had the same hole and did NOT show a
+// symptom either, because their verbs happened to be granted for unrelated reasons. A gap that only
+// hurts when it coincides with a blocked-by-default tenant is exactly the kind that survives months.
+//
+// PURE BY CONSTRUCTION: takes the nodes, returns the gaps. It does not import the workflow registry
+// (which reaches the node literals, which reach this module), so the caller supplies the canonical
+// nodes — `tests/agent/workspace/routeManifestPhaseParity.test.ts` feeds it every registered
+// workflow's.
+export type RouteManifestPhaseGap = {
+  /** The manifest the stage should have appeared in, or `undefined` when the node's route key maps
+   *  to no manifest at all — the two are different problems and must not read the same. */
+  routeId?: string;
+  /** The declaring route key plus its stage value, e.g. `cloneStageDeterministic:image_annotation_draw`. */
+  route: string;
+  /** The stage value that has no phase. */
+  stage: string;
+  nodeId: string;
+};
+
+export const routeManifestPhaseGaps = (nodes: readonly WorkspaceNode[]): RouteManifestPhaseGap[] => {
+  const gaps: RouteManifestPhaseGap[] = [];
+  for (const node of nodes) {
+    const execution = resolveNodeExecution(node);
+    // A boolean-valued route declares no stage, so there is no per-stage phase to demand.
+    if (execution.executionKind !== "deterministic" || !execution.route?.mode) continue;
+    const stage = execution.route.mode;
+    const route = `${execution.route.id}:${stage}`;
+    const routeId = resolveRouteId(node);
+    if (!routeId) {
+      gaps.push({ route, stage, nodeId: node.id });
+      continue;
+    }
+    if (!MANIFEST_BY_ID.get(routeId)?.phases.some((phase) => phase.id === stage)) {
+      gaps.push({ routeId, route, stage, nodeId: node.id });
+    }
+  }
+  return gaps;
+};
