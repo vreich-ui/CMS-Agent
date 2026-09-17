@@ -44,10 +44,26 @@
 // reference_content_writer's `referenceKind`. Nothing in the planner's declared outputSchema
 // guarantees that field is present either, so this module never guesses — a section whose job is
 // ambiguous and carries no matching discriminator (checked on the section itself, its
-// `contentRequirement`, and any caller-supplied `supplements` entry for that section's order) is
-// REFUSED BY NAME (order + sectionType + the missing field), and drafting continues for every other
-// section. A plausible default here (writing an event page as a product page) is exactly the failure
-// mode a named refusal exists to avoid.
+// `contentRequirement`, and any caller-supplied `supplements` entry paired to that section — see
+// SUPPLEMENT MATCHING below) is REFUSED BY NAME (order + sectionType + the missing field), and
+// drafting continues for every other section. A plausible default here (writing an event page as a
+// product page) is exactly the failure mode a named refusal exists to avoid.
+//
+// SUPPLEMENT MATCHING (2026-09-17 fix — the live dr-lurie defect). `supplements[].order` cannot, on a
+// FIRST draft, name the planner's real per-section `order`: the caller cannot know it until after the
+// planner has run, and a planner has no obligation to number sections 0..N-1 (the live defect: a
+// one-section plan came back `order: 1`, a supplement keyed `order: 0` never matched, and the section
+// silently skipped while the tool reported `ok: true`). So matching is decided ONCE for the whole
+// call, highest precedence first: (1) if ANY supplied supplement's `order` equals a returned section's
+// own `order`, every supplement in this call is matched against sections BY `order` (the correct,
+// stable behaviour on a RE-draft, where the caller has already seen the plan and is keying on real
+// orders — a caller who has seen real orders must never have them silently reinterpreted positionally);
+// (2) otherwise, every supplement's `order` is read as a 0-based POSITION in the plan's returned
+// section array (a caller drafting fresh has no orders to key on and means position 0..N-1). The mode
+// is reported on the result as `supplementMatching` ("order" | "position" | "none") with
+// `supplementMatchingReason`, and any supplement that paired with no section under the chosen mode is
+// reported as its own `supplement_unmatched` outcome — never silently dropped; that silent drop, with
+// the tool still reporting overall success, is exactly the live defect.
 import { executeNode } from "../workspace/nodeRuntime.js";
 import { getPageRecipe, SITE_CONTENT_PAGE_RECIPE_NAMES, type SiteContentRecipeSection } from "./siteContentPageRecipes.js";
 
@@ -98,9 +114,12 @@ export type SiteContentPlan = {
 
 // A caller-supplied overlay of per-section content this module has no way to originate itself —
 // facts, source material, existing copy to revise, a target locale, or an explicit discriminator —
-// keyed by the section's own `order` (the plan's only stable per-section identifier). Entirely
-// optional: a section with no matching supplement still dispatches on whatever the plan itself
-// carries (contentRequirement, an inline offeringKind/referenceKind, ...).
+// keyed by `order`. Pairing is resolved once per call: by the plan's own returned `order` values
+// when any supplement's `order` matches one (a re-draft, keying on real orders already seen); by
+// 0-based POSITION in the plan's returned section array otherwise (a first draft, where the caller
+// cannot know the planner's real numbering yet) — see SUPPLEMENT MATCHING in this module's header.
+// Entirely optional: a section with no matching supplement still dispatches on whatever the plan
+// itself carries (contentRequirement, an inline offeringKind/referenceKind, ...).
 export type SiteContentDraftingSupplement = {
   order: number;
   brief?: Record<string, unknown>;
@@ -167,8 +186,10 @@ export type SiteContentSkippedOutcome = {
   sectionType: string;
   reason: "no_job";
 };
-// A recipe named a section (by `order`) that the planner's actual output never delivered. Reported
-// explicitly rather than silently dropped — rule 5 of the recipe layer task.
+// A recipe named a section (by POSITION — the recipe's Nth declared section, never the planner's own
+// `order` value) that the planner's actual output never delivered: the recipe declared more sections
+// than the plan returned. Reported explicitly rather than silently dropped — rule 5 of the recipe
+// layer task.
 export type SiteContentRecipeUndeliveredOutcome = {
   outcome: "recipe_undelivered";
   order: number;
@@ -176,16 +197,31 @@ export type SiteContentRecipeUndeliveredOutcome = {
   pageRecipe: string;
   reason: string;
 };
+// A caller-supplied supplement whose `order` paired with no returned section under the call's chosen
+// matching mode ("order" or "position" — see SUPPLEMENT MATCHING). Reported explicitly, never
+// silently dropped: this is the exact shape of the live dr-lurie defect (a supplement naming a `job`
+// that matched nothing, with the tool otherwise reporting `ok: true`).
+export type SiteContentSupplementUnmatchedOutcome = {
+  outcome: "supplement_unmatched";
+  order: number;
+  job?: string | null;
+  reason: string;
+};
 export type SiteContentSectionOutcome =
   | SiteContentDraftedOutcome
   | SiteContentRefusedOutcome
   | SiteContentSkippedOutcome
-  | SiteContentRecipeUndeliveredOutcome;
+  | SiteContentRecipeUndeliveredOutcome
+  | SiteContentSupplementUnmatchedOutcome;
 
 export type SiteContentDraftingResult = {
   projectId: string;
   plan: SiteContentPlan;
   outcomes: SiteContentSectionOutcome[];
+  // How this call paired `supplements[].order` to plan sections (decided once for the whole call —
+  // see SUPPLEMENT MATCHING in this module's header). "none" means no supplements were supplied.
+  supplementMatching: "order" | "position" | "none" | "ambiguous";
+  supplementMatchingReason: string;
 };
 
 // The one seam. Production gets nodeRuntime.ts's real `executeNode` (its own default parameter
@@ -459,8 +495,11 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
       );
     }
   }
-  const recipeSectionByOrder = new Map<number, SiteContentRecipeSection>();
-  for (const recipeSection of recipe?.sections ?? []) recipeSectionByOrder.set(recipeSection.order, recipeSection);
+  // Recipe sections pair with plan sections BY POSITION (the recipe's Nth declared section <-> the
+  // plan's Nth returned section), never by the planner's own `order` value — a recipe is authored
+  // before any plan exists, so it cannot reference the planner's numbering. `recipe.sections[i].order`
+  // is only that section's own declaration index, asserted contiguous in this module's test.
+  const recipeSections = recipe?.sections ?? [];
 
   const plannerInput = compact({ brief: input.brief, existingContent: input.existingContent, siteContext: input.siteContext });
   const plannerExecuted = await runNode({ nodeId: "site_content_planner", input: plannerInput, candidateSkillIds: ["page_composition"] });
@@ -474,29 +513,124 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
   const openQuestions = plannerExtracted.output.openQuestions;
   const summary = plannerExtracted.output.summary;
 
-  const supplementByOrder = new Map<number, SiteContentDraftingSupplement>();
-  for (const supplement of input.supplements ?? []) supplementByOrder.set(supplement.order, supplement);
+  const suppliedSupplements = input.supplements ?? [];
+  const supplementByOrderValue = new Map<number, SiteContentDraftingSupplement>();
+  for (const supplement of suppliedSupplements) supplementByOrderValue.set(supplement.order, supplement);
+
+  // SUPPLEMENT MATCHING — decided once for the whole call (see this module's header). "order" wins
+  // whenever ANY supplied supplement's `order` equals a returned section's own `order` (a re-draft,
+  // keying on real orders already seen); otherwise, when supplements were supplied at all, every
+  // supplement's `order` is read as a 0-based POSITION in the plan's returned section array (a first
+  // draft, where the caller cannot know the planner's real numbering yet — the live dr-lurie defect).
+  const returnedOrders = sections.map((section) => section.order);
+  const returnedOrderSet = new Set(returnedOrders);
+  // ALL, not ANY. A partial match is the one case where a guess misattributes content rather than
+  // merely losing it: a first-draft caller keying 0..N-1 against a plan that came back [1, 2] has one
+  // supplement that happens to match order 1, and choosing "order" on that basis would apply position
+  // 0's facts to the section the planner numbered 1 — the wrong section, with the right-looking
+  // result. So each mode is chosen only when it accounts for EVERY supplied supplement, and a call
+  // that satisfies neither is REFUSED rather than resolved on the majority. Refusing beats guessing
+  // here for the same reason it does for the ambiguous discriminators above.
+  const allMatchByOrder = suppliedSupplements.every((supplement) => returnedOrderSet.has(supplement.order));
+  const allMatchByPosition = suppliedSupplements.every(
+    (supplement) => Number.isInteger(supplement.order) && supplement.order >= 0 && supplement.order < sections.length
+  );
+
+  let supplementMatching: "order" | "position" | "none" | "ambiguous";
+  let supplementMatchingReason: string;
+  if (suppliedSupplements.length === 0) {
+    supplementMatching = "none";
+    supplementMatchingReason = "no supplements were supplied.";
+  } else if (allMatchByOrder) {
+    // Order first when both fit: a caller keying on orders they have already seen is the more
+    // specific intent, and where both interpretations fit they select the same sections anyway
+    // whenever the planner numbered its sections 0..N-1.
+    supplementMatching = "order";
+    supplementMatchingReason =
+      "every supplied supplement's `order` matched a returned section's own `order`, so supplements are matched by `order` (a caller who has seen real section orders must not have them reinterpreted positionally).";
+  } else if (allMatchByPosition) {
+    supplementMatching = "position";
+    supplementMatchingReason =
+      "no supplied supplement's `order` matched a returned section's own `order`, but every one is a valid 0-based position in the plan's returned section array, so each is read as a position (a first-draft caller cannot know the planner's real numbering yet).";
+  } else {
+    supplementMatching = "ambiguous";
+    supplementMatchingReason =
+      `supplements cannot be paired to this plan without guessing: the plan returned orders [${returnedOrders.join(", ")}] (${sections.length} section(s), positions 0..${Math.max(sections.length - 1, 0)}), and the supplied orders [${suppliedSupplements.map((supplement) => supplement.order).join(", ")}] match neither every returned \`order\` nor every valid position. Re-key the supplements on the orders this plan actually returned and call again.`;
+  }
+
+  // An ambiguous pairing refuses BEFORE any writer is dispatched — no model spend, and no section
+  // drafted from facts that may belong to a different section. The plan is still returned, so the
+  // caller can re-key on the real orders immediately rather than replanning.
+  if (supplementMatching === "ambiguous") {
+    return {
+      projectId: input.projectId,
+      plan: {
+        sections,
+        ...(Array.isArray(openQuestions) ? { openQuestions: openQuestions as string[] } : {}),
+        ...(typeof summary === "string" ? { summary } : {})
+      },
+      outcomes: suppliedSupplements.map((supplement) => ({
+        outcome: "supplement_unmatched" as const,
+        order: supplement.order,
+        job: supplement.job,
+        reason: supplementMatchingReason
+      })),
+      supplementMatching,
+      supplementMatchingReason
+    };
+  }
+
+  // The set of supplement `order` keys that this call actually paired to a section, so any leftover
+  // key can be reported as `supplement_unmatched` rather than silently dropped.
+  const consumedSupplementOrders = new Set<number>();
 
   const page = { brief: input.brief, voice: input.voice };
   const outcomes: SiteContentSectionOutcome[] = [];
-  for (const section of sections) {
+  for (let index = 0; index < sections.length; index++) {
+    const section = sections[index];
+    let supplement: SiteContentDraftingSupplement | undefined;
+    if (supplementMatching === "order") {
+      supplement = supplementByOrderValue.get(section.order);
+      if (supplement) consumedSupplementOrders.add(section.order);
+    } else if (supplementMatching === "position") {
+      supplement = supplementByOrderValue.get(index);
+      if (supplement) consumedSupplementOrders.add(index);
+    }
     outcomes.push(
-      await dispatchSection(section, supplementByOrder.get(section.order), page, runNode, recipeSectionByOrder.get(section.order), input.pageRecipe)
+      await dispatchSection(section, supplement, page, runNode, recipeSections[index], input.pageRecipe)
     );
   }
 
+  // Rule C: a supplement whose `order` paired with no returned section, under this call's chosen
+  // matching mode, is reported explicitly — never silently dropped. This is the exact shape of the
+  // live dr-lurie defect: a supplement naming a `job` that matched nothing, with the tool otherwise
+  // reporting `ok: true`.
+  // BACKSTOP, not a live path: mode selection above admits "order" only when every supplement
+  // matches a returned order and "position" only when every one is a valid index, so by construction
+  // nothing is left over here — an unpairable set is refused as "ambiguous" before any dispatch. This
+  // loop stays so that a future change to mode selection cannot silently drop a caller's supplement
+  // the way the original `order`-only keying did.
+  for (const [orderKey, supplement] of supplementByOrderValue) {
+    if (consumedSupplementOrders.has(orderKey)) continue;
+    const reason =
+      supplementMatching === "order"
+        ? `supplement order ${orderKey} matched no returned section by \`order\`; the plan returned orders: [${returnedOrders.join(", ")}].`
+        : `supplement order ${orderKey} matched no position in the plan's returned section array; the plan returned ${sections.length} section(s) (positions 0..${Math.max(sections.length - 1, 0)}).`;
+    outcomes.push({ outcome: "supplement_unmatched", order: orderKey, job: supplement.job, reason });
+  }
+
   // Rule 5: a recipe never fabricates a section the planner did not plan, but an entry the recipe
-  // named that the planner never delivered (by `order`) is reported explicitly, not dropped.
+  // named (by position) that the planner never delivered is reported explicitly, not dropped — "the
+  // recipe declared N sections, the plan returned fewer."
   if (recipe) {
-    const deliveredOrders = new Set(sections.map((section) => section.order));
-    for (const recipeSection of recipe.sections) {
-      if (deliveredOrders.has(recipeSection.order)) continue;
+    for (let index = sections.length; index < recipeSections.length; index++) {
+      const recipeSection = recipeSections[index];
       outcomes.push({
         outcome: "recipe_undelivered",
         order: recipeSection.order,
         job: recipeSection.job,
         pageRecipe: recipe.name,
-        reason: `recipe "${recipe.name}" names a section at order ${recipeSection.order} (job "${recipeSection.job}") that site_content_planner's plan did not deliver.`
+        reason: `recipe "${recipe.name}" declares ${recipeSections.length} section(s), but site_content_planner's plan returned only ${sections.length}; the recipe's section at position ${index} (job "${recipeSection.job}") was not delivered.`
       });
     }
   }
@@ -508,6 +642,8 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
       ...(Array.isArray(openQuestions) ? { openQuestions: openQuestions as string[] } : {}),
       ...(typeof summary === "string" ? { summary } : {})
     },
-    outcomes
+    outcomes,
+    supplementMatching,
+    supplementMatchingReason
   };
 }
