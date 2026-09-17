@@ -26,10 +26,13 @@ export type McpHttpRequest = { httpMethod: string; body: string | null; headers:
 const clientGone = { statusCode: 499, headers: {}, body: "" } satisfies McpHttpResponse;
 export type McpHttpResponse = { statusCode: number; headers: Record<string, string>; body: string };
 
-const json = (statusCode: number, body: unknown, headers: Record<string, string> = {}): McpHttpResponse => ({
+// `timing`, when passed, times the JSON.stringify itself as the `sec.serialize` section — passed
+// only at the call sites that return a real tool/session result, where serialization cost is worth
+// separating from the rest; the small constant-shaped error bodies elsewhere don't need it.
+const json = (statusCode: number, body: unknown, headers: Record<string, string> = {}, timing?: RequestTiming): McpHttpResponse => ({
   statusCode,
   headers: { "content-type": "application/json", ...headers },
-  body: JSON.stringify(body)
+  body: timing ? timing.mark("serialize", () => JSON.stringify(body)) : JSON.stringify(body)
 });
 
 const empty = (statusCode: number, headers: Record<string, string> = {}): McpHttpResponse => ({ statusCode, headers, body: "" });
@@ -219,17 +222,105 @@ const unauthorized = (headers: HeaderMap, presentedToken: boolean) => {
 
 const sessionRequired = (): boolean => (process.env.MCP_REQUIRE_SESSION ?? "false").toLowerCase() === "true";
 
+// --- Server-Timing diagnostics (DIAGNOSTIC ONLY — no behaviour change, no wire contract change) ---
+//
+// Mirrors the MCP_TOOL_LOG / toolLoggingEnabled() convention in workspace/server.ts: on by default,
+// off under VITEST unless a test explicitly turns it back on, and always overridable in production
+// by an env var. A test that wants to see the header sets MCP_SERVER_TIMING=on, exactly as a test of
+// tool-call logging would set MCP_TOOL_LOG=on.
+//
+// The header carries ONLY section names and millisecond durations — never a header value, argument,
+// or token — so it cannot violate the repo's "secrets are names/refs, never values" rule by
+// construction: nothing but `RequestTiming` ever writes to it, and it only ever appends
+// `name;dur=number` tokens.
+const serverTimingEnabled = (): boolean =>
+  (process.env.MCP_SERVER_TIMING ?? (process.env.VITEST ? "off" : "on")) !== "off";
+
+// Cloud Run gives each instance its own cold start; many instances each pay their own cold cost, so
+// "cold vs warm" is a per-process fact, not a per-request one. Module-scope boolean, flipped after
+// the first request THIS PROCESS handles — the same shape as any other once-per-instance flag.
+let handledFirstRequestInThisProcess = false;
+
+class RequestTiming {
+  private readonly enabled: boolean;
+  private readonly cold: boolean;
+  private readonly startedAt = performance.now();
+  private authEndedAt: number | undefined;
+  private readonly sections: string[] = [];
+
+  constructor(enabled: boolean) {
+    this.enabled = enabled;
+    this.cold = enabled && !handledFirstRequestInThisProcess;
+    if (enabled) handledFirstRequestInThisProcess = true;
+  }
+
+  // Times a synchronous section and records it as `sec.<name>;dur=<ms>`. No-ops (just runs `fn`)
+  // when disabled, so the cost of a disabled instance is one boolean check.
+  mark<T>(name: string, fn: () => T): T {
+    if (!this.enabled) return fn();
+    const start = performance.now();
+    try {
+      return fn();
+    } finally {
+      this.sections.push(`sec.${name};dur=${(performance.now() - start).toFixed(1)}`);
+    }
+  }
+
+  // Same, for an async section (auth, session lookup, tool dispatch — all real I/O/CPU here).
+  async markAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.enabled) return fn();
+    const start = performance.now();
+    try {
+      return await fn();
+    } finally {
+      this.sections.push(`sec.${name};dur=${(performance.now() - start).toFixed(1)}`);
+    }
+  }
+
+  // Marks the instant authentication/authorization finished — the boundary `work` measures from.
+  authResolved(): void {
+    if (this.enabled) this.authEndedAt = performance.now();
+  }
+
+  // `work;dur=<ms>` — "time doing the actual job", from the moment auth finished (or from request
+  // start, for a response that never got that far, e.g. a 405 before auth runs) to now. Undefined
+  // when timing is disabled, so callers can skip attaching a header entirely.
+  headerValue(): string | undefined {
+    if (!this.enabled) return undefined;
+    const workDur = performance.now() - (this.authEndedAt ?? this.startedAt);
+    const parts = [...this.sections, `work;dur=${Math.max(0, workDur).toFixed(1)}`];
+    if (this.cold) parts.push("cold;dur=1");
+    return parts.join(", ");
+  }
+}
+
+const attachServerTiming = (response: McpHttpResponse, timing: RequestTiming): McpHttpResponse => {
+  const header = timing.headerValue();
+  if (!header) return response;
+  return { ...response, headers: { ...response.headers, "server-timing": header } };
+};
+
 // The complete MCP Streamable-HTTP request lifecycle: method routing, auth, session
 // create/touch/terminate, and JSON-RPC dispatch. Callers must have already prepared the storage
 // backend for the request (Netlify: connectLambdaBlobs; Cloud Run: bootstrapWorkspaceStore at
 // startup registers the GCS transport once).
 export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpResponse> {
+  const timing = new RequestTiming(serverTimingEnabled());
+  const response = await handleMcpHttpCore(request, timing);
+  // Never touch the client-gone/499 path: there is nobody left to read a header, and mcpServerMain
+  // special-cases this exact status to destroy the socket rather than write a response.
+  if (response.statusCode === 499) return response;
+  return attachServerTiming(response, timing);
+}
+
+async function handleMcpHttpCore(request: McpHttpRequest, timing: RequestTiming): Promise<McpHttpResponse> {
   const method = request.httpMethod.toUpperCase();
   if (method === "GET") {
     return json(405, { error: { code: "method_not_allowed", message: "This MCP endpoint does not offer a GET SSE stream. Use POST for requests." } }, { allow: "POST, DELETE" });
   }
 
-  const auth = await authenticate(request.headers);
+  const auth = await timing.markAsync("auth", () => authenticate(request.headers));
+  timing.authResolved();
   if (!auth.ok) return unauthorized(request.headers, auth.presentedToken);
 
   const sessions = new McpSessionManager();
@@ -237,7 +328,7 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
 
   if (method === "DELETE") {
     if (!sessionId) return json(400, { error: { code: "missing_session", message: "Mcp-Session-Id header is required to terminate a session." } });
-    const existed = await sessions.terminate(sessionId);
+    const existed = await timing.markAsync("session", () => sessions.terminate(sessionId));
     return existed ? empty(204) : json(404, { error: { code: "session_not_found", message: "Unknown or already-terminated session." } });
   }
 
@@ -245,21 +336,25 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
 
   try {
     const context = buildToolContext(request.headers, auth.actor, auth.scopedPolicy);
-    const rawBody = request.body ? JSON.parse(request.body) : {};
+    const rawBody = timing.mark("parse", () => (request.body ? JSON.parse(request.body) : {}));
 
-    if (auth.scopedPolicy && !(await isScopedRequestAllowed(rawBody, auth.scopedPolicy))) return unauthorized(request.headers, true);
+    if (auth.scopedPolicy) {
+      const scopedPolicy = auth.scopedPolicy;
+      const allowed = await timing.markAsync("authz", () => isScopedRequestAllowed(rawBody, scopedPolicy));
+      if (!allowed) return unauthorized(request.headers, true);
+    }
 
     if (!Array.isArray(rawBody) && isInitialize(rawBody)) {
       const params = (rawBody.params ?? {}) as { protocolVersion?: string; clientInfo?: McpClientInfo };
       const protocolVersion = negotiateProtocolVersion(params.protocolVersion);
-      const session = await sessions.create({ protocolVersion, clientInfo: params.clientInfo, actor: context.actor ?? { kind: "agent" } });
-      const result = await handleMcpJsonRpc(rawBody, context, { protocolVersion, sessionId: session.id });
-      return json(200, result, { [SESSION_HEADER]: session.id, [PROTOCOL_HEADER]: protocolVersion });
+      const session = await timing.markAsync("session", () => sessions.create({ protocolVersion, clientInfo: params.clientInfo, actor: context.actor ?? { kind: "agent" } }));
+      const result = await timing.markAsync("dispatch", () => handleMcpJsonRpc(rawBody, context, { protocolVersion, sessionId: session.id }));
+      return json(200, result, { [SESSION_HEADER]: session.id, [PROTOCOL_HEADER]: protocolVersion }, timing);
     }
 
     let negotiatedProtocol: string | undefined;
     if (sessionId) {
-      const session = await sessions.touch(sessionId);
+      const session = await timing.markAsync("session", () => sessions.touch(sessionId));
       if (!session) return json(404, { error: { code: "session_not_found", message: "Unknown or expired Mcp-Session-Id. Re-initialize to obtain a new session." } });
       negotiatedProtocol = session.protocolVersion;
     } else if (sessionRequired()) {
@@ -276,14 +371,14 @@ export async function handleMcpHttp(request: McpHttpRequest): Promise<McpHttpRes
       // Still dispatched in parallel: batching exists precisely so independent calls overlap, and
       // serializing them to gain a mid-batch abort check would be a real regression to buy a small
       // saving. The abort checks bracket the batch instead.
-      const responses = await Promise.all(calls.map((message) => handleMcpJsonRpc(message, context)));
+      const responses = await timing.markAsync("dispatch", () => Promise.all(calls.map((message) => handleMcpJsonRpc(message, context))));
       if (request.signal?.aborted) return clientGone;
-      return json(200, responses, responseHeaders);
+      return json(200, responses, responseHeaders, timing);
     }
     if (isMcpNotification(rawBody)) return empty(202, responseHeaders);
-    const result = await handleMcpJsonRpc(rawBody, context);
+    const result = await timing.markAsync("dispatch", () => handleMcpJsonRpc(rawBody, context));
     if (request.signal?.aborted) return clientGone;
-    return json(200, result, responseHeaders);
+    return json(200, result, responseHeaders, timing);
   } catch (error) {
     if (error instanceof SyntaxError) return json(400, { error: { code: "invalid_json", message: "Request body must be valid JSON." } });
     return json(500, { error: { code: "internal_error", message: error instanceof Error ? error.message : "Unknown error" } });
