@@ -168,6 +168,11 @@ export type SiteContentDraftedOutcome = {
   // saw only one job's instructions.
   candidateSkillIds: string[];
   draft: Record<string, unknown>;
+  // This dispatch's own run/execution ids (see extractNodeIds) — a drafted outcome always dispatched
+  // a node, so these are populated whenever executeNode's result carried them, `null` only when the
+  // payload itself did not carry one (never fabricated).
+  runId: string | null;
+  executionId: string | null;
 };
 export type SiteContentRefusedOutcome = {
   outcome: "refused";
@@ -179,6 +184,13 @@ export type SiteContentRefusedOutcome = {
   nodeId?: SiteContentSpecialistNodeId;
   candidateSkillIds?: string[];
   reason: string;
+  // `null`/`null` for a section refused BEFORE any node was dispatched (unknown job, a missing
+  // ambiguous discriminator) — no run ever happened, so there is nothing to report. A section
+  // refused AFTER dispatch (the node returned no draft, or threw) carries the real ids from that
+  // dispatch's own executeNode result (extractNodeIds) — `null` only if that payload itself lacked
+  // them, never faked.
+  runId: string | null;
+  executionId: string | null;
 };
 export type SiteContentSkippedOutcome = {
   outcome: "skipped";
@@ -222,6 +234,12 @@ export type SiteContentDraftingResult = {
   // see SUPPLEMENT MATCHING in this module's header). "none" means no supplements were supplied.
   supplementMatching: "order" | "position" | "none" | "ambiguous";
   supplementMatchingReason: string;
+  // The site_content_planner dispatch's own ids (extractNodeIds) — populated on EVERY return path,
+  // including the ambiguous-supplement early return, because the planner has already run by the time
+  // either return statement executes. `null` only when the planner's own executeNode result did not
+  // carry an id, never fabricated.
+  plannerRunId: string | null;
+  plannerExecutionId: string | null;
 };
 
 // The one seam. Production gets nodeRuntime.ts's real `executeNode` (its own default parameter
@@ -285,6 +303,21 @@ function extractNodeOutput(executed: unknown, nodeId: string): { ok: true; outpu
   ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0).slice(0, 5);
   const status = typeof execution.status === "string" ? execution.status : "unknown";
   return { ok: false, reason: errors.length ? `node run ${status}: ${errors.join("; ")}` : `node run ${status} produced no output.` };
+}
+
+// The dispatch's own run/execution ids off an executeNode result — nodeRuntime.ts's executeNode
+// (`return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId,
+// ... })`) puts the run id on `execution.runId` (the saved WorkflowExecutionRecord) and the
+// execution id at the top level, sibling to `execution`. TOTAL: never throws, and a payload that
+// does not carry an id (wrong shape, a mocked/partial executeNode in a test, a thrown dispatch whose
+// catch block never got an `executed` value at all) reports `null` for that id — never `undefined`,
+// never `""`, never invented. A read that did not happen is reported as unknown, not fabricated.
+function extractNodeIds(executed: unknown): { runId: string | null; executionId: string | null } {
+  if (!isBag(executed)) return { runId: null, executionId: null };
+  const execution = isBag(executed.execution) ? executed.execution : undefined;
+  const runId = typeof execution?.runId === "string" ? execution.runId : null;
+  const executionId = typeof executed.executionId === "string" ? executed.executionId : null;
+  return { runId, executionId };
 }
 
 // A section's writer brief: the page-level brief plus what this section's own plan entry adds
@@ -441,6 +474,8 @@ async function dispatchSection(
   }
   const pageRecipe = source === "recipe" ? pageRecipeName : undefined;
   if (!SITE_CONTENT_JOB_SET.has(job)) {
+    // Before dispatch — no route was found, so no node ever ran. Never fake an id for a run that
+    // never happened.
     return {
       outcome: "refused",
       order: section.order,
@@ -448,13 +483,17 @@ async function dispatchSection(
       job,
       jobSource: source,
       pageRecipe,
+      runId: null,
+      executionId: null,
       reason: `section ${section.order} ("${section.sectionType}") names job "${job}", which has no registered route.`
     };
   }
 
   const resolved = resolveDispatch(job as SiteContentJob, section, supplement, page, recipeEntry);
   if (!resolved.ok) {
-    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, reason: resolved.reason };
+    // Before dispatch — an ambiguous discriminator refuses before any writer runs (see this
+    // module's header, SUPPLEMENT MATCHING / THE AMBIGUOUS DISCRIMINATORS). No node ran, so null.
+    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, runId: null, executionId: null, reason: resolved.reason };
   }
 
   const { nodeId, nodeInput } = resolved;
@@ -464,14 +503,22 @@ async function dispatchSection(
     // all three of faq_help_process/policy_explanation/evidence_story) from dragging every family's
     // instructions into one dispatch.
     const executed = await runNode({ nodeId, input: nodeInput, candidateSkillIds });
+    const ids = extractNodeIds(executed);
     const extracted = extractNodeOutput(executed, nodeId);
     if (!extracted.ok) {
-      return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, reason: `${nodeId} returned no draft: ${extracted.reason}` };
+      // After dispatch — the node ran (executed carries whatever ids that dispatch's own
+      // executeNode result reported) but produced no usable draft.
+      return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, runId: ids.runId, executionId: ids.executionId, reason: `${nodeId} returned no draft: ${extracted.reason}` };
     }
-    return { outcome: "drafted", order: section.order, sectionType: section.sectionType, job: job as SiteContentJob, jobSource: source!, pageRecipe, nodeId, candidateSkillIds, draft: extracted.output };
+    return { outcome: "drafted", order: section.order, sectionType: section.sectionType, job: job as SiteContentJob, jobSource: source!, pageRecipe, nodeId, candidateSkillIds, draft: extracted.output, runId: ids.runId, executionId: ids.executionId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, reason: `${nodeId} threw: ${message}` };
+    // After dispatch — the call was made (a run may already exist), but the dispatch itself threw
+    // rather than returning a result. extractNodeIds reads whatever the thrown value itself carries
+    // (best-effort, e.g. an error object shaped like an executeNode result); it is `null` when the
+    // thrown value carries nothing, never invented.
+    const ids = extractNodeIds(error);
+    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, runId: ids.runId, executionId: ids.executionId, reason: `${nodeId} threw: ${message}` };
   }
 }
 
@@ -503,6 +550,11 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
 
   const plannerInput = compact({ brief: input.brief, existingContent: input.existingContent, siteContext: input.siteContext });
   const plannerExecuted = await runNode({ nodeId: "site_content_planner", input: plannerInput, candidateSkillIds: ["page_composition"] });
+  // Captured before the ok-check so it is available on every return path that follows a successful
+  // planner dispatch, including the ambiguous-supplement early return below — the planner has
+  // already run by then, and WHY (item 2 of the task this closes) is that an ambiguous refusal is
+  // the one path an operator could previously only infer no writer ran on, never confirm.
+  const plannerIds = extractNodeIds(plannerExecuted);
   const plannerExtracted = extractNodeOutput(plannerExecuted, "site_content_planner");
   if (!plannerExtracted.ok) {
     throw new Error(`site_content_planner produced no plan: ${plannerExtracted.reason}`);
@@ -576,7 +628,9 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
         reason: supplementMatchingReason
       })),
       supplementMatching,
-      supplementMatchingReason
+      supplementMatchingReason,
+      plannerRunId: plannerIds.runId,
+      plannerExecutionId: plannerIds.executionId
     };
   }
 
@@ -644,6 +698,8 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
     },
     outcomes,
     supplementMatching,
-    supplementMatchingReason
+    supplementMatchingReason,
+    plannerRunId: plannerIds.runId,
+    plannerExecutionId: plannerIds.executionId
   };
 }
