@@ -75,7 +75,12 @@ const siteContentDraftPageJsonSchema = objectSchema({
       additionalProperties: false,
       required: ["order"],
       properties: {
-        order: { type: "integer", minimum: 0, description: "Matches the plan section's own `order` — the only stable per-section key." },
+        order: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Paired to a plan section once, for the whole call, and only by a reading that accounts for EVERY supplement you supplied: if every `order` here matches a returned section's own `order`, all are matched by `order` (use this on a re-draft, once you have seen the plan's real orders); otherwise, if every `order` here is a valid 0-based POSITION in the plan's returned section array, all are read as positions (use this on a first draft, before you know the planner's numbering — supply 0, 1, 2, ... for the sections in the order you expect them). If neither reading fits every supplement, the call is REFUSED as ambiguous before any section is drafted — no partial pairing, because a partial pairing would attach your content to the wrong section or drop it. The refusal still returns the plan, names the orders it actually returned, and reports every supplement as a `supplement_unmatched` outcome, so you can re-key on the real orders and call again."
+        },
         brief: { type: "object" },
         facts: { type: "array", items: {} },
         sourceMaterial: { type: "array", items: {} },
@@ -93,7 +98,7 @@ const siteContentDraftPageJsonSchema = objectSchema({
     type: "string",
     minLength: 1,
     description:
-      "Names a page kind's pre-declared shape (e.g. \"organization_page\", \"offering\", \"reference\") — see siteContentPageRecipes.ts for the full list. Optional: omitting it leaves routing exactly as it is without one. A recipe only ever SUPPLIES a section's job (and, for the jobs that need one, its discriminator) when neither this call's own `supplements[order]` nor the plan's own section already said so — it never overrides what you or the plan stated. Naming an unrecognized recipe is refused by name, listing the known ones, never silently ignored."
+      "Names a page kind's pre-declared shape (e.g. \"organization_page\", \"offering\", \"reference\") — see siteContentPageRecipes.ts for the full list. Optional: omitting it leaves routing exactly as it is without one. Recipe sections pair with the plan's returned sections BY POSITION — the recipe's 1st declared section with the plan's 1st returned section, its 2nd with the plan's 2nd, and so on — never against the planner's own `order` value, since the recipe is authored before any plan exists and cannot know that numbering. A recipe only ever SUPPLIES a section's job (and, for the jobs that need one, its discriminator) when neither this call's own `supplements` nor the plan's own section already said so — it never overrides what you or the plan stated. If the plan returns fewer sections than the recipe declares, the undelivered recipe entries are reported as their own outcome, never dropped. Naming an unrecognized recipe is refused by name, listing the known ones, never silently ignored."
   }
 }, ["project_id", "brief"]);
 
@@ -108,7 +113,7 @@ export function createSiteContentTools({ projectRepository, executeNodeImpl }: S
     tool({
       name: "site_content.draft_page",
       description:
-        "Plan one page's sections (site_content_planner) and draft each section's copy by dispatching the specialist its planned job names — organization/people narrative, product/service/program/event descriptions, FAQ/process/policy/evidence-story reference content, or a focused revision/localization. No nodeId on the wire; routing is a fixed, in-source table keyed on each section's job. Optionally name a `pageRecipe` (e.g. \"organization_page\", \"offering\") to supply a section's job/discriminator when neither your `supplements` nor the plan itself already named one — a recipe never overrides what you or the plan stated, and an unrecognized name is refused, listing the known ones. Writes nothing to your site: every draft comes back for an approval surface, and a section whose job is ambiguous (product vs service, program vs event, faq vs process) with no discriminator supplied is refused by name rather than guessed.",
+        "Plan one page's sections (site_content_planner) and draft each section's copy by dispatching the specialist its planned job names — organization/people narrative, product/service/program/event descriptions, FAQ/process/policy/evidence-story reference content, or a focused revision/localization. No nodeId on the wire; routing is a fixed, in-source table keyed on each section's job. `supplements[].order` is read either as the plan's own returned `order` values (a re-draft) or as 0-based positions in the plan's returned sections (a first draft) — whichever accounts for every supplement you supplied; if neither does, the call is refused as ambiguous before anything is drafted rather than pairing some and dropping the rest. The result reports which reading was used (`supplementMatching`) and reports any unmatched supplement as its own outcome, never silently dropping it. Optionally name a `pageRecipe` (e.g. \"organization_page\", \"offering\") whose sections pair with the plan's returned sections by position, to supply a section's job/discriminator when neither your `supplements` nor the plan itself already named one — a recipe never overrides what you or the plan stated, and an unrecognized name is refused, listing the known ones. Writes nothing to your site: every draft comes back for an approval surface, and a section whose job is ambiguous (product vs service, program vs event, faq vs process) with no discriminator supplied is refused by name rather than guessed.",
       zodSchema: siteContentDraftPageInput,
       inputSchema: siteContentDraftPageJsonSchema,
       execute: async (input) => {

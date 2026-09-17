@@ -440,3 +440,227 @@ describe("runSiteContentDrafting — recipe defaults never rewrite what the plan
     expect((dispatch!.input as any).brief.mustEstablish).toEqual(SITE_CONTENT_PAGE_RECIPES.organization_page.sections[0]!.mustEstablish);
   });
 });
+
+// -------------------------------------------------------------------------------------------------
+// THE LIVE DEFECT (2026-09-17, dr-lurie): a real planner numbered its one-section plan `order: 1`. A
+// supplement keyed `order: 0` (the only sane first-draft choice — the caller cannot know the
+// planner's real numbering yet) never matched, the section skipped as "no_job", and the tool reported
+// `ok: true` with zero drafts. These tests reproduce that exact shape and assert it is now fixed, for
+// both the supplements channel and the pageRecipe channel (identical defect, `order: 0` in every
+// recipe).
+describe("runSiteContentDrafting — supplement/recipe matching on a 1-based (non-zero) planner order", () => {
+  it("a supplement keyed order:0 drafts a section the planner numbered order:1 (positional fallback — the live dr-lurie defect, supplements channel)", async () => {
+    const sections: PlanSection[] = [section({ order: 1, sectionType: "about_overview" })];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 0, job: "about_organization", facts: ["Founded 2010.", "Family-owned."] }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.outcomes).toHaveLength(1);
+    const outcome = result.outcomes[0] as any;
+    expect(outcome.outcome).toBe("drafted");
+    expect(outcome.job).toBe("about_organization");
+    expect(outcome.jobSource).toBe("supplement");
+    expect(result.supplementMatching).toBe("position");
+    const dispatchCall = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect(dispatchCall?.input.facts).toEqual(["Founded 2010.", "Family-owned."]);
+  });
+
+  it("pageRecipe drafts a section the planner numbered order:1 (positional pairing — the live dr-lurie defect, recipe channel)", async () => {
+    const sections: PlanSection[] = [section({ order: 1, sectionType: "about_overview" })];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.outcomes).toHaveLength(1);
+    const outcome = result.outcomes[0] as any;
+    expect(outcome.outcome).toBe("drafted");
+    expect(outcome.job).toBe("about_organization");
+    expect(outcome.jobSource).toBe("recipe");
+    expect(outcome.pageRecipe).toBe("organization_page");
+    const dispatchCall = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect(dispatchCall).toBeTruthy();
+  });
+});
+
+describe("runSiteContentDrafting — supplement matching precedence (order wins when it matches, positional fallback only when it never does)", () => {
+  it("order-matching wins on a re-draft: a plan returning orders 2 and 5, with supplements keyed 2 and 5, drafts both by order", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 2, sectionType: "about" }),
+      section({ order: 5, sectionType: "policy" })
+    ];
+    const { runNode } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 2, job: "about_organization" },
+      { order: 5, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("order");
+    const byOrder = new Map(result.outcomes.map((o: any) => [o.order, o]));
+    expect((byOrder.get(2) as any).outcome).toBe("drafted");
+    expect((byOrder.get(2) as any).job).toBe("about_organization");
+    expect((byOrder.get(5) as any).outcome).toBe("drafted");
+    expect((byOrder.get(5) as any).job).toBe("policy_explanation");
+  });
+
+  it("positional fallback is chosen only when NO supplement matched by order at all", async () => {
+    // Neither supplied supplement's order (0, 1) equals either returned section's own order (3, 7),
+    // so the whole call falls back to position: supplement order 0 -> position 0 (order 3), order 1
+    // -> position 1 (order 7).
+    const sections: PlanSection[] = [
+      section({ order: 3, sectionType: "about" }),
+      section({ order: 7, sectionType: "policy" })
+    ];
+    const { runNode } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 0, job: "about_organization" },
+      { order: 1, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("position");
+    const byOrder = new Map(result.outcomes.map((o: any) => [o.order, o]));
+    expect((byOrder.get(3) as any).outcome).toBe("drafted");
+    expect((byOrder.get(3) as any).job).toBe("about_organization");
+    expect((byOrder.get(7) as any).outcome).toBe("drafted");
+    expect((byOrder.get(7) as any).job).toBe("policy_explanation");
+  });
+
+  // Coordinator review (2026-09-17): a PARTIAL match is the one case where a guess misattributes
+  // content instead of merely losing it, so each mode is chosen only when it accounts for EVERY
+  // supplied supplement, and a call satisfying neither is refused before any writer is dispatched.
+  it("a partial match (some supplements match by order, not all, and not all are valid positions) is refused as ambiguous with no writer dispatched", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 2, sectionType: "about" }),
+      section({ order: 5, sectionType: "policy" })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+    // order:2 matches a returned order, order:9 matches neither a returned order nor a valid
+    // position (the plan has 2 sections, positions 0..1). Resolving this on the majority would apply
+    // order 2's facts correctly and silently strip order 9's — or, worse under an ANY rule, pair the
+    // wrong section. Refuse instead.
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 2, job: "about_organization" },
+      { order: 9, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("ambiguous");
+    expect(result.supplementMatchingReason).toContain("[2, 5]");
+    // The plan is still returned, so the caller can re-key on the real orders without replanning.
+    expect(result.plan.sections).toHaveLength(2);
+    // Every supplement is reported, and NOTHING was drafted — only the planner ran.
+    expect(result.outcomes.map((outcome: any) => outcome.outcome)).toEqual(["supplement_unmatched", "supplement_unmatched"]);
+    expect(calls.filter((call) => call.nodeId !== "site_content_planner")).toHaveLength(0);
+  });
+
+  it("a first-draft caller keying 0..N-1 against a 1-based plan reads positionally, never order-wise on the one order that happens to collide", async () => {
+    // The misattribution hazard in its exact shape: plan returns orders [1, 2]; the caller supplied
+    // positions [0, 1]. Supplement order 1 collides with the section the planner numbered 1 (which is
+    // POSITION 0), so an ANY-match rule would apply position 1's facts to position 0's section — the
+    // wrong section, with a plausible-looking result. Both supplements are valid positions, so the
+    // call reads positionally and each section gets its own facts.
+    const sections: PlanSection[] = [
+      section({ order: 1, sectionType: "about" }),
+      section({ order: 2, sectionType: "policy" })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 0, job: "about_organization", facts: ["about-facts"] },
+      { order: 1, job: "policy_explanation", sourceMaterial: ["policy-source"] }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("position");
+    expect(result.outcomes.every((outcome: any) => outcome.outcome === "drafted")).toBe(true);
+    // Position 0's facts reached the about writer, not the policy one.
+    const aboutCall = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect((aboutCall!.input as any).facts).toEqual(["about-facts"]);
+    const policyCall = calls.find((call) => call.nodeId === "reference_content_writer");
+    expect((policyCall!.input as any).sourceMaterial).toEqual(["policy-source"]);
+  });
+
+  it("a supplement with no valid position either (order 4 against a one-section plan) is refused as ambiguous, naming the section count", async () => {
+    const sections: PlanSection[] = [section({ order: 1, sectionType: "about_overview" })];
+    const { runNode } = makeRunner(sections);
+    // order:0 would pair with position 0, but order:4 pairs with nothing under either reading — the
+    // plan has one section (order 1, position 0). Pairing what fits and dropping order:4 would lose
+    // caller-supplied content silently, so the whole call refuses.
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 0, job: "about_organization" },
+      { order: 4, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("ambiguous");
+    expect(result.outcomes.map((outcome: any) => outcome.order)).toEqual([0, 4]);
+    expect(result.outcomes.every((outcome: any) => outcome.outcome === "supplement_unmatched")).toBe(true);
+    expect(result.supplementMatchingReason).toMatch(/1 section/);
+  });
+
+  it("non-contiguous, out-of-sequence planner orders (array position and order value disagree) still match correctly by order", async () => {
+    // Position 0 carries order 9, position 1 carries order 4 — position and order value deliberately
+    // disagree. Order-mode must match by `order`, not by array position.
+    const sections: PlanSection[] = [
+      section({ order: 9, sectionType: "second_logically" }),
+      section({ order: 4, sectionType: "first_logically" })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [
+      { order: 4, job: "about_organization", facts: ["for order 4"] },
+      { order: 9, job: "policy_explanation" }
+    ];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.supplementMatching).toBe("order");
+    const order9 = result.outcomes.find((o: any) => o.order === 9) as any;
+    const order4 = result.outcomes.find((o: any) => o.order === 4) as any;
+    expect(order9.job).toBe("policy_explanation");
+    expect(order4.job).toBe("about_organization");
+    const narrativeCall = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect(narrativeCall?.input.facts).toEqual(["for order 4"]);
+  });
+
+  it("no supplements at all reports supplementMatching: \"none\"", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+    const { runNode } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    expect(result.supplementMatching).toBe("none");
+    expect(result.supplementMatchingReason).toMatch(/no supplements/i);
+  });
+});

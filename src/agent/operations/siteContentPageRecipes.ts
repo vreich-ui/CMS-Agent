@@ -21,11 +21,19 @@
 // `referenceKind` undeclared because a generic reference page cannot know FAQ vs. process without more
 // than a page kind.
 //
-// A recipe is OPTIONAL and reconciled against the planner's actual output BY ORDER, never by count: a
-// planner returning more sections than the recipe names lets the extra sections fall through to
-// today's behaviour untouched (planner job, or skip); a planner returning fewer than the recipe names
-// means the recipe's undelivered entries are reported — never silently dropped — as a
-// `recipe_undelivered` outcome (see siteContentDraftingExecutor.ts).
+// A recipe is OPTIONAL and reconciled against the planner's actual output BY POSITION, never by the
+// planner's own `order` value: a recipe is authored before any plan exists, so it cannot reference the
+// planner's numbering — the recipe's Nth declared section (0-based, in `sections` array order) pairs
+// with the plan's Nth returned section (in returned array order), full stop. This is also why the live
+// dr-lurie defect existed: every recipe here declares `order: 0` for its (only) section, and a
+// planner's real `order` values are its own — often 1-based, non-contiguous, or otherwise not what a
+// recipe authored in isolation could predict. Each section's `order` field below is kept ONLY as that
+// section's own declaration index (0-based, contiguous — asserted in a test), never matched against
+// anything the planner returns. A planner returning more sections than the recipe names lets the extra
+// (higher-position) sections fall through to today's behaviour untouched (planner job, or skip); a
+// planner returning fewer sections than the recipe declares means the recipe's undelivered
+// (higher-position) entries are reported — never silently dropped — as a `recipe_undelivered` outcome
+// ("the recipe declared N sections, the plan returned fewer" — see siteContentDraftingExecutor.ts).
 //
 // SKILL NARROWING. Every job in SITE_CONTENT_JOBS is already a 1:1 `skillId` in seededSkills.ts (the
 // C4/C5 `executionOwner` metadata confirms the pairing: `about_organization` -> "C4 organization_page",
@@ -42,6 +50,10 @@
 import type { SiteContentJob } from "./siteContentDraftingExecutor.js";
 
 export type SiteContentRecipeSection = {
+  // This section's own declaration index within its recipe's `sections` array — 0-based, contiguous
+  // (asserted in a test). It is NEVER matched against the planner's own `order` value: a recipe is
+  // authored before any plan exists, so it pairs with the plan's returned sections BY POSITION (the
+  // recipe's Nth declared section <-> the plan's Nth returned section), not by this field's value.
   order: number;
   job: SiteContentJob;
   // Only meaningful for the two jobs whose specialist node needs a discriminator its own inputSchema
