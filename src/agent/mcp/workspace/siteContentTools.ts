@@ -2,6 +2,9 @@ import { z } from "zod";
 import type { ProjectRepository } from "../../repository/interfaces/ProjectRepository.js";
 import { runSiteContentDrafting, type SiteContentDraftingDeps, type SiteContentDraftingSupplement } from "../../operations/siteContentDraftingExecutor.js";
 import { objectSchema, ok, tool, WorkspaceToolError, type WorkspaceTool } from "./toolKit.js";
+import { compileSiteContentObjects, type DraftedSectionInput } from "../../operations/siteContentObjectCompiler.js";
+import { getSiteSnapshot, type SiteContextSource } from "../../operations/siteContext.js";
+import { createSiteContextSourceAdapter } from "../../operations/siteContextSourceAdapter.js";
 
 // site_content.draft_page — THE ONE narrow, site-scoped door to the site-content specialist roster
 // (siteContentSpecialistNodes.ts). Same shape as visual_identity.propose (visualIdentityTools.ts),
@@ -106,9 +109,52 @@ export type SiteContentToolDeps = {
   projectRepository: ProjectRepository;
   /** Injection seam for tests only — see runSiteContentDrafting's own executeNodeImpl seam. */
   executeNodeImpl?: SiteContentDraftingDeps["executeNodeImpl"];
+  /** Injection seam for tests only. Production builds the read-only tenant adapter below. */
+  siteContextSource?: SiteContextSource;
 };
 
-export function createSiteContentTools({ projectRepository, executeNodeImpl }: SiteContentToolDeps): WorkspaceTool[] {
+const compileDraftedSectionSchema = z.object({
+  order: z.number().int().min(0),
+  sectionType: z.string().min(1),
+  draft: z.record(z.string(), z.unknown()),
+  runId: z.string().min(1).nullable().optional(),
+  executionId: z.string().min(1).nullable().optional()
+}).strict();
+
+const siteContentCompilePageObjectsInput = z.object({
+  project_id: z.string().min(1),
+  drafted: z.array(compileDraftedSectionSchema).min(1),
+  page: z.object({
+    objectId: z.string().min(1).nullable().optional(),
+    fields: z.record(z.string(), z.unknown()),
+    sectionTargets: z.record(z.string(), z.string().min(1)).optional(),
+    expectedContentRevisions: z.record(z.string(), z.number().int().min(0)).optional()
+  }).strict()
+}).strict();
+
+const siteContentCompilePageObjectsJsonSchema = objectSchema({
+  project_id: { type: "string", minLength: 1 },
+  drafted: {
+    type: "array",
+    minItems: 1,
+    description: "The `drafted` outcomes from a site_content.draft_page result — order, sectionType, draft, and that dispatch's runId/executionId.",
+    items: objectSchema({
+      order: { type: "integer", minimum: 0 },
+      sectionType: { type: "string", minLength: 1 },
+      draft: { type: "object", description: "The specialist's own output for this section, unmodified." },
+      runId: { type: ["string", "null"] },
+      executionId: { type: ["string", "null"] }
+    }, ["order", "sectionType", "draft"])
+  },
+  page: objectSchema({
+    objectId: { type: ["string", "null"], description: "The page to revise; omit or null to compile a new page." },
+    fields: { type: "object", description: "The page object's own fields (pageType, slug, title, …), validated against this tenant's page contract. Never defaulted here." },
+    sectionTargets: { type: "object", description: "Existing section object ids to patch, keyed by the planner order they correspond to. An order absent from this map compiles a new section." },
+    expectedContentRevisions: { type: "object", description: "What you believe each target's contentRevision is, keyed by object id. A mismatch is refused as stale_target rather than applied." }
+  }, ["fields"])
+}, ["project_id", "drafted", "page"]);
+
+export function createSiteContentTools({ projectRepository, executeNodeImpl, siteContextSource }: SiteContentToolDeps): WorkspaceTool[] {
   return [
     tool({
       name: "site_content.draft_page",
@@ -142,6 +188,73 @@ export function createSiteContentTools({ projectRepository, executeNodeImpl }: S
           const message = error instanceof Error ? error.message : String(error);
           throw new WorkspaceToolError("site_content_draft_failed", message, { projectId: data.project_id });
         }
+      }
+    }),
+    // P2 — the review surface between a drafted page and a site that has one. READ-ONLY: it captures
+    // a snapshot through the read-only tenant adapter (siteContextSourceAdapter.ts, whose transport
+    // physically cannot reach a write verb) and compiles. It writes nothing, applies nothing, and
+    // grants nothing — what comes back is a change set an operator can read BEFORE anything exists.
+    //
+    // DELIBERATELY NOT in SITE_CLIENT_MANAGER_TOOLS (siteGenesis.ts). This is an operator review
+    // surface on the workspace plane, so it needs no tenant re-mint and no reconciler --apply to be
+    // useful; exposing it to every tenant's client_manager is a separate decision with its own
+    // credential consequences, and is not taken here.
+    tool({
+      name: "site_content.compile_page_objects",
+      description:
+        "Compile a site_content.draft_page result into the actual site objects it would become — read-only, and the step BEFORE anything is written. Returns, per drafted section, the component type it compiles to (resolved against this tenant's own section contract, never a name this tool keeps), whether it would create a new section or patch a named existing one, the page's ordered section references (the planner's own order values, preserved — never renumbered), and a field-level change set per object. Also returns a `materializationKey`: replaying the same drafts against the same target produces the identical key and the identical changeSetIds, so a duplicate request is recognisable rather than a second page. ALL OR NOTHING: if any section cannot be compiled — an FAQ draft with no question/answer items, a process draft with no ordered steps, a component type this tenant does not declare, a patch target whose contentRevision has moved since the request was prepared, drafts belonging to another tenant — the whole call is refused with named blockers and no partial plan, because a half-built page is the damage an operator cannot see. Compiling is not applying: nothing here saves, applies, publishes or releases, and the returned plan authorizes none of those.",
+      zodSchema: siteContentCompilePageObjectsInput,
+      inputSchema: siteContentCompilePageObjectsJsonSchema,
+      execute: async (input) => {
+        const data = siteContentCompilePageObjectsInput.parse(input);
+
+        const project = await projectRepository.get(data.project_id);
+        if (!project) throw new WorkspaceToolError("unknown_project", `No registered project matches "${data.project_id}".`, { projectId: data.project_id });
+        if (project.status === "provisioning") throw new WorkspaceToolError("project_provisioning", `Project "${data.project_id}" is still provisioning: its genesis did not complete. Re-run site.duplicate to finish the mint.`, { projectId: data.project_id });
+        if (project.status !== "active") throw new WorkspaceToolError("project_disabled", `Project "${data.project_id}" is disabled.`, { projectId: data.project_id });
+
+        const source = siteContextSource ?? createSiteContextSourceAdapter({ projectRepository });
+        let snapshot;
+        try {
+          snapshot = await getSiteSnapshot(source, { tenantId: data.project_id, objectTypes: ["page", "section"] });
+        } catch (error) {
+          // A snapshot that could not be read is reported as exactly that. It is never compiled
+          // against an empty one — an absent contract would read as "this tenant supports nothing",
+          // and an absent object list would turn every patch target into a create.
+          const message = error instanceof Error ? error.message : String(error);
+          throw new WorkspaceToolError("site_snapshot_unavailable", `Could not read "${data.project_id}"'s current pages and sections, so no compilation was attempted: ${message}`, { projectId: data.project_id });
+        }
+
+        // Section targets arrive keyed by order as JSON object keys (strings); the compiler keys
+        // them by the planner's numeric order.
+        const sectionTargets: Record<number, string> = {};
+        for (const [order, objectId] of Object.entries(data.page.sectionTargets ?? {})) {
+          // Canonical decimal only. `Number("04")` and `Number("4")` are the same number, so a
+          // caller sending both would have one target silently overwrite the other; a key that is
+          // not the plain decimal spelling of its own order is refused instead.
+          const parsed = Number(order);
+          if (!/^\d+$/.test(order) || !Number.isInteger(parsed) || String(parsed) !== order) {
+            throw new WorkspaceToolError("invalid_section_target_key", `sectionTargets key "${order}" is not a section order. Keys are the planner's own order values.`, { projectId: data.project_id, key: order });
+          }
+          sectionTargets[parsed] = objectId;
+        }
+
+        const result = compileSiteContentObjects({
+          projectId: data.project_id,
+          drafted: data.drafted as DraftedSectionInput[],
+          snapshot,
+          target: {
+            pageObjectId: data.page.objectId ?? null,
+            pageFields: data.page.fields,
+            sectionTargets,
+            ...(data.page.expectedContentRevisions ? { expectedContentRevisions: data.page.expectedContentRevisions } : {})
+          }
+        });
+
+        // A refusal is a RESULT, not a thrown error: the blockers are the useful part, each naming
+        // what is wrong and what would fix it, and a caller should read them rather than a message.
+        if (!result.ok) return ok({ compiled: false, blockers: result.blockers, snapshotDigest: snapshot.digest, revisionId: snapshot.revisionId });
+        return ok({ compiled: true, plan: result.plan, snapshotDigest: snapshot.digest, revisionId: snapshot.revisionId });
       }
     })
   ];
