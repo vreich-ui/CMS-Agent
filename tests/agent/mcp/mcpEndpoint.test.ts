@@ -436,3 +436,42 @@ describe("scoped bearer tokens and operation.execute/operation.preflight's tenan
     ]);
   });
 });
+
+// #376 defence-in-depth — `site_content_draft_page`'s own schema already requires `project_id`, but
+// mcpEndpoint.ts's PROJECT_REQUIRED_SCOPED_TOOLS refuses a scoped bearer BEFORE that schema ever
+// parses, and the pre-existing membership check refuses a foreign project exactly as it already does
+// for feedback_list/learning_list_observations above.
+describe("scoped bearer tokens and site_content_draft_page (#376)", () => {
+  const SCOPED = "scoped-test-drlurie-sitecontent";
+
+  beforeEach(() => {
+    resetRepositoryManager();
+    process.env.MCP_API_TOKEN = "test-token";
+    process.env.MCP_SCOPED_TOKENS_JSON = JSON.stringify({
+      [SCOPED]: { projects: ["dr-lurie"], toolAllowlist: ["site_content_draft_page"] }
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.MCP_SCOPED_TOKENS_JSON;
+  });
+
+  const scopedCall = async (args: Record<string, unknown>) => {
+    const response = await handler({
+      httpMethod: "POST",
+      headers: { authorization: `Bearer ${SCOPED}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "site_content_draft_page", arguments: args } })
+    });
+    return { ...response, json: response.body ? JSON.parse(response.body) : undefined };
+  };
+
+  it("refuses a scoped call that names no project_id at all", async () => {
+    const response = await scopedCall({ brief: { topic: "ceramides" } });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("refuses a scoped call naming a project outside the bearer's own scope", async () => {
+    const response = await scopedCall({ project_id: "fernwell", brief: { topic: "ceramides" } });
+    expect(response.statusCode).toBe(401);
+  });
+});

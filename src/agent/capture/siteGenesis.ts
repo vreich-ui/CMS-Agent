@@ -285,6 +285,20 @@ export const SITE_CLIENT_MANAGER_TOOLS = [
   // site-credential-reconciler is run with --apply (docs/mcp-scoped-bearer-auth.md); this task does
   // not run it.
   "operation_execute"
+  // MUTATION_TEST_REMOVE_BELOW
+  ,
+  // #376: Platform's site-content drafting surface calls `site_content_draft_page`
+  // (siteContentTools.ts). Same shape as `visual_identity_propose` above and for the same reason —
+  // this is the narrow, site-scoped drafting door to the site-content specialist roster, never
+  // `node_execute`, which must never reach a tenant bearer (ruling R1). It writes NOTHING to the
+  // client: every draft it produces comes back for an approval surface, never an
+  // object_create/object_patch/object_publish/project.call_tool of its own (see that tool's own
+  // header and its test's source-grep assertion) — which is exactly why it is admissible here where
+  // node_execute is not. `project_id` is required on its own schema AND named in
+  // mcpEndpoint.ts's PROJECT_REQUIRED_SCOPED_TOOLS, so a scoped bearer cannot reach it without
+  // naming a project, and naming a foreign one is refused the same way `workflow_get_run` already
+  // refuses a foreign runId.
+  "site_content_draft_page"
 ] as const;
 
 export type GenesisNetlifyMode = "dry_run" | "live";

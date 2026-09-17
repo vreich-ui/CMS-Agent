@@ -7,6 +7,7 @@ import {
   type SiteContentDraftingDeps,
   type SiteContentDraftingSupplement
 } from "../../../src/agent/operations/siteContentDraftingExecutor.js";
+import { SITE_CONTENT_PAGE_RECIPES, SITE_CONTENT_PAGE_RECIPE_NAMES } from "../../../src/agent/operations/siteContentPageRecipes.js";
 
 const PROJECT_ID = "acme-site";
 
@@ -168,5 +169,274 @@ describe("no write tool reachable from this module", () => {
   it("SiteContentDraftingDeps' only injected seam is executeNodeImpl — a fully-populated deps object has exactly one key", () => {
     const deps: SiteContentDraftingDeps = { executeNodeImpl: (async () => ({})) as any };
     expect(Object.keys(deps)).toEqual(["executeNodeImpl"]);
+  });
+});
+
+// -------------------------------------------------------------------------------------------------
+// Page recipes (siteContentPageRecipes.ts) — optional named page-shape declarations that only ever
+// SUPPLY a section's job/discriminator, and only when nothing else already named one.
+describe("page recipes — routing", () => {
+  // The node + candidateSkillIds every recipe's own section is expected to resolve to, given a plan
+  // section that names no job at all (so the recipe is the only source). `reference` needs an
+  // external referenceKind supplement to complete routing at all — see its own recipe's header on
+  // why it deliberately declares none — so it is asserted separately below.
+  const expected: Record<string, { nodeId: string; candidateSkillIds: string[] }> = {
+    organization_page: { nodeId: "organization_narrative_writer", candidateSkillIds: ["about_organization"] },
+    people_profiles: { nodeId: "organization_narrative_writer", candidateSkillIds: ["people_profile"] },
+    documentation_page: { nodeId: "reference_content_writer", candidateSkillIds: ["faq_help_process"] },
+    offering: { nodeId: "offering_description_writer", candidateSkillIds: ["product_service_description"] },
+    program_event: { nodeId: "offering_description_writer", candidateSkillIds: ["program_event_description"] },
+    evidence_story: { nodeId: "reference_content_writer", candidateSkillIds: ["evidence_story"] },
+    revision: { nodeId: "site_content_reviewer", candidateSkillIds: ["focused_revision"] },
+    localization: { nodeId: "site_content_reviewer", candidateSkillIds: ["localization"] }
+  };
+
+  for (const [recipeName, want] of Object.entries(expected)) {
+    it(`recipe "${recipeName}" routes its section to ${want.nodeId} with candidateSkillIds ${JSON.stringify(want.candidateSkillIds)}`, async () => {
+      const recipeSections = SITE_CONTENT_PAGE_RECIPES[recipeName].sections;
+      const sections: PlanSection[] = recipeSections.map((entry) => section({ order: entry.order, sectionType: "recipe_test" }));
+      const { runNode, calls } = makeRunner(sections);
+
+      const result = await runSiteContentDrafting(
+        { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: recipeName },
+        { executeNodeImpl: runNode }
+      );
+
+      expect(result.outcomes.every((outcome) => outcome.outcome === "drafted")).toBe(true);
+      const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+      expect(dispatchCalls.map((call) => call.nodeId)).toEqual([want.nodeId]);
+      expect(dispatchCalls[0].candidateSkillIds).toEqual(want.candidateSkillIds);
+      const drafted = result.outcomes[0] as any;
+      expect(drafted.jobSource).toBe("recipe");
+      expect(drafted.pageRecipe).toBe(recipeName);
+      expect(drafted.candidateSkillIds).toEqual(want.candidateSkillIds);
+    });
+  }
+
+  it('recipe "reference" routes to reference_content_writer once a referenceKind is supplied elsewhere (the recipe itself declares none)', async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "recipe_test" })];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [{ order: 0, referenceKind: "faq" }];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "reference", supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.outcomes[0].outcome).toBe("drafted");
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls.map((call) => call.nodeId)).toEqual(["reference_content_writer"]);
+    expect(dispatchCalls[0].candidateSkillIds).toEqual(["faq_help_process"]);
+  });
+
+  it("every declared recipe name is exercised above (guards against a recipe silently added without a routing test)", () => {
+    const covered = new Set([...Object.keys(expected), "reference"]);
+    expect(new Set(SITE_CONTENT_PAGE_RECIPE_NAMES)).toEqual(covered);
+  });
+});
+
+describe("page recipes — precedence (supplement > planner job > recipe)", () => {
+  it("a caller supplement's job wins over both the planner's own job and the recipe", async () => {
+    // organization_page's recipe says about_organization/organization_narrative_writer for order 0;
+    // the plan itself says people_profile; the supplement overrides both with focused_revision.
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "s", contentRequirement: { job: "people_profile" } })];
+    const { runNode, calls } = makeRunner(sections);
+    const supplements: SiteContentDraftingSupplement[] = [{ order: 0, job: "focused_revision", existingCopy: "old copy" }];
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page", supplements },
+      { executeNodeImpl: runNode }
+    );
+
+    const outcome = result.outcomes[0] as any;
+    expect(outcome.outcome).toBe("drafted");
+    expect(outcome.job).toBe("focused_revision");
+    expect(outcome.jobSource).toBe("supplement");
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls.map((call) => call.nodeId)).toEqual(["site_content_reviewer"]);
+  });
+
+  it("the planner's own job wins over the recipe when no supplement names one", async () => {
+    // organization_page's recipe says about_organization for order 0; the plan itself instead says
+    // people_profile, and no supplement is given — the planner's job must win.
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "s", contentRequirement: { job: "people_profile" } })];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: runNode }
+    );
+
+    const outcome = result.outcomes[0] as any;
+    expect(outcome.outcome).toBe("drafted");
+    expect(outcome.job).toBe("people_profile");
+    expect(outcome.jobSource).toBe("planner");
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls[0].candidateSkillIds).toEqual(["people_profile"]);
+  });
+
+  it("the recipe supplies the job only when neither a supplement nor the planner's section named one", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "s" })];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: runNode }
+    );
+
+    const outcome = result.outcomes[0] as any;
+    expect(outcome.outcome).toBe("drafted");
+    expect(outcome.job).toBe("about_organization");
+    expect(outcome.jobSource).toBe("recipe");
+    expect(outcome.pageRecipe).toBe("organization_page");
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls.map((call) => call.nodeId)).toEqual(["organization_narrative_writer"]);
+  });
+});
+
+describe("page recipes — optional, byte-identical when omitted", () => {
+  it("omitting pageRecipe produces the exact same outcome as today's behaviour on a plan the recipe would otherwise have supplied a job for", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", contentRequirement: { job: "about_organization" } })];
+
+    const withoutRecipe = makeRunner(sections);
+    const resultWithout = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: withoutRecipe.runNode });
+
+    const withRecipe = makeRunner(sections);
+    const resultWith = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: withRecipe.runNode }
+    );
+
+    // Both dispatch identically: the plan already named the job, so the recipe (present or absent)
+    // never gets consulted, and jobSource is "planner" either way.
+    expect((resultWithout.outcomes[0] as any).nodeId).toEqual((resultWith.outcomes[0] as any).nodeId);
+    expect((resultWithout.outcomes[0] as any).job).toEqual((resultWith.outcomes[0] as any).job);
+    expect((resultWith.outcomes[0] as any).jobSource).toBe("planner");
+    expect(resultWithout.outcomes).toHaveLength(1);
+    expect(resultWith.outcomes).toHaveLength(1);
+  });
+});
+
+describe("page recipes — unknown name refused", () => {
+  it("an unrecognized pageRecipe name throws, listing the known recipe names", async () => {
+    const { runNode } = makeRunner([]);
+
+    await expect(
+      runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "not_a_real_recipe" }, { executeNodeImpl: runNode })
+    ).rejects.toThrow(/not_a_real_recipe/);
+
+    for (const name of SITE_CONTENT_PAGE_RECIPE_NAMES) {
+      await expect(
+        runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "not_a_real_recipe" }, { executeNodeImpl: runNode })
+      ).rejects.toThrow(new RegExp(name));
+    }
+  });
+});
+
+describe("page recipes — no discriminator declared, refusal preserved verbatim", () => {
+  it('recipe "reference" declares no referenceKind, so a section with no other source still gets the exact ambiguous-discriminator refusal message', async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "mystery_reference" })];
+    const { runNode: runWithout } = makeRunner(sections);
+    const { runNode: runWith } = makeRunner(sections);
+
+    const withoutRecipe = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runWithout });
+    // The plan alone names no job here, so without a recipe this section is merely "skipped" — the
+    // real apples-to-apples comparison is: give BOTH runs the same job (via the plan) but only the
+    // recipe run withholds the discriminator, matching the no-recipe-and-no-discriminator refusal
+    // the existing "faq_help_process ambiguous" test already covers verbatim.
+    expect(withoutRecipe.outcomes[0].outcome).toBe("skipped");
+
+    const sectionsWithJob: PlanSection[] = [section({ order: 0, sectionType: "mystery_reference", contentRequirement: { job: "faq_help_process" } })];
+    const { runNode: runNoRecipeWithJob } = makeRunner(sectionsWithJob);
+    const { runNode: runRecipeWithJob } = makeRunner(sectionsWithJob);
+
+    const noRecipeResult = await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNoRecipeWithJob });
+    const recipeResult = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "reference" },
+      { executeNodeImpl: runRecipeWithJob }
+    );
+
+    const noRecipeRefusal = noRecipeResult.outcomes[0] as any;
+    const recipeRefusal = recipeResult.outcomes[0] as any;
+    expect(noRecipeRefusal.outcome).toBe("refused");
+    expect(recipeRefusal.outcome).toBe("refused");
+    // Verbatim: the recipe's presence changes nothing about the refusal message itself.
+    expect(recipeRefusal.reason).toBe(noRecipeRefusal.reason);
+    expect(recipeRefusal.reason).toContain("referenceKind");
+  });
+});
+
+describe("page recipes — planner/recipe order reconciliation", () => {
+  it("more planner sections than the recipe declares: the extra section falls through to today's behaviour (planner job, or skip)", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about" }), // recipe supplies about_organization
+      section({ order: 1, sectionType: "extra", contentRequirement: { job: "evidence_story" } }) // recipe has no order 1 at all
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.outcomes).toHaveLength(2);
+    const first = result.outcomes.find((o) => o.order === 0) as any;
+    const second = result.outcomes.find((o) => o.order === 1) as any;
+    expect(first.jobSource).toBe("recipe");
+    expect(first.job).toBe("about_organization");
+    expect(second.jobSource).toBe("planner");
+    expect(second.job).toBe("evidence_story");
+    const dispatchCalls = calls.filter((call) => call.nodeId !== "site_content_planner");
+    expect(dispatchCalls.map((call) => call.nodeId).sort()).toEqual(["organization_narrative_writer", "reference_content_writer"].sort());
+  });
+
+  it("fewer planner sections than the recipe declares: the undelivered recipe entry is reported, never silently dropped", async () => {
+    // offering's recipe names only order 0; the planner here returns nothing at all — a maximal
+    // "fewer" case.
+    const { runNode } = makeRunner([]);
+
+    const result = await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "offering" },
+      { executeNodeImpl: runNode }
+    );
+
+    expect(result.outcomes).toHaveLength(1);
+    const undelivered = result.outcomes[0] as any;
+    expect(undelivered.outcome).toBe("recipe_undelivered");
+    expect(undelivered.order).toBe(0);
+    expect(undelivered.job).toBe("product_service_description");
+    expect(undelivered.pageRecipe).toBe("offering");
+    expect(undelivered.reason).toContain("offering");
+  });
+});
+
+// Coordinator review (2026-09-17): the recipe layer's mustEstablish default must not change what a
+// no-recipe call sends. An empty array the planner actually wrote is a statement ("this section
+// establishes nothing new"), not an absence, so it must survive as [] rather than becoming
+// undefined — the byte-for-byte guarantee of rule 3 at field level.
+describe("runSiteContentDrafting — recipe defaults never rewrite what the planner wrote", () => {
+  it("preserves an empty mustEstablish array from the planner when no pageRecipe is supplied", async () => {
+    const sections: PlanSection[] = [
+      section({ order: 0, sectionType: "about", mustEstablish: [], contentRequirement: { job: "about_organization" } })
+    ];
+    const { runNode, calls } = makeRunner(sections);
+
+    await runSiteContentDrafting({ projectId: PROJECT_ID, brief: { purpose: "test" } }, { executeNodeImpl: runNode });
+
+    const dispatch = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect((dispatch!.input as any).brief.mustEstablish).toEqual([]);
+  });
+
+  it("uses the recipe's mustEstablish only when the planner's section left it empty AND a recipe entry exists", async () => {
+    const sections: PlanSection[] = [section({ order: 0, sectionType: "about", mustEstablish: [] })];
+    const { runNode, calls } = makeRunner(sections);
+
+    await runSiteContentDrafting(
+      { projectId: PROJECT_ID, brief: { purpose: "test" }, pageRecipe: "organization_page" },
+      { executeNodeImpl: runNode }
+    );
+
+    const dispatch = calls.find((call) => call.nodeId === "organization_narrative_writer");
+    expect((dispatch!.input as any).brief.mustEstablish).toEqual(SITE_CONTENT_PAGE_RECIPES.organization_page.sections[0]!.mustEstablish);
   });
 });
