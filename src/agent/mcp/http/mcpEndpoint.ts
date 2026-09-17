@@ -163,7 +163,16 @@ const requestedRun = (argumentsValue: unknown): string | undefined | null => {
 // tool's semantics that no argument reveals. A tool added later is NOT covered until someone adds it
 // here, so: any tool that lists records across projects must be added to this set in the same commit
 // that adds it to SITE_CLIENT_MANAGER_TOOLS.
-const PROJECT_REQUIRED_SCOPED_TOOLS: readonly string[] = ["feedback_list", "learning_list_observations"];
+// #376: `site_content_draft_page` (siteContentTools.ts) joins this list too, but for a different
+// reason than feedback_list/learning_list_observations above — its own zod schema already marks
+// `project_id` required, min length 1, so an omitted or empty project never reaches the tool at all.
+// It belongs here anyway as defence in depth: this door has to refuse BEFORE the tool's own parse
+// runs, the same "refuse before the membership check" ordering `isScopedMessageAllowed` already
+// applies below (line ~194) — a request this door let through on the theory that the tool's own
+// validation would catch it is one 400/500 error message away from becoming the door's problem
+// instead of a refusal at the door. An entry here costs nothing when the schema already agrees;
+// it is only ever a backstop.
+const PROJECT_REQUIRED_SCOPED_TOOLS: readonly string[] = ["feedback_list", "learning_list_observations", "site_content_draft_page"];
 
 // An unknown runId is refused exactly like a foreign one, and a store failure fails closed.
 // Distinguishing "no such run" from "not your run" would make this check an existence oracle over

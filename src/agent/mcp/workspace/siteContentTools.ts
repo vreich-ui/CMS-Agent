@@ -55,7 +55,10 @@ export const siteContentDraftPageInput = z.object({
   // copy to revise, a target locale, an explicit offeringKind/referenceKind/job override) — see
   // SiteContentDraftingSupplement in the executor. Keyed by `order` because that is the plan's only
   // stable per-section identifier.
-  supplements: z.array(supplementSchema).max(60).optional()
+  supplements: z.array(supplementSchema).max(60).optional(),
+  // A named page-shape declaration (siteContentPageRecipes.ts) — see the JSON Schema description
+  // below for the plain-language rules this parameter follows.
+  pageRecipe: z.string().min(1).optional()
 }).strict();
 
 const siteContentDraftPageJsonSchema = objectSchema({
@@ -85,6 +88,12 @@ const siteContentDraftPageJsonSchema = objectSchema({
       }
     },
     description: "Per-section content this tool cannot originate itself, keyed by the plan section's `order`."
+  },
+  pageRecipe: {
+    type: "string",
+    minLength: 1,
+    description:
+      "Names a page kind's pre-declared shape (e.g. \"organization_page\", \"offering\", \"reference\") — see siteContentPageRecipes.ts for the full list. Optional: omitting it leaves routing exactly as it is without one. A recipe only ever SUPPLIES a section's job (and, for the jobs that need one, its discriminator) when neither this call's own `supplements[order]` nor the plan's own section already said so — it never overrides what you or the plan stated. Naming an unrecognized recipe is refused by name, listing the known ones, never silently ignored."
   }
 }, ["project_id", "brief"]);
 
@@ -99,7 +108,7 @@ export function createSiteContentTools({ projectRepository, executeNodeImpl }: S
     tool({
       name: "site_content.draft_page",
       description:
-        "Plan one page's sections (site_content_planner) and draft each section's copy by dispatching the specialist its planned job names — organization/people narrative, product/service/program/event descriptions, FAQ/process/policy/evidence-story reference content, or a focused revision/localization. No nodeId on the wire; routing is a fixed, in-source table keyed on each section's job. Writes nothing to your site: every draft comes back for an approval surface, and a section whose job is ambiguous (product vs service, program vs event, faq vs process) with no discriminator supplied is refused by name rather than guessed.",
+        "Plan one page's sections (site_content_planner) and draft each section's copy by dispatching the specialist its planned job names — organization/people narrative, product/service/program/event descriptions, FAQ/process/policy/evidence-story reference content, or a focused revision/localization. No nodeId on the wire; routing is a fixed, in-source table keyed on each section's job. Optionally name a `pageRecipe` (e.g. \"organization_page\", \"offering\") to supply a section's job/discriminator when neither your `supplements` nor the plan itself already named one — a recipe never overrides what you or the plan stated, and an unrecognized name is refused, listing the known ones. Writes nothing to your site: every draft comes back for an approval surface, and a section whose job is ambiguous (product vs service, program vs event, faq vs process) with no discriminator supplied is refused by name rather than guessed.",
       zodSchema: siteContentDraftPageInput,
       inputSchema: siteContentDraftPageJsonSchema,
       execute: async (input) => {
@@ -118,7 +127,8 @@ export function createSiteContentTools({ projectRepository, executeNodeImpl }: S
               existingContent: data.existingContent,
               siteContext: data.siteContext,
               voice: data.voice,
-              supplements: data.supplements as SiteContentDraftingSupplement[] | undefined
+              supplements: data.supplements as SiteContentDraftingSupplement[] | undefined,
+              pageRecipe: data.pageRecipe
             },
             { executeNodeImpl }
           );

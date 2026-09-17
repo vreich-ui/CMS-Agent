@@ -160,7 +160,13 @@ export const runEditorialPlannerJob = async (options: { dryRun?: boolean; only?:
   return { status: options.dryRun ? "dry_run" : "ok", guard, tenants, tenantLines, skipped, results, startedRuns };
 };
 
-/** `planner.status` for every configured tenant — what the job would report without planning anything. */
+/**
+ * `planner.status` for every configured tenant — what the job would report without planning
+ * anything. Returns `PlannerStatus[]` as `plannerStatus` built it, nulls included: a tenant whose
+ * run-facts read failed carries `runFactsRead: "failed"` and null numeric/halted fields here exactly
+ * as it does from a single-tenant call. Never coerce those nulls to 0 downstream — a 0 says "nothing
+ * ran today", which a store that could not be read has no basis to claim.
+ */
 export const editorialPlannerFleetStatus = async (deps: PlannerJobDeps = {}) => {
   const projectRepository = deps.projectRepository ?? repositoryManager.getProjectRepository();
   const { candidates } = resolvePlannerCandidates(await projectRepository.list(), { ...(deps.env ? { env: deps.env } : {}) });

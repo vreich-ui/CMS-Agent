@@ -49,6 +49,7 @@
 // section. A plausible default here (writing an event page as a product page) is exactly the failure
 // mode a named refusal exists to avoid.
 import { executeNode } from "../workspace/nodeRuntime.js";
+import { getPageRecipe, SITE_CONTENT_PAGE_RECIPE_NAMES, type SiteContentRecipeSection } from "./siteContentPageRecipes.js";
 
 // ---------------------------------------------------------------------------------------------
 // Job vocabulary — the crosswalk fixed by the routing table below, never invented per-call.
@@ -122,14 +123,31 @@ export type SiteContentDraftingInput = {
   siteContext?: Record<string, unknown>;
   voice?: string | Record<string, unknown>;
   supplements?: SiteContentDraftingSupplement[];
+  // Optional, named page-shape declaration (siteContentPageRecipes.ts). Omitting it leaves every
+  // routing decision exactly as it was before recipes existed — see that module's header for the
+  // precedence rule (supplement > planner job > recipe) and runSiteContentDrafting below for the
+  // unknown-name refusal and the undelivered-section reporting.
+  pageRecipe?: string;
 };
+
+// Where a section's job came from — an operator-facing "why was this routed this way" trail (rule 7
+// of the recipe layer task). "recipe" only ever appears when neither the caller's supplement nor the
+// planner's own section named a job for this order; see resolveJob below.
+export type SiteContentJobSource = "supplement" | "planner" | "recipe";
 
 export type SiteContentDraftedOutcome = {
   outcome: "drafted";
   order: number;
   sectionType: string;
   job: SiteContentJob;
+  jobSource: SiteContentJobSource;
+  pageRecipe?: string;
   nodeId: SiteContentSpecialistNodeId;
+  // The skill id(s) this dispatch was narrowed to via candidateSkillIds (#365/#374) — always `[job]`
+  // today, since every job in SITE_CONTENT_JOBS is a 1:1 skillId (see siteContentPageRecipes.ts's
+  // header). Reported explicitly rather than left implicit so an operator can see why a specialist
+  // saw only one job's instructions.
+  candidateSkillIds: string[];
   draft: Record<string, unknown>;
 };
 export type SiteContentRefusedOutcome = {
@@ -137,7 +155,10 @@ export type SiteContentRefusedOutcome = {
   order: number;
   sectionType: string;
   job: string | null;
+  jobSource?: SiteContentJobSource;
+  pageRecipe?: string;
   nodeId?: SiteContentSpecialistNodeId;
+  candidateSkillIds?: string[];
   reason: string;
 };
 export type SiteContentSkippedOutcome = {
@@ -146,7 +167,20 @@ export type SiteContentSkippedOutcome = {
   sectionType: string;
   reason: "no_job";
 };
-export type SiteContentSectionOutcome = SiteContentDraftedOutcome | SiteContentRefusedOutcome | SiteContentSkippedOutcome;
+// A recipe named a section (by `order`) that the planner's actual output never delivered. Reported
+// explicitly rather than silently dropped — rule 5 of the recipe layer task.
+export type SiteContentRecipeUndeliveredOutcome = {
+  outcome: "recipe_undelivered";
+  order: number;
+  job: SiteContentJob;
+  pageRecipe: string;
+  reason: string;
+};
+export type SiteContentSectionOutcome =
+  | SiteContentDraftedOutcome
+  | SiteContentRefusedOutcome
+  | SiteContentSkippedOutcome
+  | SiteContentRecipeUndeliveredOutcome;
 
 export type SiteContentDraftingResult = {
   projectId: string;
@@ -220,14 +254,24 @@ function extractNodeOutput(executed: unknown, nodeId: string): { ok: true; outpu
 // A section's writer brief: the page-level brief plus what this section's own plan entry adds
 // (purpose, mustEstablish) — a caller-supplied supplement.brief, when present, wins outright rather
 // than being merged, so a caller narrowing a section's brief is never fighting this default.
-function buildSectionBrief(section: PlanSection, supplement: SiteContentDraftingSupplement | undefined, pageBrief: Record<string, unknown>): Record<string, unknown> {
+function buildSectionBrief(
+  section: PlanSection,
+  supplement: SiteContentDraftingSupplement | undefined,
+  pageBrief: Record<string, unknown>,
+  recipeEntry: SiteContentRecipeSection | undefined
+): Record<string, unknown> {
   if (supplement?.brief !== undefined) return supplement.brief;
   return {
     ...pageBrief,
     sectionOrder: section.order,
     sectionType: section.sectionType,
-    sectionPurpose: section.purpose,
-    mustEstablish: section.mustEstablish
+    // The planner's own purpose/mustEstablish win when present; a recipe's are only a default for
+    // when the planner's section left them out — never an override of what the planner said.
+    sectionPurpose: section.purpose ?? recipeEntry?.purpose,
+    // Trailing `?? section.mustEstablish` is load-bearing: with no recipe an empty array the
+    // planner actually wrote must stay an empty array, not become undefined. A recipe default only
+    // applies when there IS a recipe entry to default from.
+    mustEstablish: (section.mustEstablish?.length ? section.mustEstablish : recipeEntry?.mustEstablish) ?? section.mustEstablish
   };
 }
 
@@ -242,9 +286,10 @@ function resolveDispatch(
   job: SiteContentJob,
   section: PlanSection,
   supplement: SiteContentDraftingSupplement | undefined,
-  page: { brief: Record<string, unknown>; voice?: string | Record<string, unknown> }
+  page: { brief: Record<string, unknown>; voice?: string | Record<string, unknown> },
+  recipeEntry: SiteContentRecipeSection | undefined
 ): DispatchResolution {
-  const brief = buildSectionBrief(section, supplement, page.brief);
+  const brief = buildSectionBrief(section, supplement, page.brief, recipeEntry);
   const voice = supplement?.voice ?? page.voice;
   const plan = section;
   const sectionLabel = `section ${section.order} ("${section.sectionType}")`;
@@ -262,7 +307,9 @@ function resolveDispatch(
     case "product_service_description":
     case "program_event_description": {
       const allowed = job === "product_service_description" ? (["product", "service"] as const) : (["program", "event"] as const);
-      const offeringKind = firstDefined(supplement?.offeringKind, readSectionField(section, "offeringKind") as string | undefined);
+      // Precedence: supplement > the planner's own section > recipe. A recipe only ever SUPPLIES a
+      // discriminator; it is last in this chain and never overrides either of the other two.
+      const offeringKind = firstDefined(supplement?.offeringKind, readSectionField(section, "offeringKind") as string | undefined, recipeEntry?.offeringKind);
       if (!isOneOf(offeringKind, allowed)) {
         return {
           ok: false,
@@ -277,7 +324,7 @@ function resolveDispatch(
     }
     case "faq_help_process": {
       const allowed = ["faq", "process"] as const;
-      const referenceKind = firstDefined(supplement?.referenceKind, readSectionField(section, "referenceKind") as string | undefined);
+      const referenceKind = firstDefined(supplement?.referenceKind, readSectionField(section, "referenceKind") as string | undefined, recipeEntry?.referenceKind);
       if (!isOneOf(referenceKind, allowed)) {
         return {
           ok: false,
@@ -321,50 +368,74 @@ function resolveDispatch(
 // error from `runNode` (the node runner itself, not this module) is caught here and turned into a
 // refused outcome — it never propagates out of this function, which is what keeps one writer's
 // failure from discarding every other section's draft (see runSiteContentDrafting below).
-async function dispatchSection(
+// Job precedence: supplement (highest) > the planner's own section.contentRequirement.job > this
+// recipe entry's job (lowest, and only consulted when neither of the first two said anything at
+// all — see the module header and siteContentPageRecipes.ts's own header for why).
+function resolveJob(
   section: PlanSection,
   supplement: SiteContentDraftingSupplement | undefined,
-  page: { brief: Record<string, unknown>; voice?: string | Record<string, unknown> },
-  runNode: typeof executeNode
-): Promise<SiteContentSectionOutcome> {
+  recipeEntry: SiteContentRecipeSection | undefined
+): { job: string | null | undefined; source: SiteContentJobSource | undefined } {
   // NOT firstDefined: a supplement that omits `job` must fall through to the section's own
   // contentRequirement.job, and that value's own explicit `null` (page_composition's own
   // contact_form example: "job": null) must be preserved as null, never collapsed into "absent" by
   // a null-skipping helper — both null and undefined mean "skip", but they are read here exactly as
-  // the planner wrote them.
-  const job = supplement?.job !== undefined ? supplement.job : section.contentRequirement?.job;
+  // the planner wrote them. This is untouched by recipes: a recipe is consulted only when BOTH of
+  // the first two are `undefined` (never when either is present-and-null).
+  if (supplement?.job !== undefined) return { job: supplement.job, source: supplement.job === null ? undefined : "supplement" };
+  if (section.contentRequirement?.job !== undefined) {
+    const plannerJob = section.contentRequirement.job;
+    return { job: plannerJob, source: plannerJob === null ? undefined : "planner" };
+  }
+  if (recipeEntry !== undefined) return { job: recipeEntry.job, source: "recipe" };
+  return { job: undefined, source: undefined };
+}
+
+async function dispatchSection(
+  section: PlanSection,
+  supplement: SiteContentDraftingSupplement | undefined,
+  page: { brief: Record<string, unknown>; voice?: string | Record<string, unknown> },
+  runNode: typeof executeNode,
+  recipeEntry: SiteContentRecipeSection | undefined,
+  pageRecipeName: string | undefined
+): Promise<SiteContentSectionOutcome> {
+  const { job, source } = resolveJob(section, supplement, recipeEntry);
   if (job === undefined || job === null) {
     return { outcome: "skipped", order: section.order, sectionType: section.sectionType, reason: "no_job" };
   }
+  const pageRecipe = source === "recipe" ? pageRecipeName : undefined;
   if (!SITE_CONTENT_JOB_SET.has(job)) {
     return {
       outcome: "refused",
       order: section.order,
       sectionType: section.sectionType,
       job,
+      jobSource: source,
+      pageRecipe,
       reason: `section ${section.order} ("${section.sectionType}") names job "${job}", which has no registered route.`
     };
   }
 
-  const resolved = resolveDispatch(job as SiteContentJob, section, supplement, page);
+  const resolved = resolveDispatch(job as SiteContentJob, section, supplement, page, recipeEntry);
   if (!resolved.ok) {
-    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, reason: resolved.reason };
+    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, reason: resolved.reason };
   }
 
   const { nodeId, nodeInput } = resolved;
+  const candidateSkillIds = [job];
   try {
     // #374's candidateSkillIds — naming the job is what keeps reference_content_writer (assigned
     // all three of faq_help_process/policy_explanation/evidence_story) from dragging every family's
     // instructions into one dispatch.
-    const executed = await runNode({ nodeId, input: nodeInput, candidateSkillIds: [job] });
+    const executed = await runNode({ nodeId, input: nodeInput, candidateSkillIds });
     const extracted = extractNodeOutput(executed, nodeId);
     if (!extracted.ok) {
-      return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, nodeId, reason: `${nodeId} returned no draft: ${extracted.reason}` };
+      return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, reason: `${nodeId} returned no draft: ${extracted.reason}` };
     }
-    return { outcome: "drafted", order: section.order, sectionType: section.sectionType, job: job as SiteContentJob, nodeId, draft: extracted.output };
+    return { outcome: "drafted", order: section.order, sectionType: section.sectionType, job: job as SiteContentJob, jobSource: source!, pageRecipe, nodeId, candidateSkillIds, draft: extracted.output };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, nodeId, reason: `${nodeId} threw: ${message}` };
+    return { outcome: "refused", order: section.order, sectionType: section.sectionType, job, jobSource: source, pageRecipe, nodeId, candidateSkillIds, reason: `${nodeId} threw: ${message}` };
   }
 }
 
@@ -374,6 +445,22 @@ async function dispatchSection(
 // section's failure discards another's draft.
 export async function runSiteContentDrafting(input: SiteContentDraftingInput, deps: SiteContentDraftingDeps = {}): Promise<SiteContentDraftingResult> {
   const runNode = deps.executeNodeImpl ?? executeNode;
+
+  // Recipe resolution happens before the planner call so an unknown name is refused immediately,
+  // never silently ignored (rule 4). Omitting pageRecipe entirely takes this whole branch out of
+  // play — pageRecipe stays undefined, recipe stays undefined, every recipeEntry lookup below is
+  // undefined, and dispatchSection's behaviour is byte-for-byte what it was before recipes existed.
+  let recipe: ReturnType<typeof getPageRecipe> | undefined;
+  if (input.pageRecipe !== undefined) {
+    recipe = getPageRecipe(input.pageRecipe);
+    if (!recipe) {
+      throw new Error(
+        `unknown pageRecipe "${input.pageRecipe}" — known recipes: ${SITE_CONTENT_PAGE_RECIPE_NAMES.join(", ")}.`
+      );
+    }
+  }
+  const recipeSectionByOrder = new Map<number, SiteContentRecipeSection>();
+  for (const recipeSection of recipe?.sections ?? []) recipeSectionByOrder.set(recipeSection.order, recipeSection);
 
   const plannerInput = compact({ brief: input.brief, existingContent: input.existingContent, siteContext: input.siteContext });
   const plannerExecuted = await runNode({ nodeId: "site_content_planner", input: plannerInput, candidateSkillIds: ["page_composition"] });
@@ -393,7 +480,25 @@ export async function runSiteContentDrafting(input: SiteContentDraftingInput, de
   const page = { brief: input.brief, voice: input.voice };
   const outcomes: SiteContentSectionOutcome[] = [];
   for (const section of sections) {
-    outcomes.push(await dispatchSection(section, supplementByOrder.get(section.order), page, runNode));
+    outcomes.push(
+      await dispatchSection(section, supplementByOrder.get(section.order), page, runNode, recipeSectionByOrder.get(section.order), input.pageRecipe)
+    );
+  }
+
+  // Rule 5: a recipe never fabricates a section the planner did not plan, but an entry the recipe
+  // named that the planner never delivered (by `order`) is reported explicitly, not dropped.
+  if (recipe) {
+    const deliveredOrders = new Set(sections.map((section) => section.order));
+    for (const recipeSection of recipe.sections) {
+      if (deliveredOrders.has(recipeSection.order)) continue;
+      outcomes.push({
+        outcome: "recipe_undelivered",
+        order: recipeSection.order,
+        job: recipeSection.job,
+        pageRecipe: recipe.name,
+        reason: `recipe "${recipe.name}" names a section at order ${recipeSection.order} (job "${recipeSection.job}") that site_content_planner's plan did not deliver.`
+      });
+    }
   }
 
   return {

@@ -313,6 +313,38 @@ describe("plannerStatus", () => {
     expect(status.dailyBudgetUsd).toBe(10);
     expect(status.halted).toBe(false);
     expect(status.nextEligibleAt).toBe(NOW.toISOString());
+    expect(status.runFactsRead).toBe("ok");
+  });
+
+  // The defect this whole file was named for (#356's "Not in this PR"): a run-facts read that fails
+  // must not be reported as a tenant that has run nothing today. Every run-derived field becomes
+  // null — not 0 — and nextEligibleAt becomes "unknown" rather than a timestamp nothing backs.
+  it("reports unknown, not zero, when the run-facts read fails", async () => {
+    const status = await plannerStatus(
+      PROJECT_ID,
+      deps({
+        readTenant: tenantReader({ commissioning: commissioningBlock() }),
+        executionRepository: { ...executionRepository, listRunsPage: async () => { throw new Error("bucket unreachable"); } } as never
+      })
+    );
+    expect(status.configured).toBe(true);
+    expect(status.enabled).toBe(true);
+    expect(status.runFactsRead).toBe("failed");
+    expect(status.runsToday).toBeNull();
+    expect(status.runsPerDay).toBeNull();
+    expect(status.spentTodayUsd).toBeNull();
+    expect(status.dailyBudgetUsd).toBeNull();
+    expect(status.openRuns).toBeNull();
+    expect(status.maxConcurrentRuns).toBeNull();
+    expect(status.consecutiveFailures).toBeNull();
+    expect(status.halted).toBeNull();
+    expect(status.nextEligibleAt).toBe("unknown");
+    expect(status.detail).toContain("could not be read");
+  });
+
+  it("reports runFactsRead \"ok\" for the early unconfigured-tenant return, which never touches the run store", async () => {
+    const status = await plannerStatus(PROJECT_ID, deps({ readTenant: tenantReader({ commissioning: undefined }) }));
+    expect(status.runFactsRead).toBe("ok");
   });
 });
 

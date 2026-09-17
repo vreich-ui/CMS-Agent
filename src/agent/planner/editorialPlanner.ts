@@ -689,15 +689,20 @@ export type PlannerStatus = {
   projectId: string;
   enabled: boolean;
   configured: boolean;
-  runsToday: number;
-  runsPerDay: number;
-  spentTodayUsd: number;
-  dailyBudgetUsd: number;
-  openRuns: number;
-  maxConcurrentRuns: number;
-  consecutiveFailures: number;
-  halted: boolean;
+  runsToday: number | null;
+  runsPerDay: number | null;
+  spentTodayUsd: number | null;
+  dailyBudgetUsd: number | null;
+  openRuns: number | null;
+  maxConcurrentRuns: number | null;
+  consecutiveFailures: number | null;
+  halted: boolean | null;
   nextEligibleAt: string;
+  // "ok" when the run-facts read behind every field above either succeeded or was never needed
+  // (the early `empty` returns below never touch the store). "failed" means that read threw, every
+  // run-derived field above is null, and a consumer must branch on this rather than sniff nulls one
+  // field at a time.
+  runFactsRead: "ok" | "failed";
   detail?: string;
 };
 
@@ -706,14 +711,43 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
   const d = deps(overrides);
   const now = d.now();
   const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
-  const empty: PlannerStatus = { projectId, enabled: false, configured: false, runsToday: 0, runsPerDay: 0, spentTodayUsd: 0, dailyBudgetUsd: 0, openRuns: 0, maxConcurrentRuns: 0, consecutiveFailures: 0, halted: false, nextEligibleAt: tomorrow.toISOString() };
+  const empty: PlannerStatus = { projectId, enabled: false, configured: false, runsToday: 0, runsPerDay: 0, spentTodayUsd: 0, dailyBudgetUsd: 0, openRuns: 0, maxConcurrentRuns: 0, consecutiveFailures: 0, halted: false, nextEligibleAt: tomorrow.toISOString(), runFactsRead: "ok" };
 
   const resolved = await getEditorialStrategy({ projectId }, strategyDeps(d));
   const commissioning = resolved.strategy ? readCommissioning(resolved.strategy) : undefined;
   if (!commissioning) return { ...empty, detail: resolved.strategy ? "No commissioning block on this tenant's editorial_strategy." : (resolved.warning ?? "No editorial_strategy resolved.") };
 
   const from = new Date(now.getTime() - PLANNER_RUN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const recentRuns = await runFactsFor(projectId, { from }, d.executionRepository, d.usageRepository).catch(() => [] as RunFact[]);
+  // A read that failed is not evidence that nothing has run today — see the identical reasoning
+  // (and the incident it names) on the commissioning-path read above, `startCommissionedRun`'s step
+  // 1. There, a failed read refuses to START a run; here, there is nothing to start, only a report
+  // to make, so it reports "unknown" rather than the zeros a `.catch(() => [])` used to hand back —
+  // zeros a caller (an operator, or an automated poller deciding whether to commission) could read
+  // as "clear to commission" when the truth is "we could not check".
+  let recentRuns: RunFact[];
+  try {
+    recentRuns = await runFactsFor(projectId, { from }, d.executionRepository, d.usageRepository);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      projectId,
+      enabled: commissioning.enabled,
+      configured: true,
+      runsToday: null,
+      runsPerDay: null,
+      spentTodayUsd: null,
+      dailyBudgetUsd: null,
+      openRuns: null,
+      maxConcurrentRuns: null,
+      consecutiveFailures: null,
+      halted: null,
+      // Not a timestamp: a timestamp here would be a promise nothing keeps, exactly as "blocked" is
+      // for a halted planner below.
+      nextEligibleAt: "unknown",
+      runFactsRead: "failed",
+      detail: `${projectId}'s run history could not be read (${detail}), so today's run count, spend, open runs and halt state are all unknown.`
+    };
+  }
   const plan = buildCommissionPlan({ projectId, commissioning, candidates: [], inventory: [], recentRuns, ...(p95RunCost(recentRuns) !== undefined ? { pricedRunCostUsd: p95RunCost(recentRuns)! } : {}), now });
 
   return {
@@ -731,6 +765,7 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
     // A halted planner has no next eligible time at all — it is waiting on a person, not on a clock.
     // Saying "tomorrow" there would be a promise nothing keeps.
     nextEligibleAt: plan.halt ? "blocked" : plan.caps.slots > 0 ? now.toISOString() : tomorrow.toISOString(),
+    runFactsRead: "ok",
     ...(plan.halt ? { detail: plan.halt.message } : {})
   };
 };

@@ -74,7 +74,7 @@ export const createPlannerTools = (): WorkspaceTool[] => [
   tool({
     name: "planner.status",
     description:
-      "Free and read-only: what commissioning is doing for one tenant right now. Returns {enabled, configured, runsToday, runsPerDay, spentTodayUsd, dailyBudgetUsd, openRuns, maxConcurrentRuns, consecutiveFailures, halted, nextEligibleAt}. nextEligibleAt is \"blocked\" when the planner has halted — it is waiting on a person, not on a clock — otherwise now (a slot is free) or the next UTC midnight. No model turn, so this is the call to poll.",
+      "Free and read-only: what commissioning is doing for one tenant right now. Returns {enabled, configured, runsToday, runsPerDay, spentTodayUsd, dailyBudgetUsd, openRuns, maxConcurrentRuns, consecutiveFailures, halted, nextEligibleAt, runFactsRead}. runsToday/runsPerDay/spentTodayUsd/dailyBudgetUsd/openRuns/maxConcurrentRuns/consecutiveFailures and halted are all `number|null`/`boolean|null`: they are null, and nextEligibleAt is \"unknown\", whenever runFactsRead is \"failed\" — the run-history store could not be read. A null there means the store could not be read, never that nothing has run; do not treat it as zero. Otherwise nextEligibleAt is \"blocked\" when the planner has halted — it is waiting on a person, not on a clock — otherwise now (a slot is free) or the next UTC midnight. No model turn, so this is the call to poll.",
     zodSchema: projectIdInput,
     inputSchema: projectIdJsonSchema,
     execute: async (input) => ok(await plannerStatus(projectIdInput.parse(input).projectId))
