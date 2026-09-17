@@ -69,6 +69,10 @@ export type CompiledSection = {
   action: CompiledSectionAction;
   // null for a create.
   objectId: string | null;
+  // For a patch: the contentRevision the SNAPSHOT saw on this target, which an applier passes back
+  // as its expected revision so the write lands only while the object is still where this plan was
+  // computed against. null for a create, and for a patch whose target carried no revision.
+  targetContentRevision: number | null;
   changeSetId: string;
   // The dispatch that produced the draft this section was compiled from, straight through from the
   // drafting result (#382). This is the whole traceability chain in one field: an operator reading a
@@ -80,7 +84,7 @@ export type CompiledSection = {
 export type SiteContentObjectPlan = {
   tenantId: string;
   materializationKey: string;
-  page: { objectId: string | null; action: CompiledSectionAction; changeSetId: string };
+  page: { objectId: string | null; action: CompiledSectionAction; targetContentRevision: number | null; changeSetId: string };
   sections: CompiledSection[];
   // Page change set first, then one per section in ascending planner order. An applier consumes this
   // order; nothing here applies it.
@@ -334,7 +338,15 @@ export function compileSiteContentObjects(params: CompileSiteContentObjectsParam
     );
   }
 
-  const compiled: Array<{ input: DraftedSectionInput; componentType: string; candidate: Candidate; changeSet: ChangeSet; action: CompiledSectionAction; objectId: string | null }> = [];
+  const compiled: Array<{
+    input: DraftedSectionInput;
+    componentType: string;
+    candidate: Candidate;
+    changeSet: ChangeSet;
+    action: CompiledSectionAction;
+    objectId: string | null;
+    targetContentRevision: number | null;
+  }> = [];
 
   for (const entry of ordered) {
     const targetObjectId = sectionTargets[entry.order] ?? null;
@@ -402,7 +414,8 @@ export function compileSiteContentObjects(params: CompileSiteContentObjectsParam
       candidate: candidateResult.candidate,
       changeSet: computeChangeSet({ snapshot, candidate: candidateResult.candidate }),
       action: targetObjectId ? "patch" : "create",
-      objectId: targetObjectId
+      objectId: targetObjectId,
+      targetContentRevision: existing ? existing.contentRevision : null
     });
   }
 
@@ -426,6 +439,7 @@ export function compileSiteContentObjects(params: CompileSiteContentObjectsParam
   });
   if (!pageCandidateResult.ok) return { ok: false, blockers: pageCandidateResult.blockers };
 
+  let pageTargetContentRevision: number | null = null;
   if (target.pageObjectId) {
     const existingPage = (snapshot.objects.byType.page ?? []).find((object) => object.objectId === target.pageObjectId);
     // A patch target the snapshot does not contain is refused for the same reason a section's is:
@@ -444,6 +458,7 @@ export function compileSiteContentObjects(params: CompileSiteContentObjectsParam
         ]
       };
     }
+    pageTargetContentRevision = existingPage.contentRevision;
     const expected = expectedRevisions[target.pageObjectId];
     if (expected !== undefined && expected !== existingPage.contentRevision) {
       return {
@@ -479,13 +494,19 @@ export function compileSiteContentObjects(params: CompileSiteContentObjectsParam
     plan: {
       tenantId: snapshot.tenantId,
       materializationKey,
-      page: { objectId: target.pageObjectId, action: target.pageObjectId ? "patch" : "create", changeSetId: pageChangeSet.changeSetId },
+      page: {
+        objectId: target.pageObjectId,
+        action: target.pageObjectId ? "patch" : "create",
+        targetContentRevision: pageTargetContentRevision,
+        changeSetId: pageChangeSet.changeSetId
+      },
       sections: compiled.map((item) => ({
         order: item.input.order,
         plannedSectionType: item.input.sectionType,
         componentType: item.componentType,
         action: item.action,
         objectId: item.objectId,
+        targetContentRevision: item.targetContentRevision,
         changeSetId: item.changeSet.changeSetId,
         sourceRunId: item.input.runId ?? null,
         sourceExecutionId: item.input.executionId ?? null
