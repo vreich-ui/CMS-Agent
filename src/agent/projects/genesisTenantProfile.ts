@@ -64,13 +64,21 @@ import type { ProjectConnectionConfig, ToolPermission } from "./projectTypes.js"
  *  v4 (2026-09-16): `site_apply_brand_imagery` is GRANTED rather than withheld, and the granted set
  *  is now DERIVED from the route manifests (see below) instead of being a hand-kept list that a new
  *  route can fall out of.
+ *  v5 (2026-09-17): no edit to the map below — the DERIVATION's source got the stages it was always
+ *  supposed to read. image_annotation_studio, asset_lookup_studio and document_render_studio shipped
+ *  deterministic stages with no phases in their route manifest, so `declaredRouteVerbs()` never named
+ *  the verbs they speak and `annotate_image` reached no tenant at all. routeRegistry.ts now declares
+ *  those phases and `routeManifestPhaseGaps()` + routeManifestPhaseParity.test.ts fail CI on the next
+ *  stage that forgets one. The version bump is what makes migrateDefaultProjectConfig re-apply the
+ *  (now wider) derived map to every already-minted tenant on its next read, rather than leaving the
+ *  fix reaching only tenants minted from here on.
  *  Before v3 every genesis-minted tenant (zilberman, genesis-lab-2) refused all six pre-transport
  *  (defaultToolPolicy "blocked", none named), so capabilityReadiness.ts's `pdf_render` derived
  *  not_configured for them and imageTemplateRevisionProviders.ts's preview/verify seams could not
  *  have run even once wired. dr-lurie/platform never noticed: their records are defaultToolPolicy
  *  "allowed", the exact drift the header above describes. migrateDefaultProjectConfig applies this
  *  map to a v2 record on every read; `npm run genesis:reconcile -- <projectId> --apply` persists it. */
-export const GENESIS_TENANT_DEFINITION_VERSION = 4;
+export const GENESIS_TENANT_DEFINITION_VERSION = 5;
 
 /**
  * The remote verbs a genesis-minted tenant may speak. Ordered as the live record orders them
