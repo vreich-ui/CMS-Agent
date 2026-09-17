@@ -94,7 +94,7 @@ export type ModelTurnContext = {
   wanted: number;
 };
 
-export type PlannerSkip = { projectId: string; planned: false; reason: "no_project_record" | "no_strategy" | "no_commissioning_block" | "commissioning_disabled" | "nothing_to_plan" | "pass_in_flight" | "run_history_unreadable"; detail: string };
+export type PlannerSkip = { projectId: string; planned: false; reason: "no_project_record" | "no_strategy" | "no_commissioning_block" | "commissioning_disabled" | "nothing_to_plan" | "pass_in_flight" | "run_history_unreadable" | "cost_ledger_unreadable"; detail: string };
 export type PlannerPlanned = { projectId: string; planned: true; /** The tenant's own switch — planning is allowed while it is off; starting a run is not. */ enabled: boolean; plan: CommissionPlan; blockage?: ReturnType<typeof plannerHaltBlockage>; inputs: { inventoryCount: number; recentRunCount: number; candidateCount: number; seedCount: number; modelCandidateCount: number; pricedRunCostUsd: number; degraded: string[] } };
 export type PlannerResult = PlannerSkip | PlannerPlanned;
 
@@ -213,27 +213,51 @@ const defaultReadTenant = async (projectRepository: ProjectRepository, projectId
  * run: a tenant with sixty runs would otherwise make sixty calls every morning to answer one
  * question about today's budget.
  */
+/**
+ * The run list and the cost evidence that was (or was not) available for it.
+ *
+ * `costLedgerRead: "failed"` is the whole point of this shape. The usage read used to be
+ * `.catch(() => [])`, which turns an unreadable ledger into a clean `$0 spent` — and the one
+ * morning the ledger cannot be read is precisely the morning that zero authorizes a full day of
+ * fresh spend against a budget nobody could check. A failed read is UNKNOWN, never zero: no
+ * `costUsd` is attached to any fact (an absent `costUsd` already means "not priced" to every
+ * consumer, including `p95RunCost`), and the failure is reported here for the caller to act on.
+ * A ledger that read successfully and was simply empty is `"ok"` with no facts priced — the two
+ * are different facts about the world and are never collapsed into one.
+ */
+export type RunFacts = { facts: RunFact[]; costLedgerRead: "ok" | "failed"; costLedgerError?: string };
+
 export const runFactsFor = async (
   projectId: string,
   window: { from: string },
   store: ExecutionRepository,
   usage: UsageRepository
-): Promise<RunFact[]> => {
+): Promise<RunFacts> => {
   const { runs } = await listRunsPage({ projectId, from: window.from, limit: 100 }, store);
-  const ledger = await usage.list({ projectId, from: window.from }).catch(() => []);
+  let costLedgerRead: "ok" | "failed" = "ok";
+  let costLedgerError: string | undefined;
+  const ledger = await usage.list({ projectId, from: window.from }).catch((error: unknown) => {
+    costLedgerRead = "failed";
+    costLedgerError = error instanceof Error ? error.message : String(error);
+    return [];
+  });
   const costByRun = new Map<string, number>();
   for (const record of ledger) {
     if (!record.runId) continue;
     costByRun.set(record.runId, (costByRun.get(record.runId) ?? 0) + (typeof record.costUsdEstimate === "number" ? record.costUsdEstimate : 0));
   }
-  return runs.map((run) => ({
-    runId: run.runId,
-    status: run.status,
-    startedAt: run.startedAt,
-    ...(costByRun.has(run.runId) ? { costUsd: costByRun.get(run.runId)! } : {}),
-    ...(run.commissionedBy ? { commissionedBy: run.commissionedBy } : {}),
-    ...(topicKeyOf(run) ? { topicKey: topicKeyOf(run)! } : {})
-  }));
+  return {
+    facts: runs.map((run) => ({
+      runId: run.runId,
+      status: run.status,
+      startedAt: run.startedAt,
+      ...(costByRun.has(run.runId) ? { costUsd: costByRun.get(run.runId)! } : {}),
+      ...(run.commissionedBy ? { commissionedBy: run.commissionedBy } : {}),
+      ...(topicKeyOf(run) ? { topicKey: topicKeyOf(run)! } : {})
+    })),
+    costLedgerRead,
+    ...(costLedgerError !== undefined ? { costLedgerError } : {})
+  };
 };
 
 /** The topic an in-flight run has already claimed — its commissioned content source, or its brief. */
@@ -442,7 +466,7 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
     readInventory(projectId, read),
     runFactsFor(projectId, { from }, d.executionRepository, d.usageRepository).catch((error) => {
       degraded.push(`runs_unavailable:${error instanceof Error ? error.message : String(error)}`);
-      return [] as RunFact[];
+      return { facts: [] as RunFact[], costLedgerRead: "failed" as const, costLedgerError: "the run list itself could not be read, so no cost could be attributed to it." };
     }),
     d.learningRepository
       .listObservations()
@@ -454,9 +478,15 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
       .catch(() => [] as string[])
   ]);
   if (inventory.degraded) degraded.push(inventory.degraded);
+  // An unreadable usage ledger is its own degraded note, distinct from `runs_unavailable:`: the run
+  // list may be perfectly readable while what those runs COST is not. Planning (a preview) carries
+  // on and says so; `commissionForProject` below refuses to spend on it.
+  if (recentRuns.costLedgerRead === "failed" && !degraded.some((note) => note.startsWith("runs_unavailable:"))) {
+    degraded.push(`costs_unavailable:${recentRuns.costLedgerError ?? "the usage ledger could not be read."}`);
+  }
 
   const seeds = seedCandidates(commissioning);
-  const pricedRunCostUsd = p95RunCost(recentRuns);
+  const pricedRunCostUsd = p95RunCost(recentRuns.facts);
 
   // The model turn is asked for a couple more than the caps can possibly allow, so dedupe rejections
   // do not silently turn a two-run day into a one-run day.
@@ -479,7 +509,7 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
       publishedTitles: inventory.items
         .map((item: { slug?: string; title?: string; objectId?: string }) => item.title ?? item.slug ?? (item.objectId ? topicFromRequestId(item.objectId) : undefined) ?? "")
         .filter(Boolean),
-      openTopics: recentRuns.filter((run: RunFact) => Boolean(run.topicKey)).map((run: RunFact) => run.topicKey!),
+      openTopics: recentRuns.facts.filter((run: RunFact) => Boolean(run.topicKey)).map((run: RunFact) => run.topicKey!),
       observations,
       wanted
     };
@@ -495,7 +525,7 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
     commissioning,
     candidates: [...seeds, ...modelCandidates],
     inventory: inventory.items,
-    recentRuns,
+    recentRuns: recentRuns.facts,
     ...(pricedRunCostUsd !== undefined ? { pricedRunCostUsd } : {}),
     ...(config.objectDialect?.requestIdPattern ? { requestIdPattern: config.objectDialect.requestIdPattern } : {}),
     now
@@ -509,7 +539,7 @@ export const planForProject = async (projectId: string, overrides: PlannerDeps =
     ...(plan.halt ? { blockage: plannerHaltBlockage(projectId, plan.halt) } : {}),
     inputs: {
       inventoryCount: inventory.items.length,
-      recentRunCount: recentRuns.length,
+      recentRunCount: recentRuns.facts.length,
       candidateCount: seeds.length + modelCandidates.length,
       seedCount: seeds.length,
       modelCandidateCount: modelCandidates.length,
@@ -569,6 +599,16 @@ export const commissionForProject = async (
     const unreadableRuns = result.inputs.degraded.find((note) => note.startsWith("runs_unavailable:"));
     if (unreadableRuns) {
       return { ...result, planned: false, reason: "run_history_unreadable", detail: `${projectId}'s run history could not be read (${unreadableRuns}), so today's run count, spend and concurrency are all unknown; planned ${result.plan.requests.length} request(s) and started none.`, commissioned: [] } as CommissionResult;
+    }
+    // The same refusal, one read further in. The run LIST can be readable while the usage ledger
+    // behind `spentTodayUsd` is not, and that combination is the more dangerous one: the caps look
+    // fully populated (a real run count, a real concurrency figure) with a spend of $0 that was
+    // never measured. Budget safety cannot be established from a ledger that did not answer, so
+    // nothing new is started. Planning, `planner.status` and every read-only inspection stay
+    // available and say `costs_unavailable:` out loud.
+    const unreadableCosts = result.inputs.degraded.find((note) => note.startsWith("costs_unavailable:"));
+    if (unreadableCosts) {
+      return { ...result, planned: false, reason: "cost_ledger_unreadable", detail: `${projectId}'s usage ledger could not be read (${unreadableCosts}), so today's spend is unknown and no budget check can be trusted; planned ${result.plan.requests.length} request(s) and started none.`, commissioned: [] } as CommissionResult;
     }
     // A stale planId is refused rather than ignored: an operator commissioning "the plan I just read"
     // must not silently get a different one built from inventory that changed in between.
@@ -703,6 +743,14 @@ export type PlannerStatus = {
   // run-derived field above is null, and a consumer must branch on this rather than sniff nulls one
   // field at a time.
   runFactsRead: "ok" | "failed";
+  // "failed" when the RUN LIST read succeeded but the usage ledger behind `spentTodayUsd` did not.
+  // `spentTodayUsd` is then null — unknown, never the $0 a swallowed read used to report — while
+  // every other field above stays real. A consumer deciding whether to commission must treat this
+  // exactly as it treats `runFactsRead: "failed"`: no budget check can be trusted, so nothing new
+  // starts (see `commissionForProject`'s `cost_ledger_unreadable` refusal). "ok" covers both a
+  // ledger that read and a run-list read that failed first, in which case `runFactsRead` is the
+  // field that tells the story.
+  costLedgerRead: "ok" | "failed";
   detail?: string;
 };
 
@@ -711,7 +759,7 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
   const d = deps(overrides);
   const now = d.now();
   const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
-  const empty: PlannerStatus = { projectId, enabled: false, configured: false, runsToday: 0, runsPerDay: 0, spentTodayUsd: 0, dailyBudgetUsd: 0, openRuns: 0, maxConcurrentRuns: 0, consecutiveFailures: 0, halted: false, nextEligibleAt: tomorrow.toISOString(), runFactsRead: "ok" };
+  const empty: PlannerStatus = { projectId, enabled: false, configured: false, runsToday: 0, runsPerDay: 0, spentTodayUsd: 0, dailyBudgetUsd: 0, openRuns: 0, maxConcurrentRuns: 0, consecutiveFailures: 0, halted: false, nextEligibleAt: tomorrow.toISOString(), runFactsRead: "ok", costLedgerRead: "ok" };
 
   const resolved = await getEditorialStrategy({ projectId }, strategyDeps(d));
   const commissioning = resolved.strategy ? readCommissioning(resolved.strategy) : undefined;
@@ -724,7 +772,7 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
   // to make, so it reports "unknown" rather than the zeros a `.catch(() => [])` used to hand back —
   // zeros a caller (an operator, or an automated poller deciding whether to commission) could read
   // as "clear to commission" when the truth is "we could not check".
-  let recentRuns: RunFact[];
+  let recentRuns: RunFacts;
   try {
     recentRuns = await runFactsFor(projectId, { from }, d.executionRepository, d.usageRepository);
   } catch (error) {
@@ -745,10 +793,13 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
       // for a halted planner below.
       nextEligibleAt: "unknown",
       runFactsRead: "failed",
+      costLedgerRead: "failed",
       detail: `${projectId}'s run history could not be read (${detail}), so today's run count, spend, open runs and halt state are all unknown.`
     };
   }
-  const plan = buildCommissionPlan({ projectId, commissioning, candidates: [], inventory: [], recentRuns, ...(p95RunCost(recentRuns) !== undefined ? { pricedRunCostUsd: p95RunCost(recentRuns)! } : {}), now });
+  const priced = p95RunCost(recentRuns.facts);
+  const plan = buildCommissionPlan({ projectId, commissioning, candidates: [], inventory: [], recentRuns: recentRuns.facts, ...(priced !== undefined ? { pricedRunCostUsd: priced } : {}), now });
+  const costsUnreadable = recentRuns.costLedgerRead === "failed";
 
   return {
     projectId,
@@ -756,7 +807,10 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
     configured: true,
     runsToday: plan.caps.runsAlreadyToday,
     runsPerDay: plan.caps.runsPerDay,
-    spentTodayUsd: plan.caps.spentTodayUsd,
+    // `plan.caps.spentTodayUsd` sums the costs on the facts, and an unreadable ledger priced none of
+    // them — so the figure it computes is 0 for want of evidence, not because nothing was spent.
+    // Reported as unknown.
+    spentTodayUsd: costsUnreadable ? null : plan.caps.spentTodayUsd,
     dailyBudgetUsd: plan.caps.dailyBudgetUsd,
     openRuns: plan.caps.openRuns,
     maxConcurrentRuns: plan.caps.maxConcurrentRuns,
@@ -766,7 +820,12 @@ export const plannerStatus = async (projectId: string, overrides: PlannerDeps = 
     // Saying "tomorrow" there would be a promise nothing keeps.
     nextEligibleAt: plan.halt ? "blocked" : plan.caps.slots > 0 ? now.toISOString() : tomorrow.toISOString(),
     runFactsRead: "ok",
-    ...(plan.halt ? { detail: plan.halt.message } : {})
+    costLedgerRead: recentRuns.costLedgerRead,
+    ...(plan.halt
+      ? { detail: plan.halt.message }
+      : costsUnreadable
+        ? { detail: `${projectId}'s usage ledger could not be read (${recentRuns.costLedgerError ?? "no error reported"}), so today's spend is unknown; run counts and concurrency below are real, the budget check is not.` }
+        : {})
   };
 };
 

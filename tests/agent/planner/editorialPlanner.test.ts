@@ -342,6 +342,33 @@ describe("plannerStatus", () => {
     expect(status.detail).toContain("could not be read");
   });
 
+  // P1.2 — the ledger read that used to be `.catch(() => [])`. The run LIST is perfectly readable
+  // here; it is the USAGE ledger behind spentTodayUsd that fails. Every other figure stays real, so
+  // the old swallow produced the most convincing possible lie: a fully populated status card whose
+  // spend reads $0 because nothing could be priced.
+  it("reports spend as unknown, not zero, when the usage ledger cannot be read", async () => {
+    const blindUsage = Object.assign(Object.create(Object.getPrototypeOf(usageRepository)), usageRepository, {
+      list: async () => { throw new Error("usage bucket unreachable"); }
+    }) as MemoryUsageRepository;
+
+    const status = await plannerStatus(PROJECT_ID, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }), usageRepository: blindUsage }));
+
+    expect(status.costLedgerRead).toBe("failed");
+    expect(status.spentTodayUsd).toBeNull();
+    // The run-list read succeeded, so these are real and stay real — the two reads are reported
+    // separately rather than one failure nulling everything.
+    expect(status.runFactsRead).toBe("ok");
+    expect(status.runsPerDay).toBe(1);
+    expect(status.dailyBudgetUsd).toBe(10);
+    expect(status.detail).toContain("usage bucket unreachable");
+  });
+
+  it("reports costLedgerRead \"ok\" for a ledger that read and was simply empty", async () => {
+    const status = await plannerStatus(PROJECT_ID, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }) }));
+    expect(status.costLedgerRead).toBe("ok");
+    expect(status.spentTodayUsd).toBe(0);
+  });
+
   it("reports runFactsRead \"ok\" for the early unconfigured-tenant return, which never touches the run store", async () => {
     const status = await plannerStatus(PROJECT_ID, deps({ readTenant: tenantReader({ commissioning: undefined }) }));
     expect(status.runFactsRead).toBe("ok");
@@ -415,6 +442,23 @@ describe("commissionForProject — C7 atomicity", () => {
       // guarantee reached one gate earlier.
       expect((second as { commissioned: unknown[] }).commissioned).toHaveLength(0);
     }
+  });
+
+  it("starts nothing when the USAGE ledger cannot be read, even though the run list can", async () => {
+    const blindUsage = Object.assign(Object.create(Object.getPrototypeOf(usageRepository)), usageRepository, {
+      list: async () => { throw new Error("usage bucket unreachable"); }
+    }) as MemoryUsageRepository;
+
+    const result = await commissionForProject(PROJECT_ID, { max: 1 }, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }), usageRepository: blindUsage }));
+
+    expect((result as { reason?: string }).reason).toBe("cost_ledger_unreadable");
+    expect((result as { commissioned: unknown[] }).commissioned).toHaveLength(0);
+    expect((result as { detail: string }).detail).toContain("usage bucket unreachable");
+    // Planning itself still happened and still says so — the refusal is about SPENDING, not about
+    // inspection.
+    const preview = await planForProject(PROJECT_ID, deps({ readTenant: tenantReader({ commissioning: commissioningBlock() }), usageRepository: blindUsage }));
+    expect((preview as PlannerPlanned).planned).toBe(true);
+    expect((preview as PlannerPlanned).inputs.degraded.some((note) => note.startsWith("costs_unavailable:"))).toBe(true);
   });
 
   it("starts nothing when the run history cannot be read — an unreadable ledger is not an empty one", async () => {

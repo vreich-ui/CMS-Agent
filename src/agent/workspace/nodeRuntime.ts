@@ -308,76 +308,118 @@ export async function executeNode(data: { nodeId: string; input?: unknown; runId
   // C3 section — and this call site does not re-implement any of it.
   await pinSkillSelection(run, node, repositoryManager.getSkillRepository(), { context: { task: node.id }, candidateSkillIds: data.candidateSkillIds });
   await repos.executionRepository.createRun(run);
-  // Live by default, mock only when a caller asks for it — the same deliberate choice the workflow
-  // entry points make (see DEFAULT_EXECUTION_MODE), so node.execute cannot quietly hand back a
-  // schema-shaped placeholder to someone who believed they were exercising the real node.
-  const runner = getNodeRunner(data.executionMode ?? DEFAULT_EXECUTION_MODE);
-  // promptOverride is an internal replay lever (improvement trials run prompt variants against
-  // frozen inputs); it is deliberately NOT exposed on the public node.execute MCP tool — the
-  // sanctioned public mutation path stays workspace.update_node_prompt.
-  const effectiveNode = { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } };
-  const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
-  const endedAt = now();
-  state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
-  if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
-  if (!result.ok) {
+  // EVERY FAILURE FROM HERE ON HAS A RUN. The run record and the execution id both exist by this
+  // line (createRun above), so a failure after it is addressable: `workflow.get_run(runId)`,
+  // `node.list_executions({ executionId })` and the usage ledger can all find it. What used to
+  // happen instead was that anything thrown below — the runner itself, output validation, the
+  // stage-output write — propagated as a bare Error out of executeNode, and the caller got prose
+  // with no ids in it while the stored run sat at status "running" forever, indistinguishable from
+  // one still in flight. The guard failures ABOVE createRun keep throwing plainly and correctly:
+  // nothing ran, so there is genuinely no run id to report, and inventing one would be worse than
+  // the gap.
+  try {
+    // Live by default, mock only when a caller asks for it — the same deliberate choice the workflow
+    // entry points make (see DEFAULT_EXECUTION_MODE), so node.execute cannot quietly hand back a
+    // schema-shaped placeholder to someone who believed they were exercising the real node.
+    const runner = getNodeRunner(data.executionMode ?? DEFAULT_EXECUTION_MODE);
+    // promptOverride is an internal replay lever (improvement trials run prompt variants against
+    // frozen inputs); it is deliberately NOT exposed on the public node.execute MCP tool — the
+    // sanctioned public mutation path stays workspace.update_node_prompt.
+    const effectiveNode = { ...node, prompt: data.promptOverride ?? node.prompt, modelConfig: { ...node.modelConfig, ...data.modelConfig } };
+    const result = await runner.run({ node: effectiveNode, input: state.input }, { run, executionRepository: repos.executionRepository, workspaceRepository: repos.workspaceRepository, suppliedDependencies: data.dependencyOutputs });
+    const endedAt = now();
+    state.completedAt = endedAt; state.durationMs = duration(startedAt, endedAt);
+    if (result.toolCalls?.length) state.toolCalls = result.toolCalls;
+    if (!result.ok) {
+      state.status = "failed";
+      state.errors = [result.code, result.message];
+      // F2 — THE FLATTENING THIS FIXES. This path used to stop at the two strings above, while the
+      // conductor path (executor.ts's executeRunnableNode) kept the structured error. Every caller of
+      // node.execute — visual_identity.propose above all — therefore had nothing but prose to hand a
+      // human, and the remedy the runner had already computed (details.suggestedBudgetUsd,
+      // operatorAction) died here. Both halves are now written exactly as the conductor writes them:
+      // `output.error` for readers that already know that shape, `blockage` for the ones that act.
+      state.output = { error: { code: result.code, message: result.message, details: result.details, providerStatus: result.providerStatus, providerMessage: result.providerMessage, operatorAction: result.operatorAction } };
+      // surface "sync": this run record is synthetic (workflowId "independent_node"), so a per-run
+      // budget override + retry_node cannot address it — the reachable raise is a one-shot
+      // modelConfig override on the NEXT call (executeNode's own `modelConfig`, threaded at line ~198),
+      // or the node's stored default. See blockage.ts's BlockageContext.surface.
+      state.blockage = toBlockage(
+        { code: result.code, message: result.message, details: result.details, operatorAction: result.operatorAction },
+        { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
+      );
+      run.status = "failed";
+      run.errors = state.errors;
+    }
+    else {
+      const outputValidation = validateAgainstNodeSchema(result.output, node.outputSchema);
+      if (!outputValidation.valid) {
+        state.status = "failed";
+        state.errors = outputValidation.issues;
+        // The contract says every failure carries a blockage; a node whose own
+        // output violated its schema is a failure like any other, and a card that
+        // says "this could not be used, here is why" beats a red X with nothing.
+        // Nothing but a retry can help — the node produced what it produced.
+        state.blockage = toBlockage(
+          { code: "output_validation_failed", message: `The node's output did not match its schema: ${outputValidation.issues.join("; ")}`, details: { nodeId: node.id, issues: outputValidation.issues } },
+          { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
+        );
+        run.status = "failed";
+        run.errors = outputValidation.issues;
+      }
+      else { state.status = "completed"; state.output = outputValidation.value; const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, endedAt); if (provenance) state.provenance = provenance; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
+    }
+    // W2.3 — the same runner-supplied run-visible notes executeRunnableNode folds in. node.execute is
+    // the SECOND dispatch path; a diagnostic that appears on one and not the other is the class of gap
+    // the timing ledger's own two writers already taught us to close.
+    if (result.ok && result.warnings?.length) state.warnings = [...(state.warnings ?? []), ...result.warnings];
+    run.updatedAt = endedAt; run.currentNodeId = undefined;
+    // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
+    // double-counted every independent execution with fabricated token counts marked "actual".
+    if (data.executionMode !== "openai") await recordModelUsage({ runId, requestId: run.requestId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
+    // T6 (Wave 3, ships dark) — node.execute is the SECOND node-completion path (executor.ts's
+    // executeRunnableNode is the first); a ledger that only saw conductor-dispatched nodes would miss
+    // every independent single-node execution entirely. Best-effort, same posture as executor.ts's own
+    // hook: a timing-repository failure must never fail an otherwise-successful node.execute call.
+    await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome, projectId: run.projectId, executionMode: run.executionMode, routeEra: NODE_EXECUTE_ROUTE_ERA, attempt: nextAttemptNumber(state) }).catch(() => undefined);
+    // A4 -- the runner's own trace (imageRefs resolution counts/warnings, provider response id, etc.)
+    // is surfaced here, one level up from `execution`, so a caller of node.execute/executeNode can
+    // see WHY a node behaved the way it did (e.g. every imageRef silently 401ing) without scraping
+    // the runner internals. Present only when the runner actually set one -- a failed run's early
+    // returns never populate `trace`, so this never invents one.
+    return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId, ...(result.ok && result.trace !== undefined ? { trace: result.trace } : {}) });
+  } catch (error) {
+    // A terminal failure, recorded through the normal repository path rather than left as a
+    // "running" record — the same two writes the !result.ok branch above makes, so a reader of the
+    // run sees the same shape whether the node reported a failure or threw one.
+    const endedAt = now();
+    const message = error instanceof Error ? error.message : String(error);
     state.status = "failed";
-    state.errors = [result.code, result.message];
-    // F2 — THE FLATTENING THIS FIXES. This path used to stop at the two strings above, while the
-    // conductor path (executor.ts's executeRunnableNode) kept the structured error. Every caller of
-    // node.execute — visual_identity.propose above all — therefore had nothing but prose to hand a
-    // human, and the remedy the runner had already computed (details.suggestedBudgetUsd,
-    // operatorAction) died here. Both halves are now written exactly as the conductor writes them:
-    // `output.error` for readers that already know that shape, `blockage` for the ones that act.
-    state.output = { error: { code: result.code, message: result.message, details: result.details, providerStatus: result.providerStatus, providerMessage: result.providerMessage, operatorAction: result.operatorAction } };
-    // surface "sync": this run record is synthetic (workflowId "independent_node"), so a per-run
-    // budget override + retry_node cannot address it — the reachable raise is a one-shot
-    // modelConfig override on the NEXT call (executeNode's own `modelConfig`, threaded at line ~198),
-    // or the node's stored default. See blockage.ts's BlockageContext.surface.
+    state.completedAt = endedAt;
+    state.durationMs = duration(startedAt, endedAt);
+    state.errors = ["node_execution_threw", message];
+    state.output = { error: { code: "node_execution_threw", message } };
     state.blockage = toBlockage(
-      { code: result.code, message: result.message, details: result.details, operatorAction: result.operatorAction },
+      { code: "node_execution_threw", message: `${node.id} threw during execution: ${message}`, details: { nodeId: node.id, runId, executionId } },
       { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
     );
     run.status = "failed";
     run.errors = state.errors;
+    run.updatedAt = endedAt;
+    run.currentNodeId = undefined;
+    // Best effort, and deliberately so: if the store is what threw, the throw below still carries
+    // the ids, which is the whole point. A failure to record must not replace the original error.
+    const saved = await repos.executionRepository.saveRun(run).catch(() => undefined);
+    // Rethrown, not swallowed — the caller asked for an execution and did not get one. What is new
+    // is that the thrown value carries its own run/execution ids in the same shape a successful
+    // return uses (`execution.runId` / `executionId`), so a caller reading ids off a dispatch result
+    // reads them off a thrown dispatch too, and `cause` keeps the original error intact.
+    throw Object.assign(new Error(`${node.id} failed during execution (run ${runId}, execution ${executionId}): ${message}`), {
+      execution: saved ?? run,
+      executionId,
+      cause: error
+    });
   }
-  else {
-    const outputValidation = validateAgainstNodeSchema(result.output, node.outputSchema);
-    if (!outputValidation.valid) {
-      state.status = "failed";
-      state.errors = outputValidation.issues;
-      // The contract says every failure carries a blockage; a node whose own
-      // output violated its schema is a failure like any other, and a card that
-      // says "this could not be used, here is why" beats a red X with nothing.
-      // Nothing but a retry can help — the node produced what it produced.
-      state.blockage = toBlockage(
-        { code: "output_validation_failed", message: `The node's output did not match its schema: ${outputValidation.issues.join("; ")}`, details: { nodeId: node.id, issues: outputValidation.issues } },
-        { node_id: node.id, run_id: runId, execution_id: executionId, surface: "sync", attempt: 1 }
-      );
-      run.status = "failed";
-      run.errors = outputValidation.issues;
-    }
-    else { state.status = "completed"; state.output = outputValidation.value; const provenance = buildNodeExecutionProvenance(effectiveNode, result.model, endedAt); if (provenance) state.provenance = provenance; run.status = "completed"; run.completedAt = endedAt; run.stageOutputs[node.id] = outputValidation.value; const artifact: ExecutionArtifact & { runId: string; executionId: string } = { id: `artifact_${executionId}`, nodeId: node.id, type: node.produces[0] ?? node.id, value: outputValidation.value, createdAt: endedAt, runId, executionId }; run.artifacts.push(artifact); await repos.workspaceRepository.saveStageOutput(node.id, outputValidation.value, `${runId}:${executionId}:${node.id}`); }
-  }
-  // W2.3 — the same runner-supplied run-visible notes executeRunnableNode folds in. node.execute is
-  // the SECOND dispatch path; a diagnostic that appears on one and not the other is the class of gap
-  // the timing ledger's own two writers already taught us to close.
-  if (result.ok && result.warnings?.length) state.warnings = [...(state.warnings ?? []), ...result.warnings];
-  run.updatedAt = endedAt; run.currentNodeId = undefined;
-  // In openai mode the runner records real usage itself (OpenAINodeRunner); recording here too
-  // double-counted every independent execution with fabricated token counts marked "actual".
-  if (data.executionMode !== "openai") await recordModelUsage({ runId, requestId: run.requestId, workflowId: run.workflowId, projectId: run.projectId, nodeId: node.id, model: modelName(node, data.modelConfig), provider: "openai", inputTokens: tokenCount(state.input, 64), outputTokens: tokenCount(state.output, 32), status: "estimated", metadata: { executionId, independentNode: true } });
-  // T6 (Wave 3, ships dark) — node.execute is the SECOND node-completion path (executor.ts's
-  // executeRunnableNode is the first); a ledger that only saw conductor-dispatched nodes would miss
-  // every independent single-node execution entirely. Best-effort, same posture as executor.ts's own
-  // hook: a timing-repository failure must never fail an otherwise-successful node.execute call.
-  await recordNodeTimingCompletion({ runId, workflowId: run.workflowId, nodeId: node.id, durationMs: state.durationMs ?? 0, outcome: state.status as NodeTimingOutcome, projectId: run.projectId, executionMode: run.executionMode, routeEra: NODE_EXECUTE_ROUTE_ERA, attempt: nextAttemptNumber(state) }).catch(() => undefined);
-  // A4 -- the runner's own trace (imageRefs resolution counts/warnings, provider response id, etc.)
-  // is surfaced here, one level up from `execution`, so a caller of node.execute/executeNode can
-  // see WHY a node behaved the way it did (e.g. every imageRef silently 401ing) without scraping
-  // the runner internals. Present only when the runner actually set one -- a failed run's early
-  // returns never populate `trace`, so this never invents one.
-  return redactSecrets({ execution: await repos.executionRepository.saveRun(run), executionId, ...(result.ok && result.trace !== undefined ? { trace: result.trace } : {}) });
 }
 
 // B2 (Pass 2, WP-00 finding #2) — node.list_executions used to hand back the WHOLE run record
