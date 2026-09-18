@@ -82,17 +82,24 @@ describe("runStrategyLearningJob", () => {
     expect(stored.filter((entry) => entry.metadata?.source === "tracking:strategy.v1")).toHaveLength(1);
   });
 
-  it("promotes into the writer and planning playbooks on the second consecutive daily run", async () => {
+  it("quarantines evidence instead of promoting it, when no CMS_AGENT_PROJECT_ID names the tenant", async () => {
+    // FIX (a) — this used to say "the promotion writes the FLEET playbook, exactly as it always
+    // did", and asserted exactly that. That was the hole: an ingest that cannot name its tenant in
+    // CMS-Agent's own namespace was teaching every OTHER tenant too. Two consecutive windows in the
+    // same direction is the promotion bar (see the CMS_AGENT_PROJECT_ID-named test right below this
+    // one, where the same evidence DOES promote) — the only thing missing here is the tenant id, and
+    // that alone must be enough to withhold it.
     await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-08-31T06:00:00Z") });
     const second = await runStrategyLearningJob({ env: CONFIGURED_ENV, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-09-01T06:00:00Z") });
     expect(second.status).toBe("completed");
     if (second.status === "completed") {
-      expect([...new Set(second.result.promotion.promoted.map((entry) => entry.nodeId))].sort()).toEqual([...STRATEGY_PLAYBOOK_TARGET_NODES].sort());
+      expect(second.result.promotionSkipped).toBe("unknown_tenant");
+      expect(second.result.promotion.promoted).toEqual([]);
     }
-    // C2 (part 2) — with no CMS_AGENT_PROJECT_ID to name the tenant in CMS-Agent's own namespace,
-    // the promotion writes the FLEET playbook, exactly as it always did.
+    // The evidence itself is still recorded (asserted above, in the first-run test) — only the FLEET
+    // playbook is left untouched by it.
     const writer = await repositoryManager.getImprovementRepository().getPlaybook("draft_writer");
-    expect(writer?.items.some((item) => item.provenance.source === "tracking")).toBe(true);
+    expect(writer?.items.some((item) => item.provenance.source === "tracking")).toBeFalsy();
   });
 
   it("C2 — writes into the named tenant's playbooks, and NOT the fleet's, when CMS_AGENT_PROJECT_ID names one", async () => {

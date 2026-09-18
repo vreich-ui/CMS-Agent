@@ -2,15 +2,20 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   contradictingStrategySightings,
   ingestStrategyRollups,
+  isFavorableFinding,
   promoteStrategySignals,
   renderStrategyObservation,
   renderStrategyPlaybookItem,
   stableStrategySignals,
   strategyFindings,
   strategyGroupsFromRows,
+  strategyIngestionKey,
+  strategyPlaybookItemKind,
   strategyPlaybookItemPrefix,
   strategySightingsFromObservations,
   strategySiteBaseline,
+  STRATEGY_COMPARABLE_KEYS,
+  STRATEGY_METRIC_DIRECTIONS,
   STRATEGY_OBSERVATION_SOURCE,
   STRATEGY_OBSERVATION_MIN_N,
   STRATEGY_PLAYBOOK_TARGET_NODES,
@@ -21,6 +26,7 @@ import type { LearningObservation } from "../../../src/agent/mcp/workspace/store
 import type { LearningRepository } from "../../../src/agent/repository/interfaces/LearningRepository.js";
 import type { ImprovementRepository } from "../../../src/agent/repository/interfaces/ImprovementRepository.js";
 import type { NodePlaybook } from "../../../src/agent/improvement/improvementTypes.js";
+import { scopeKey, type PolicyScope } from "../../../src/agent/scope/policyScope.js";
 
 // T21.35 strategy-level learning: the sink's `by=strategy` grain becomes cross-article observations,
 // and only what has HELD UP becomes a playbook item for the writer and planning nodes. These tests
@@ -107,11 +113,15 @@ const fakeLearning = () => {
   return repository;
 };
 
+// Keyed by scope + nodeId (mirroring the real repositories' playbookMapKey), NOT nodeId alone — once
+// fix (a) requires a real cmsAgentProjectId to promote anything, these tests need to tell a tenant's
+// playbook apart from the fleet's, which a nodeId-only fake could never do.
 const fakeImprovement = () => {
   const playbooks = new Map<string, NodePlaybook>();
+  const key = (nodeId: string, scope?: PolicyScope) => `${scopeKey(scope)}::${nodeId}`;
   const repository = {
-    async getPlaybook(nodeId: string) { const playbook = playbooks.get(nodeId); return playbook ? structuredClone(playbook) : undefined; },
-    async savePlaybook(playbook: NodePlaybook) { playbooks.set(playbook.nodeId, structuredClone(playbook)); return structuredClone(playbook); }
+    async getPlaybook(nodeId: string, scope?: PolicyScope) { const playbook = playbooks.get(key(nodeId, scope)); return playbook ? structuredClone(playbook) : undefined; },
+    async savePlaybook(playbook: NodePlaybook) { playbooks.set(key(playbook.nodeId, playbook.scope), structuredClone(playbook)); return structuredClone(playbook); }
   } as unknown as ImprovementRepository;
   return repository;
 };
@@ -323,11 +333,11 @@ describe("ingestStrategyRollups", () => {
 
   it("promotes a per-node playbook item on the SECOND consecutive window in the same direction", async () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
-    await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
-    const second = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
 
     expect([...new Set(second.promotion.promoted.map((entry) => entry.nodeId))].sort()).toEqual([...STRATEGY_PLAYBOOK_TARGET_NODES].sort());
-    const writer = (await improvementRepository.getPlaybook("draft_writer"))!;
+    const writer = (await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" }))!;
     const dwell = writer.items.find((item) => item.text.includes("stay past the first screen"))!;
     expect(dwell.kind).toBe("strategy");
     expect(dwell.provenance.source).toBe("tracking");
@@ -337,16 +347,16 @@ describe("ingestStrategyRollups", () => {
     // Reads as guidance, not as a metric dump: the instruction comes first, the evidence in brackets.
     expect(dwell.text.startsWith("Reach for")).toBe(true);
     // Every planning node got it too, not just the writer.
-    const planner = (await improvementRepository.getPlaybook("brief_architect"))!;
+    const planner = (await improvementRepository.getPlaybook("brief_architect", { site: "dr-lurie" }))!;
     expect(planner.items.some((item) => item.text.includes("stay past the first screen"))).toBe(true);
   });
 
   it("reinforces rather than duplicating when a promoted item holds for a third window", async () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
     for (const window of [WINDOW_1, WINDOW_2, WINDOW_3]) {
-      await ingestStrategyRollups({ projectId: "trk_demo", from: window.from, to: window.to }, deps(jsonFetch(page(rows))));
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: window.from, to: window.to }, deps(jsonFetch(page(rows))));
     }
-    const writer = (await improvementRepository.getPlaybook("draft_writer"))!;
+    const writer = (await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" }))!;
     const dwellItems = writer.items.filter((item) => item.text.includes("stay past the first screen"));
     expect(dwellItems).toHaveLength(1);
     expect(dwellItems[0]!.helpfulCount).toBeGreaterThan(1);
@@ -355,8 +365,8 @@ describe("ingestStrategyRollups", () => {
 
   it("counters a promoted item when a later window contradicts it", async () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
-    await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
-    await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
 
     // Third window: the same subject now sits well BELOW the site figure on every metric.
     const reversed = [
@@ -364,10 +374,10 @@ describe("ingestStrategyRollups", () => {
       ordinaryRow(),
       thirdRow()
     ];
-    const third = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_3.from, to: WINDOW_3.to }, deps(jsonFetch(page(reversed))));
+    const third = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_3.from, to: WINDOW_3.to }, deps(jsonFetch(page(reversed))));
 
     expect(third.promotion.countered.some((entry) => entry.nodeId === "draft_writer")).toBe(true);
-    const writer = (await improvementRepository.getPlaybook("draft_writer"))!;
+    const writer = (await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" }))!;
     const dwell = writer.items.find((item) => item.text.startsWith("Reach for") && item.text.includes("stay past the first screen"))!;
     expect(dwell.harmfulCount).toBe(1);
     // The counter is the playbook's OWN demotion mechanism — net helpfulness — not a deletion.
@@ -426,35 +436,35 @@ describe("ingestStrategyRollups", () => {
   it("writes the observation for a group exactly at the observation bar, and still refuses to promote it", async () => {
     const atBar = [strategyRow({ n: STRATEGY_OBSERVATION_MIN_N }), ordinaryRow(), thirdRow()];
     for (const window of [WINDOW_1, WINDOW_2, WINDOW_3]) {
-      await ingestStrategyRollups({ projectId: "trk_demo", from: window.from, to: window.to }, deps(jsonFetch(page(atBar))));
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: window.from, to: window.to }, deps(jsonFetch(page(atBar))));
     }
     const written = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
     expect(written).toHaveLength(3);
-    expect(await improvementRepository.getPlaybook("draft_writer")).toBeUndefined();
+    expect(await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" })).toBeUndefined();
   });
 
   it("does not promote a finding whose group is below the n bar, however many windows it holds", async () => {
     const thin = [strategyRow({ n: STRATEGY_PROMOTION_MIN_N - 1 }), ordinaryRow(), thirdRow()];
     for (const window of [WINDOW_1, WINDOW_2, WINDOW_3]) {
-      await ingestStrategyRollups({ projectId: "trk_demo", from: window.from, to: window.to }, deps(jsonFetch(page(thin))));
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: window.from, to: window.to }, deps(jsonFetch(page(thin))));
     }
     const observations = await learningRepository.listObservations();
     expect(observations.filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE)).toHaveLength(3);
-    expect(await improvementRepository.getPlaybook("draft_writer")).toBeUndefined();
+    expect(await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" })).toBeUndefined();
   });
 
   it("does not counter off a window that is below the n bar", async () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
-    await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
-    await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
     const noisyReversal = [
       strategyRow({ n: 12, completion_rate: 0.2, cta_ctr: 0.02, buy_click_rate: 0.008, purchase_rate: 0.002, p75_dwell_ms: 9000 }),
       ordinaryRow(),
       thirdRow()
     ];
-    const third = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_3.from, to: WINDOW_3.to }, deps(jsonFetch(page(noisyReversal))));
+    const third = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_3.from, to: WINDOW_3.to }, deps(jsonFetch(page(noisyReversal))));
     expect(third.promotion.countered).toEqual([]);
-    const writer = (await improvementRepository.getPlaybook("draft_writer"))!;
+    const writer = (await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" }))!;
     expect(writer.items.find((item) => item.text.includes("stay past the first screen"))!.harmfulCount).toBe(0);
   });
 
@@ -494,9 +504,184 @@ describe("ingestStrategyRollups", () => {
 
   it("ignores another project's observations when deciding stability", async () => {
     const rows = [strategyRow(), ordinaryRow(), thirdRow()];
-    await ingestStrategyRollups({ projectId: "trk_other", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
-    const second = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    await ingestStrategyRollups({ projectId: "trk_other", cmsAgentProjectId: "some-other-tenant", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    // Only one window of trk_demo's OWN evidence — a second tenant's window one day earlier must not
+    // count as this tenant's first, or stability would leak exactly the way playbookScope.test.ts
+    // exists to catch.
     expect(second.promotion.promoted).toEqual([]);
+  });
+
+  // FIX (a) — UNKNOWN-TENANT QUARANTINE. `promoteStrategySignals` on its own still treats an omitted
+  // scope as a deliberate fleet write (see its own doc comment) — that has not changed. What changed
+  // is that `ingestStrategyRollups` no longer reaches for that default on the caller's behalf just
+  // because `cmsAgentProjectId` was not given.
+  describe("FIX (a): unknown-tenant evidence is quarantined, never promoted to fleet scope", () => {
+    it("still records the observation, with its provenance intact, when cmsAgentProjectId is omitted", async () => {
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      const result = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      expect(result.observations).toHaveLength(1);
+      const stored = (await learningRepository.listObservations()).find((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE)!;
+      // The sink's own id is still the provenance stamp — nothing about recording the evidence
+      // changed, only whether it is allowed to teach anyone.
+      expect(stored.metadata?.projectId).toBe("trk_demo");
+    });
+
+    it("never promotes into the fleet playbook across two stable windows when the tenant is unknown", async () => {
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const second = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+
+      // Two consecutive windows in the same direction is exactly the bar that promotes when the
+      // tenant IS known (see the test right above this describe block) — the only thing different
+      // here is the missing cmsAgentProjectId, and that alone must be enough to withhold promotion.
+      expect(second.promotionSkipped).toBe("unknown_tenant");
+      expect(second.promotion.promoted).toEqual([]);
+      for (const nodeId of STRATEGY_PLAYBOOK_TARGET_NODES) {
+        // A subsequent FLEET-scope playbook read — no scope argument, exactly what a dispatch with no
+        // tenant context would read — must see nothing this evidence produced.
+        expect(await improvementRepository.getPlaybook(nodeId)).toBeUndefined();
+      }
+    });
+
+    it("does not withhold promotion once the SAME evidence is re-ingested with a named tenant", async () => {
+      // Quarantine is about missing attribution, not about the evidence itself: the exact same rows,
+      // ingested with a resolvable tenant id, promote normally. This also pins that the guard is not
+      // an accidental blanket "strategy learning never promotes" regression.
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+      expect(second.promotionSkipped).toBeUndefined();
+      expect(second.promotion.promoted.length).toBeGreaterThan(0);
+      expect(await improvementRepository.getPlaybook("draft_writer", { site: "dr-lurie" })).toBeDefined();
+    });
+  });
+
+  // FIX (b) — INGESTION IDEMPOTENCY.
+  describe("FIX (b): replaying the same window is a no-op, not a duplicate", () => {
+    it("produces exactly one observation when the identical window is ingested twice", async () => {
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      const first = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const replay = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+
+      expect(first.observations).toHaveLength(1);
+      expect(replay.observations).toHaveLength(0);
+      expect(replay.duplicates).toHaveLength(1);
+      expect(replay.duplicates[0]).toMatchObject({ strategy: "objection_first", intent: "objection_handling" });
+
+      const stored = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+      expect(stored).toHaveLength(1);
+    });
+
+    it("does not treat a genuinely different window as a duplicate", async () => {
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const different = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+      expect(different.observations).toHaveLength(1);
+      expect(different.duplicates).toEqual([]);
+      const stored = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+      expect(stored).toHaveLength(2);
+    });
+
+    it("does not treat another tenant's identical window as a duplicate of this tenant's", async () => {
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_other", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const result = await ingestStrategyRollups({ projectId: "trk_demo", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      expect(result.observations).toHaveLength(1);
+      expect(result.duplicates).toEqual([]);
+    });
+  });
+});
+
+describe("FIX (b): strategyIngestionKey", () => {
+  const group = { strategy: "objection_first", intent: "objection_handling" };
+  const window = WINDOW_1;
+
+  it("is stable: the same tenant, window and group always produce the same key", () => {
+    expect(strategyIngestionKey({ projectId: "trk_demo", window, group })).toBe(strategyIngestionKey({ projectId: "trk_demo", window, group }));
+  });
+
+  it("is distinct across a different tenant, a different window and a different group", () => {
+    const base = strategyIngestionKey({ projectId: "trk_demo", window, group });
+    expect(strategyIngestionKey({ projectId: "trk_other", window, group })).not.toBe(base);
+    expect(strategyIngestionKey({ projectId: "trk_demo", window: WINDOW_2, group })).not.toBe(base);
+    expect(strategyIngestionKey({ projectId: "trk_demo", window, group: { strategy: "listicle", intent: "awareness" } })).not.toBe(base);
+  });
+
+  it("does not collide two labels that a naive string join could confuse", () => {
+    // A concatenation-based key ("trk_demo|2026-08-29..2026-08-30|a|b") could not tell a group whose
+    // strategy is "a|b" (intent absent) from one whose strategy is "a" and intent is "b". Hashing the
+    // fields as an object rather than a joined string is what this test is pinning.
+    const a = strategyIngestionKey({ projectId: "trk_demo", window, group: { strategy: "a|b", intent: undefined } });
+    const b = strategyIngestionKey({ projectId: "trk_demo", window, group: { strategy: "a", intent: "b" } });
+    expect(a).not.toBe(b);
+  });
+});
+
+// FIX (c) — METRIC DIRECTION IS A NAMED, PER-KEY FACT.
+describe("FIX (c): per-metric direction", () => {
+  it("defaults every existing metric to higher_is_better — a non-breaking refactor, not a reinterpretation", () => {
+    for (const key of STRATEGY_COMPARABLE_KEYS) expect(STRATEGY_METRIC_DIRECTIONS[key]).toBe("higher_is_better");
+  });
+
+  it("isFavorableFinding treats 'above' as good for a higher-is-better metric and bad for a lower-is-better one", () => {
+    expect(isFavorableFinding("higher_is_better", "above")).toBe(true);
+    expect(isFavorableFinding("higher_is_better", "below")).toBe(false);
+    // The opposite ranking: for a metric where LOWER is better (e.g. a bounce/exit/abandon rate this
+    // module has never shipped), sitting BELOW the site figure is the win and ABOVE it is the pitfall
+    // — the exact reverse of the higher-is-better case above.
+    expect(isFavorableFinding("lower_is_better", "below")).toBe(true);
+    expect(isFavorableFinding("lower_is_better", "above")).toBe(false);
+  });
+
+  it("strategyPlaybookItemKind ranks a lower-is-better metric in the opposite direction from a higher-is-better one", () => {
+    // Same raw direction ("above" the site figure), opposite kind, purely because of the metric's
+    // declared direction — this is the actual bug: before FIX (c), EVERY metric was read as
+    // higher-is-better here regardless of what a caller declared.
+    expect(strategyPlaybookItemKind("above", "higher_is_better")).toBe("strategy");
+    expect(strategyPlaybookItemKind("above", "lower_is_better")).toBe("pitfall");
+    expect(strategyPlaybookItemKind("below", "higher_is_better")).toBe("pitfall");
+    expect(strategyPlaybookItemKind("below", "lower_is_better")).toBe("strategy");
+  });
+
+  it("strategyPlaybookItemPrefix flips 'Reach for' / 'Do not default to' the same way", () => {
+    const key = { strategy: "listicle", intent: "awareness" };
+    expect(strategyPlaybookItemPrefix(key, "cta_ctr", "above", "higher_is_better").startsWith("Reach for")).toBe(true);
+    expect(strategyPlaybookItemPrefix(key, "cta_ctr", "above", "lower_is_better").startsWith("Do not default to")).toBe(true);
+  });
+
+  it("defaults to higher_is_better when no direction is passed, so existing callers are unchanged", () => {
+    const key = { strategy: "listicle", intent: "awareness" };
+    expect(strategyPlaybookItemKind("above")).toBe(strategyPlaybookItemKind("above", "higher_is_better"));
+    expect(strategyPlaybookItemPrefix(key, "cta_ctr", "above")).toBe(strategyPlaybookItemPrefix(key, "cta_ctr", "above", "higher_is_better"));
+  });
+});
+
+// FIX (d) — RECIPIENT SET IS CONFIGURABLE PER CALL.
+describe("FIX (d): playbookTargetNodes overrides the default recipient list", () => {
+  beforeEach(() => { learningRepository = fakeLearning(); improvementRepository = fakeImprovement(); });
+
+  it("writes only to the overridden nodes, and not to the module default, when one is given", async () => {
+    const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+    const custom = ["custom_writer_a", "custom_planner_b"];
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", playbookTargetNodes: custom, from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", playbookTargetNodes: custom, from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+
+    expect([...new Set(second.promotion.promoted.map((entry) => entry.nodeId))].sort()).toEqual([...custom].sort());
+    for (const nodeId of custom) {
+      expect(await improvementRepository.getPlaybook(nodeId, { site: "dr-lurie" })).toBeDefined();
+    }
+    // The module default list got nothing this pass — the override REPLACES it, it does not add to it.
+    for (const nodeId of STRATEGY_PLAYBOOK_TARGET_NODES) {
+      expect(await improvementRepository.getPlaybook(nodeId, { site: "dr-lurie" })).toBeUndefined();
+    }
+  });
+
+  it("keeps writing to STRATEGY_PLAYBOOK_TARGET_NODES, unchanged, when no override is given", async () => {
+    const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+    await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+    const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "dr-lurie", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+    expect([...new Set(second.promotion.promoted.map((entry) => entry.nodeId))].sort()).toEqual([...STRATEGY_PLAYBOOK_TARGET_NODES].sort());
   });
 });
 

@@ -45,6 +45,7 @@ import type { ImprovementRepository } from "../repository/interfaces/Improvement
 import type { LearningObservation } from "../mcp/workspace/store.js";
 import { applyPlaybookDelta } from "./playbook.js";
 import { FLEET_SCOPE_KEY, scopeKey, type PolicyScope } from "../scope/policyScope.js";
+import { stableHash } from "./improvementTypes.js";
 import type { PlaybookDelta, PlaybookItem, PlaybookItemKind } from "./improvementTypes.js";
 import { fetchRollupRows, metricsFromRow, trackingSinkConnectionState, type RollupFetchDeps } from "./trackingIngest.js";
 
@@ -73,9 +74,33 @@ export type StrategyMetricKey = typeof STRATEGY_METRIC_KEYS[number];
 /** The metrics a strategy group is COMPARED on. Counts are excluded for the same reason engagement.ts
  * excludes them: pageviews and sessions measure how much traffic a group got, not how well it did
  * with it, and a window total is not comparable to a per-cell median at all. Every key here is
- * scale-free (a rate, or a per-reader duration) and higher is better on all of them. */
-export const STRATEGY_COMPARABLE_KEYS = ["completion_rate", "cta_ctr", "buy_click_rate", "purchase_rate", "p75_dwell_ms"] as const;
-export type StrategyComparableKey = typeof STRATEGY_COMPARABLE_KEYS[number];
+ * scale-free (a rate, or a per-reader duration).
+ *
+ * FIX (c) — DIRECTION IS A NAMED, PER-KEY FACT, NOT AN ASSUMPTION BAKED INTO THE COMPARISON. This
+ * used to be a bare key list with a comment claiming "higher is better on all of them" — true for
+ * every key that has ever been added, and never checked anywhere a new key COULD be added without
+ * checking it. `metricDirections` below infers the key set from the object literal's own keys, so
+ * the key list and its directions cannot drift apart the way two parallel arrays could; every
+ * existing key defaults to `"higher_is_better"`, which is exactly today's behaviour — additive, not
+ * a reinterpretation of a stored number. A metric that is better LOWER (a bounce/exit/abandon-style
+ * measure) is added the same way with `"lower_is_better"`, and every function that ranks or labels a
+ * finding (`strategyPlaybookItemKind`, `strategyPlaybookItemPrefix`, `isFavorableFinding`) takes the
+ * direction as an explicit argument instead of assuming one. */
+export type MetricDirection = "higher_is_better" | "lower_is_better";
+
+const metricDirections = <K extends string>(directions: Record<K, MetricDirection>): Record<K, MetricDirection> => directions;
+
+export const STRATEGY_METRIC_DIRECTIONS = metricDirections({
+  completion_rate: "higher_is_better",
+  cta_ctr: "higher_is_better",
+  buy_click_rate: "higher_is_better",
+  purchase_rate: "higher_is_better",
+  p75_dwell_ms: "higher_is_better"
+});
+export type StrategyComparableKey = keyof typeof STRATEGY_METRIC_DIRECTIONS;
+/** Same key set, same order, as STRATEGY_METRIC_DIRECTIONS — kept as an array because most readers
+ * here want to iterate or `.includes()` rather than look a direction up. */
+export const STRATEGY_COMPARABLE_KEYS = Object.keys(STRATEGY_METRIC_DIRECTIONS) as StrategyComparableKey[];
 
 /** The sink's own `n` a group needs before it can promote or counter anything: whatever the grain
  * says the rates were computed from. On kugel-data's `by=strategy` grain (migration 012) that is
@@ -110,11 +135,15 @@ export const STRATEGY_MATERIAL_ABOVE_RATIO = 1.2;
 export const STRATEGY_MATERIAL_BELOW_RATIO = 0.8;
 
 /**
- * The nodes a promoted strategy lesson is written to: the WRITER and the PLANNING nodes — the ones
- * that decide what shape a piece takes and then take it. Deliberately an explicit list rather than a
- * node-kind query: `kind` is a loose label (placement_resolver is `strategy` and runs on a
+ * The DEFAULT nodes a promoted strategy lesson is written to: the WRITER and the PLANNING nodes — the
+ * ones that decide what shape a piece takes and then take it. Deliberately an explicit list rather
+ * than a node-kind query: `kind` is a loose label (placement_resolver is `strategy` and runs on a
  * deterministic engine path, where a bullet lesson would be injected into nothing), and a lesson
  * landing in a node that cannot act on it is prompt budget spent on noise.
+ *
+ * FIX (d) — a DEFAULT, not the only possible answer. `promoteStrategySignals`'s `options.nodeIds` and
+ * `StrategyLearningParams.playbookTargetNodes` both override this list for one call; a caller that
+ * passes neither gets exactly this list, unchanged.
  */
 export const STRATEGY_PLAYBOOK_TARGET_NODES = [
   "brief_architect",     // planning — decides the piece's structure
@@ -414,8 +443,20 @@ const effectClause = (finding: StrategyFinding): string => {
  * reinforced (helpfulCount) or countered (harmfulCount) — without matching on numbers that move every
  * window. The effect sentence is appended after it, so the item still reads as a claim with evidence.
  */
-export const strategyPlaybookItemPrefix = (key: StrategyGroupKey, metric: StrategyComparableKey, direction: StrategyDirection): string =>
-  direction === "above"
+/**
+ * FIX (c) — is a raw "above/below the site figure" reading actually GOOD news for this metric? Only
+ * `"above"` on a metric where higher is better, or `"below"` on one where lower is better. Exported
+ * on its own, rather than folded straight into the two functions below, because it is the one place
+ * the direction assumption lives, and it is unit-testable against a `"lower_is_better"` direction
+ * without needing a second, parallel metric to exist in production.
+ */
+export const isFavorableFinding = (metricDirection: MetricDirection, rawDirection: StrategyDirection): boolean =>
+  metricDirection === "higher_is_better" ? rawDirection === "above" : rawDirection === "below";
+
+/** Defaults to `"higher_is_better"` — every key this module has ever compared on — so a caller that
+ * does not pass a direction (this file's own call sites now do) keeps exactly today's behaviour. */
+export const strategyPlaybookItemPrefix = (key: StrategyGroupKey, metric: StrategyComparableKey, direction: StrategyDirection, metricDirection: MetricDirection = "higher_is_better"): string =>
+  isFavorableFinding(metricDirection, direction)
     ? `Reach for ${strategySubjectPhrase(key)} when the brief allows it — ${METRIC_CRAFT[metric]};`
     : `Do not default to ${strategySubjectPhrase(key)} — ${METRIC_CRAFT[metric]};`;
 
@@ -433,11 +474,14 @@ export const strategyPlaybookItemPrefix = (key: StrategyGroupKey, metric: Strate
  * is injected into a writer's prompt and has to read as an instruction, not as a dashboard row.
  */
 export const renderStrategyPlaybookItem = (signal: StableStrategySignal): string =>
-  `${strategyPlaybookItemPrefix(signal, signal.metric, signal.direction)} it ${effectClause(signal.latest)}. (${STRATEGY_OBSERVATION_SOURCE}, ${signal.windows} consecutive windows through ${signal.through}, n=${Math.round(signal.n)}.)`;
+  `${strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric])} it ${effectClause(signal.latest)}. (${STRATEGY_OBSERVATION_SOURCE}, ${signal.windows} consecutive windows through ${signal.through}, n=${Math.round(signal.n)}.)`;
 
-/** `above` findings are things to DO (a strategy); `below` findings are things to stop doing (a
- * pitfall). Those are two of the playbook's three existing kinds — no new vocabulary. */
-export const strategyPlaybookItemKind = (direction: StrategyDirection): PlaybookItemKind => (direction === "above" ? "strategy" : "pitfall");
+/** A FAVORABLE finding is a thing to DO (a strategy); an unfavorable one is a thing to stop doing (a
+ * pitfall) — see `isFavorableFinding` for what "favorable" means once metric direction is accounted
+ * for. Those are two of the playbook's three existing kinds — no new vocabulary. Defaults to
+ * `"higher_is_better"` for the same reason `strategyPlaybookItemPrefix` does. */
+export const strategyPlaybookItemKind = (direction: StrategyDirection, metricDirection: MetricDirection = "higher_is_better"): PlaybookItemKind =>
+  (isFavorableFinding(metricDirection, direction) ? "strategy" : "pitfall");
 
 // ── observations → stable signals ────────────────────────────────────────────
 
@@ -584,6 +628,10 @@ const findItemByPrefix = (items: PlaybookItem[], prefix: string): PlaybookItem |
  *
  * An omitted scope still writes the fleet playbook. That is not a default so much as a statement: a
  * caller with no project to name has produced fleet evidence, and has to say so by not naming one.
+ * This is a DELIBERATE-CALL primitive, and that statement is only honest when the caller is the one
+ * deciding it — see FIX (a) on `ingestStrategyRollups`, which does NOT let a missing tenant id reach
+ * this default silently: it withholds the call entirely rather than passing an empty scope on the
+ * caller's behalf.
  */
 export async function promoteStrategySignals(
   sightings: StrategySignalSighting[],
@@ -608,7 +656,7 @@ export async function promoteStrategySignals(
       const promotedThisPass: Array<{ signal: string; text: string }> = [];
 
       for (const signal of stable) {
-        const prefix = strategyPlaybookItemPrefix(signal, signal.metric, signal.direction);
+        const prefix = strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]);
         const current = findItemByPrefix(items, prefix);
         if (current) {
           markHelpful.push(current.itemId);
@@ -616,13 +664,13 @@ export async function promoteStrategySignals(
           continue;
         }
         const text = renderStrategyPlaybookItem(signal);
-        add.push({ text, kind: strategyPlaybookItemKind(signal.direction), provenance: { source: "tracking" } });
+        add.push({ text, kind: strategyPlaybookItemKind(signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]), provenance: { source: "tracking" } });
         promotedThisPass.push({ signal: strategySignalKeyOf(signal), text });
       }
 
       for (const sighting of contradictions) {
         const opposite: StrategyDirection = sighting.direction === "above" ? "below" : "above";
-        const counteredItem = findItemByPrefix(items, strategyPlaybookItemPrefix(sighting, sighting.metric, opposite));
+        const counteredItem = findItemByPrefix(items, strategyPlaybookItemPrefix(sighting, sighting.metric, opposite, STRATEGY_METRIC_DIRECTIONS[sighting.metric]));
         if (!counteredItem) continue;
         markHarmful.add(counteredItem.itemId);
         outcome.countered.push({ nodeId, signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
@@ -659,11 +707,32 @@ export type StrategyLearningParams = {
    * the sink's spelling would write a playbook at `site=drlurie` that no dispatch ever reads — a
    * lesson stored nowhere, which is harder to notice than a lesson stored everywhere.
    *
-   * Omitted means the promotion writes the FLEET playbook, exactly as it did before scope existed.
-   * That is stated rather than defaulted away: an ingest that cannot name the tenant in CMS-Agent's
-   * namespace has not earned the right to file lessons under one.
+   * FIX (a) — OMITTED NO LONGER MEANS FLEET. This used to say "the promotion writes the FLEET
+   * playbook, exactly as it did before scope existed" — which is precisely the hole the plan closes:
+   * an ingest that cannot name its tenant in CMS-Agent's namespace was teaching every OTHER tenant
+   * too, the exact leak `policyScope.ts`'s own header describes. Omitted now QUARANTINES this
+   * window's evidence instead — the observations above are still recorded in full, with their
+   * provenance intact (stamped under `projectId`, the sink's own id, exactly as always) — only the
+   * PROMOTION step is withheld, and `StrategyLearningResult.promotionSkipped` names why rather than
+   * reading like "nothing was stable yet". See `ingestStrategyRollups`'s own comment for why no
+   * bypass is offered here: every pull this function makes is already scoped to one sink partition,
+   * so there is no case at THIS layer where the honest answer is "promote to fleet because there was
+   * never a tenant". Generalising an already tenant-scoped lesson into a fleet one is a separate,
+   * deliberate operation this repo does not have yet (KNOWN_ISSUES K-A6) — noted as a followup rather
+   * than built here.
    */
   cmsAgentProjectId?: string;
+  /**
+   * FIX (d) — who a promoted lesson is written to, overriding STRATEGY_PLAYBOOK_TARGET_NODES for
+   * this call only. `promoteStrategySignals` has always accepted this as `options.nodeIds`; nothing
+   * upstream of it could ever set it, so every ingest taught the same fixed six nodes regardless of
+   * which workflow or task actually invoked the pass. Omitted, behaviour is byte-for-byte what it was
+   * before this field existed: the module's own default list. Never carries a `task` scope dimension
+   * — nodes are already addressed by id, not by the scope vocabulary
+   * (`playbook.ts`'s `assertPlaybookScope` refuses exactly that redundancy at the repository
+   * boundary).
+   */
+  playbookTargetNodes?: readonly string[];
 };
 export type StrategyLearningDeps = RollupFetchDeps & {
   learningRepository: LearningRepository;
@@ -691,14 +760,27 @@ export type StrategyLearningResult = {
    * too few people to be worth writing down yet".
    */
   withheld: Array<{ strategy?: string; intent?: string; n: number; findings: number }>;
+  /**
+   * FIX (b) — groups whose evidence was ALREADY on file under the same ingestion key (same tenant,
+   * same window, same strategy/intent) and were therefore left alone rather than written a second
+   * time. Reported for the same reason `withheld` is: "0 new observations" needs to be tellable apart
+   * from "this window was already ingested" and from "everything was below the bar".
+   */
+  duplicates: Array<{ strategy?: string; intent?: string }>;
   promotion: StrategyPromotionOutcome;
   /** Set when the pull did not happen at all and that is NOT a failure: the sink is not configured on
    * this deployment, or its `by=strategy` grain has not been migrated yet (503). */
   skipped?: "sink_unconfigured" | "grain_unavailable";
+  /**
+   * FIX (a) — set instead of running promotion at all when `StrategyLearningParams.cmsAgentProjectId`
+   * was not given: this window's evidence is quarantined to its own tenant's recorded observations
+   * and never reaches a playbook, fleet or otherwise, until a caller can name the tenant.
+   */
+  promotionSkipped?: "unknown_tenant";
   errors: Array<{ scope?: string; error: string }>;
 };
 
-const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], duplicates: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
 
 /** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
  * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
@@ -708,6 +790,29 @@ const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, g
  * `008_experiment_keyed_by_control_item.sql` and its migrations were already at 011, so anyone who
  * checked whether 008 had run got "yes" and concluded the grain should be working. */
 const GRAIN_UNAVAILABLE_STATUS = 503;
+
+/**
+ * FIX (b) — a stable identity for "this group's evidence, for this tenant, in this window",
+ * independent of the rendered sentence and of anything a re-fetch of the SAME window could
+ * legitimately return slightly differently (a late-arriving row nudging a rate by a hundredth of a
+ * point). Built ONLY from the three things that answer WHICH evidence this is — the sink partition
+ * (`projectId`), the window, and the strategy/intent group identity — hashed as an OBJECT rather than
+ * concatenated into a string, so:
+ *   * the SAME inputs always produce the SAME key (replaying an identical pull is detected), and
+ *   * two GENUINELY different windows, tenants or groups cannot collide by a value smuggling in a
+ *     delimiter — each is its own field going into the hash, not a joined string a label like
+ *     `"a|b"` could forge.
+ * Stored on the observation's own metadata (`ingestionKey`) rather than recomputed from the stored
+ * record's rendered text, which is allowed to change wording (a copy edit to `renderStrategyFinding`)
+ * without that becoming "new" evidence.
+ */
+export const strategyIngestionKey = (params: { projectId: string; window: StrategyWindow; group: StrategyGroupKey }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    projectId: params.projectId,
+    window: { from: params.window.from, to: params.window.to },
+    group: { strategy: params.group.strategy, intent: params.group.intent }
+  });
 
 /**
  * GET `${TRACKING_SINK_URL}/rollups?by=strategy` for the project/window, write the material
@@ -746,6 +851,21 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   result.groups = groups.length;
   const baseline = strategySiteBaseline(page.rows);
 
+  // FIX (b) — idempotency. Load which of THIS tenant's ingestion keys are already on file before
+  // writing anything this pass, so replaying the identical window (a retried job, a second scheduler
+  // fire, an operator's manual re-run) leaves the store exactly as it was rather than doubling the
+  // evidence a rate is computed from. `recordObservation` has no update-in-place primitive, so a
+  // matched key is skipped outright — see `strategyIngestionKey`'s own comment for what keeps the key
+  // stable across re-runs and distinct across genuinely different evidence.
+  const priorObservations = await deps.learningRepository.listObservations();
+  const alreadyIngested = new Set(
+    priorObservations
+      .map((entry) => readMetadata(entry))
+      .filter((metadata) => metadata.source === STRATEGY_OBSERVATION_SOURCE && asLabel(metadata.projectId) === params.projectId)
+      .map((metadata) => asLabel(metadata.ingestionKey))
+      .filter((key): key is string => Boolean(key))
+  );
+
   for (const group of groups) {
     const findings = strategyFindings(group, baseline);
     if (!findings.length) continue;
@@ -756,11 +876,17 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
       result.withheld.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), n: group.n, findings: findings.length });
       continue;
     }
+    const ingestionKey = strategyIngestionKey({ projectId: params.projectId, window, group });
+    if (alreadyIngested.has(ingestionKey)) {
+      result.duplicates.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}) });
+      continue;
+    }
     const observation = renderStrategyObservation(group, findings, group.n, window);
     try {
       const saved = await deps.learningRepository.recordObservation(observation, {
         source: STRATEGY_OBSERVATION_SOURCE,
         projectId: params.projectId,
+        ingestionKey,
         ...(group.strategy ? { strategy: group.strategy } : {}),
         ...(group.intent ? { intent: group.intent } : {}),
         window,
@@ -776,6 +902,16 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
     }
   }
 
+  // FIX (a) — quarantine unresolved tenant attribution. See StrategyLearningParams.cmsAgentProjectId
+  // for the full reasoning; in short, evidence recorded above under an unmappable tenant must not
+  // become fleet knowledge just because no CMS-Agent id was given. Nothing about the observations
+  // just written changes — only promotion is withheld, and the result says so by name rather than
+  // reading identically to "nothing was stable yet".
+  if (!params.cmsAgentProjectId) {
+    result.promotionSkipped = "unknown_tenant";
+    return result;
+  }
+
   // Promotion reads the store back (this window's entries included), so the stability rule is applied
   // to the full observed history and not just to what this run happened to fetch.
   try {
@@ -786,8 +922,10 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
       strategySightingsFromObservations(stored, params.projectId),
       deps,
       // The sightings are read by the SINK's id; the playbook is written under CMS-AGENT's. See
-      // StrategyLearningParams.cmsAgentProjectId for why those must not be the same field.
-      params.cmsAgentProjectId ? { scope: { site: params.cmsAgentProjectId } } : {}
+      // StrategyLearningParams.cmsAgentProjectId for why those must not be the same field. FIX (d):
+      // an explicit recipient list threaded from the caller overrides the module default for this
+      // call only.
+      { scope: { site: params.cmsAgentProjectId }, ...(params.playbookTargetNodes ? { nodeIds: params.playbookTargetNodes } : {}) }
     );
   } catch (error) {
     result.errors.push({ scope: "promotion", error: error instanceof Error ? error.message : String(error) });
