@@ -15,17 +15,18 @@ import { compileSiteContentObjects, PAGE_MATERIALIZATION_SCHEMA_VERSION } from "
 import type { DraftedSectionInput } from "../../../src/agent/operations/siteContentObjectCompiler.js";
 import { createInMemorySiteContextSource, DEFAULT_REGISTRIES } from "./fixtures/inMemorySiteContextSource.js";
 import type { FixtureTenantData } from "./fixtures/inMemorySiteContextSource.js";
+import { LIVE_SECTION_TYPE_NAMES, LIVE_SECTION_TYPES } from "./fixtures/liveObjectContractCapture.js";
 
-const LIVE_COMPONENT_TYPES = [
-  "hero", "prose", "lede", "checklist", "bio", "content_grid", "newsletter_signup", "contact_form",
-  "cta_banner", "faq", "link_list", "product_preview", "steps", "composition", "content_split",
-  "pricing_table", "media", "brand_row", "stats", "timeline", "comparison_table", "testimonial",
-  "search", "content_embed", "form_confirmation", "card", "shared_ref"
-];
+// The live registered component-type vocabulary -- object_contract's own TOP-LEVEL `section_types`
+// array, read live on 2026-09-18 (tests/agent/operations/fixtures/liveObjectContractCapture.ts has the
+// full provenance and a verbatim excerpt of several entries' own data_schema/editor blocks).
+const LIVE_COMPONENT_TYPES = LIVE_SECTION_TYPE_NAMES;
 
 // The STANDALONE `section` object contract -- used today only for a `shared_ref` target, and by the
 // compiler purely as the component-type registry (see the compiler's own header on why the same
-// enum backs both). A page's own inline sections never appear under this contract's object list.
+// registry backs both). A page's own inline sections never appear under this contract's object list.
+// `sectionTypes` is that registry (a TOP-LEVEL contract field, never a path inside `schema`); `schema`
+// here still backs compileCandidate's own {sectionType, data} envelope check, unrelated to this fix.
 const SECTION_CONTRACT: SiteObjectFieldContract = {
   objectType: "section",
   required: ["sectionType", "data"],
@@ -34,7 +35,8 @@ const SECTION_CONTRACT: SiteObjectFieldContract = {
     additionalProperties: true,
     required: ["sectionType", "data"],
     properties: { sectionType: { type: "string", enum: LIVE_COMPONENT_TYPES }, data: { type: "object", additionalProperties: true } }
-  }
+  },
+  sectionTypes: LIVE_COMPONENT_TYPES
 };
 
 const PAGE_CONTRACT: SiteObjectFieldContract = {
@@ -463,7 +465,7 @@ describe("compileSiteContentObjects — what it refuses", () => {
   });
 
   it("refuses a component type this tenant's own contract does not declare", async () => {
-    const narrowed: SiteObjectFieldContract = { ...SECTION_CONTRACT, schema: { ...SECTION_CONTRACT.schema, properties: { sectionType: { type: "string", enum: ["prose", "hero"] }, data: { type: "object", additionalProperties: true } } } };
+    const narrowed: SiteObjectFieldContract = { ...SECTION_CONTRACT, sectionTypes: ["prose", "hero"] };
     const snapshot = await snapshotOf(fixture({ contractsByType: { section: narrowed, page: PAGE_CONTRACT } }));
     const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
 
@@ -544,5 +546,29 @@ describe("compileSiteContentObjects — what it refuses", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(JSON.stringify(result.blockers)).toContain("slug");
+  });
+});
+
+// REGRESSION -- adversarial review of PR #387 (2026-09-18) found `supportedComponentTypes` reading the
+// registry off `properties.sectionType.enum` inside `body_schema`, a path that does not exist on the
+// live contract (its real `body_schema` for `section` is `{tracking, section: {oneOf: [...]}}` -- no
+// `sectionType` property at all) and made every real compile refuse `section_type_registry_unavailable`
+// unconditionally. This contract is shaped exactly like the live one -- `sectionTypes` populated the
+// way siteContextSourceAdapter.ts's own extraction does, and a `schema` that deliberately carries none
+// of the fictional path -- so a regression back to reading `schema` for the registry fails this test.
+describe("site content compiler -- component-type registry (live-contract-shaped regression)", () => {
+  it("resolves supported component types from contract.sectionTypes, never from schema.properties.sectionType.enum", async () => {
+    const liveShapedContract: SiteObjectFieldContract = {
+      objectType: "section",
+      required: [],
+      schema: { type: "object", additionalProperties: true, properties: { tracking: { type: "object" }, section: { oneOf: [] } } },
+      sectionTypes: LIVE_SECTION_TYPES.map((entry) => entry.type)
+    };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: liveShapedContract, page: PAGE_CONTRACT } }));
+    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.sectionProvenance[0]).toMatchObject({ componentType: "bio" });
   });
 });
