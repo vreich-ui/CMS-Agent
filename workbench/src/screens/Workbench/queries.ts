@@ -7,6 +7,7 @@
 
 import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
 import * as verbs from '../../api/verbs';
+import type { PlaybookView } from '../../api/adapters';
 import type { Skill } from '../../types';
 
 type Options<T> = Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'>;
@@ -113,10 +114,22 @@ export function useChangesList(nodeId: string | null | undefined, options?: Opti
   });
 }
 
-export function usePlaybook(nodeId: string | null | undefined, options?: Options<verbs.Playbook>) {
+/**
+ * `playbook_get`. `projectId` is `undefined` for the fleet record (the
+ * backend's own meaning of an omitted projectId) — pass a real project id
+ * for a tenant's own record. The query key carries both `nodeId` and the
+ * scope so switching either is a fresh query, never a stale one repainted
+ * (CMS-Agent track A — see Learning/scope.ts for the fuller reasoning on why
+ * a caller must never let "no scope chosen yet" collapse into "fleet").
+ */
+export function usePlaybook(
+  nodeId: string | null | undefined,
+  projectId: string | undefined,
+  options?: Options<PlaybookView>,
+) {
   return useQuery({
-    queryKey: ['playbook', nodeId],
-    queryFn: () => verbs.playbookGet({ nodeId: nodeId as string }),
+    queryKey: ['playbook', nodeId, projectId ?? 'fleet'],
+    queryFn: () => verbs.playbookGet({ nodeId: nodeId as string, projectId }),
     enabled: Boolean(nodeId),
     ...options,
   });

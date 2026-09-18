@@ -1,0 +1,36 @@
+{
+  "verb": "playbook_apply_delta",
+  "sourceVerifiedOnly": true,
+  "note": "No live capture exists for this verb — added new in CMS-Agent track A (2026-09-18) because the workbench previously called a `{op:'remove', lessonId}` shape this verb's real `.strict()` zod schema has never accepted. This file is read directly off source, not a live MCP session (none was available in this track's isolated worktree). See playbook_get.json's own sourceVerifiedAddendum for the sibling read verb.",
+  "verifiedAgainst": [
+    "src/agent/mcp/workspace/improvementTools.ts (playbook.apply_delta tool + its zodSchema, playbookDeltaSchema in improvementTypes.ts)",
+    "src/agent/improvement/playbook.ts (applyPlaybookDelta: dedup-by-normalized-text on add, budget eviction by net helpfulness, scope-mismatch guard)"
+  ],
+  "calls": [
+    {
+      "args": {
+        "nodeId": "draft_writer",
+        "delta": { "add": [{ "text": "Lead with the strongest clinical claim in the first paragraph.", "kind": "strategy" }] },
+        "projectId": "dr-lurie"
+      },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "playbook": "NodePlaybook — the full updated record at this scope, version incremented by 1",
+          "scope": "string — scopeKey(scope), same spelling as playbook_get's `scope` field"
+        }
+      },
+      "notes": "There is no `{op:'remove', lessonId}` shape and no hard delete. 'Remove' a lesson by passing its itemId in `delta.retire` (one-way from the UI's perspective — the only path back to active is re-adding the item's exact original text, which applyPlaybookDelta's own dedup-by-normalized-text logic flips from 'retired' back to 'active'). This is real, existing backend behavior, not a workaround invented client-side — see Learning/PlaybookPanel.tsx's `restore()` for where the workbench relies on it, with a `title` tooltip explaining why."
+    },
+    {
+      "args": {
+        "nodeId": "draft_writer",
+        "delta": { "retire": ["pb_1758158400000_abc123"] },
+        "projectId": "dr-lurie"
+      },
+      "ok": true,
+      "notes": "retire flips status to 'retired' by itemId; does not remove the item from the record."
+    }
+  ]
+}
