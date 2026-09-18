@@ -55,6 +55,14 @@ export type SiteObjectFieldContract = {
   // in-memory fixture today; a real reducer later) is responsible for keeping the two in sync.
   required: string[];
   schema: Record<string, unknown>;
+  // The tenant's registered component-type vocabulary, when this contract carries one — object_contract's
+  // own TOP-LEVEL `section_types` array (a sibling of `body_schema`, never a path inside it; verified
+  // live on both `page` and `section`, 2026-09-18 — see siteContentObjectCompiler.ts's own header for
+  // the full finding). Present on the real `page` AND `section` contracts alike (the same registry
+  // backs both). undefined when a contract carries no such registry (e.g. a non-section-bearing object
+  // type, or a synthetic contract a test built without one) — a caller that needs the component
+  // registry treats undefined/empty exactly like "unavailable", never an empty allow-list.
+  sectionTypes?: readonly string[];
 };
 
 // Registry-shaped reference data that is not itself a typed content object — see the module header

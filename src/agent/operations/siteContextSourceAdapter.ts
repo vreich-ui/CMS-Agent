@@ -35,14 +35,27 @@
 //
 // object_inventory IN LIST MODE (no `object_id`, per its own real schema —
 // platformToolSchemas.ts — `object_id` present would switch it to a single-object DETAIL view) is
-// documented (docs/projects/dr-lurie-agent-publishing-policy.md §10.1) to return SUMMARY rows:
-// `object_id, version, content_revision, review_state, lock{...}, published_time,
-// unpublished_changes` — never each object's full field body. `SiteContextObject.fields` is
-// therefore always `{}` for a snapshot this adapter captures: an honest reflection of what a bulk
-// inventory read actually returns, never a fabricated body. A caller that needs one object's real
-// field values reads it directly (object_get), which is a different read this module does not
-// perform — site_inventory's own descriptor scope is "what exists, its type and status", not field
-// content.
+// documented (docs/projects/dr-lurie-agent-publishing-policy.md §10.1) and confirmed live (2026-09-18,
+// a real object_inventory({object_type:"page"}) listing) to return SUMMARY rows: `object_id, version,
+// content_revision, review_state, lock{...}, published_time, unpublished_changes` — never each
+// object's full field body. `SiteContextObject.fields` is therefore `{}` straight off a LIST read, for
+// every object type, an honest reflection of what a bulk inventory read actually returns, never a
+// fabricated body.
+//
+// PAGE FIELDS ARE THE ONE EXCEPTION, AND WHY. site_content.compile_page_objects
+// (siteContentObjectCompiler.ts) treats a page's OWN `fields.sections` as the only view of what
+// already exists on that page — an inline patch that cannot see a page's current sections always
+// compiles as if it had none, silently landing every new section at index 0 and never recognizing one
+// already present (the exact defect a live adversarial review of PR #387 found: `fields: {}` here made
+// that true of every real snapshot). So `listObjects`, for `objectType === "page"` only, follows each
+// inventory row with a real `object_get` (verified live 2026-09-18: `object_get({object_type:"page",
+// object_id, projection:"summary"})` returns the FULL body — `pageType, route, title, seo, sections,
+// ...` — for a page; unlike an article, a page carries no `body.nodes` index for "summary" to
+// summarize instead, so this is not a partial read) and backfills `fields` with that real body. Every
+// OTHER object type keeps the `{}` this file's original design accepted (visual_standard, content_item,
+// ...) — a caller that needs one of THEIR real field values still reads it directly (object_get) —
+// widening this exception is a decision for whichever future task needs the same fix for another type,
+// not an assumption this adapter makes for it.
 //
 // getRevisionId ALWAYS RETURNS null. siteContext.ts's own header records the coordinator's decision
 // (A6, restated there for whoever built this adapter): no tenant in this codebase exposes a single
@@ -187,6 +200,54 @@ function normalizeInventoryRow(item: unknown, requestedObjectType: string): Site
   };
 }
 
+// A page's real body, off object_get's response envelope — verified live 2026-09-18:
+// object_get({object_type:"page", object_id:"page_home", projection:"summary"}) returns
+// `{record: {..., version, content_revision, body: {pageType, route, title, seo, sections, ...}}}`.
+// The counters and the body both live under `record`, never at the envelope's own top level — the
+// same nesting depth this module's sibling reader (platformSiteObjectWriter.ts's readContentRevision/
+// readVersion) had to be corrected for in the same review round. Tolerant of the same
+// structuredContent/content[].text envelope variance extractRecordBody already handles for
+// object_contract, plus the extra `record` layer object_get itself adds.
+function extractObjectGetBody(result: unknown): Record<string, unknown> | undefined {
+  const unwrap = (value: unknown): unknown => {
+    if (!isObject(value)) return value;
+    const structured = isObject(value.structuredContent) ? value.structuredContent : value;
+    const record = pick(structured, ["record"]);
+    if (isObject(record)) return pick(record, ["body", "fields"]);
+    const content = value.content;
+    if (isArray(content)) {
+      const text = content.find((block): block is { text: string } => isObject(block) && typeof block.text === "string")?.text;
+      if (typeof text === "string") {
+        try {
+          const parsed: unknown = JSON.parse(text);
+          if (isObject(parsed)) {
+            const parsedRecord = pick(parsed, ["record"]);
+            if (isObject(parsedRecord)) return pick(parsedRecord, ["body", "fields"]);
+          }
+        } catch { /* not JSON — no body to extract */ }
+      }
+    }
+    return undefined;
+  };
+  const body = unwrap(result);
+  return isObject(body) ? body : undefined;
+}
+
+// The tenant's registered component-type vocabulary — a TOP-LEVEL `section_types` key on the real
+// object_contract response (verified live on both `page` and `section`, 2026-09-18; see
+// siteContentObjectCompiler.ts's own header for the finding this corrected), never a path inside
+// `body_schema`. Each entry carries `{type, component_bound, data_schema, editor, footprint}`; this
+// adapter keeps only the `type` name — the compiler's own membership check needs nothing else, and
+// SiteObjectFieldContract.sectionTypes (siteContext.ts) is documented as exactly that: a name list.
+const extractSectionTypeNames = (raw: Record<string, unknown>): readonly string[] | undefined => {
+  const entries = pick(raw, ["section_types", "sectionTypes"]);
+  if (!isArray(entries)) return undefined;
+  const names = entries
+    .map((entry) => (isObject(entry) ? pick(entry, ["type"]) : undefined))
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+  return names.length ? names : undefined;
+};
+
 const extractBodySchema = (raw: Record<string, unknown>): unknown => pick(raw, ["body_schema", "bodySchema", "schema"]);
 
 function normalizeObjectContract(raw: unknown, objectType: string): SiteObjectFieldContract | null {
@@ -199,7 +260,8 @@ function normalizeObjectContract(raw: unknown, objectType: string): SiteObjectFi
   if (!isObject(bodySchema)) return null;
   const requiredRaw = bodySchema.required;
   const required = isArray(requiredRaw) ? requiredRaw.filter((entry): entry is string => typeof entry === "string") : [];
-  return { objectType, required, schema: bodySchema as Record<string, unknown> };
+  const sectionTypes = extractSectionTypeNames(raw);
+  return { objectType, required, schema: bodySchema as Record<string, unknown>, ...(sectionTypes ? { sectionTypes } : {}) };
 }
 
 const normalizeRegistryEntry = (item: unknown): { id: string; kind: string; label?: string } | undefined => {
@@ -255,9 +317,25 @@ export class ProjectSiteContextSourceAdapter implements SiteContextSource {
     // wants.
     const call = await adapter.callReadTool("object_inventory", { object_type: objectType });
     if (!call.ok) throw new SiteContextSourceReadError("object_inventory", tenantId, call.error ?? "unknown error", objectType);
-    return extractListItems(call.result)
+    const rows = extractListItems(call.result)
       .map((item) => normalizeInventoryRow(item, objectType))
       .filter((entry): entry is SiteContextObject => !!entry);
+
+    // PAGE FIELDS: backfilled from a real object_get per row — see this module's header ("PAGE FIELDS
+    // ARE THE ONE EXCEPTION") for why only `page` gets this and why a LIST read alone cannot supply
+    // it. A failed per-page read throws exactly like the list read itself does just above: an empty
+    // `fields` here would look identical to "this page genuinely has no sections" to every downstream
+    // consumer (the same reasoning this module's header already gives for listObjects/getObjectContract
+    // failures never degrading to a silent empty result).
+    if (objectType !== "page" || !rows.length) return rows;
+    return Promise.all(
+      rows.map(async (row) => {
+        const got = await adapter.callReadTool("object_get", { object_type: objectType, object_id: row.objectId, projection: "summary" });
+        if (!got.ok) throw new SiteContextSourceReadError("object_get", tenantId, got.error ?? "unknown error", objectType);
+        const body = extractObjectGetBody(got.result);
+        return body ? { ...row, fields: body } : row;
+      })
+    );
   }
 
   async getObjectContract({ tenantId, objectType }: { tenantId: string; objectType: string }): Promise<SiteObjectFieldContract | null> {

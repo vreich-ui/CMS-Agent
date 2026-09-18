@@ -22,13 +22,26 @@
 // `lockToken` (camelCase), not `lock_token` -- run_1787930929962_njffct, 2026-08-28, documented in
 // that module's own header. This writer reuses that reader (and objectDialect.ts's `findRecordVersion`
 // / `findObjectId`) rather than re-deriving the tolerance from scratch, so the two dialects cannot
-// drift apart on a shape this codebase has already been burned by once. What is NOT independently
-// re-confirmed here (forbidden -- see above) is object_patch's own response envelope for
-// `content_revision`/`version`; this module reads them tolerantly (readContentRevision/readVersion
-// below, matching siteContextSourceAdapter.ts's own `pick(item, ["content_revision", "contentRevision"])`
-// convention) and, when either is absent from a write's own response, defers ENTIRELY to the applier's
-// mandatory readback (object_get) for the receipt it actually records -- a provisional 0 here is never
-// treated as evidence of anything, only as a placeholder the readback immediately supersedes.
+// drift apart on a shape this codebase has already been burned by once.
+//
+// readContentRevision/readVersion USE THE SAME findDeep TOLERANCE, AND THAT WAS A REAL BUG, NOT
+// DEFENSIVE PADDING (corrected 2026-09-18, post-merge adversarial review of PR #387). A live,
+// read-only `object_get({object_type:"page", object_id:"page_home", projection:"summary"})` call
+// shows the real envelope nests EVERYTHING under a `record` key:
+// `{record: {..., version, content_revision, body: {...}}}` -- not at the envelope's own top level, the
+// depth this module originally read at. A shallow reader therefore found nothing on a REAL response,
+// so `readObject` always returned null in production, the staleness guard failed open, and -- worse --
+// a `createObject` whose object_create response nests the same way would report a landed create as
+// `not_applied`, then `blocked_indeterminate` on the applier's own retry (siteContentObjectApplier.ts):
+// an orphan object nobody is told about. `readContentRevision`/`readVersion` now use `findDeep` -- the
+// SAME depth-agnostic search `findObjectId`/`findRecordVersion` (objectDialect.ts) already used, which
+// is exactly why those two never showed this bug and readContentRevision/readVersion did. What is NOT
+// independently re-confirmed here (forbidden -- see above) is object_create/object_patch's OWN response
+// envelope for `content_revision`/`version` -- only object_get's was read live; findDeep's bounded
+// (depth <= 6) walk is what carries the same tolerance to those two without a second live call. When
+// either counter is absent even after the deep search, this module still defers ENTIRELY to the
+// applier's mandatory readback (object_get) for the receipt it actually records -- a provisional 0 here
+// is never treated as evidence of anything, only as a placeholder the readback immediately supersedes.
 //
 // dedupesByIdempotencyKey IS FALSE. objectDialect.ts's own P5 note (quoted in this module's tests)
 // says object_create's idempotency_key replay is best-effort: "the handler runs the side effect
@@ -38,25 +51,17 @@
 // here would be the "invented" trust siteContentObjectApplier.ts's own header warns against; `false`
 // costs a human a look at object_inventory before a crashed create is retried, which is a small price
 // for never risking a silently duplicated page.
-import { findLockToken } from "./toolResultSearch.js";
+import { findDeep, findLockToken } from "./toolResultSearch.js";
 import { findObjectId, findRecordVersion, parseValidateResult, formatValidationIssues } from "./objectDialect.js";
 import { checkedClientCall, describeClientCallFailure, type ClientToolCall } from "./clientToolResult.js";
 import type { PageObjectPatchOp } from "../operations/siteContentObjectCompiler.js";
 import type { SiteObjectWriter, WriteObjectResult } from "../operations/siteContentObjectApplier.js";
 
-const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-
-// Same tolerant convention siteContextSourceAdapter.ts already uses for these two counters
-// (`pick(item, ["content_revision", "contentRevision"])`) -- reused here rather than re-invented, so a
-// future rename of either spelling is fixed in one place.
-const readNumberField = (value: unknown, names: readonly string[]): number | undefined => {
-  if (!isRecord(value)) return undefined;
-  for (const name of names) {
-    const found = value[name];
-    if (typeof found === "number") return found;
-  }
-  return undefined;
-};
+// Depth-agnostic, matching objectDialect.ts's findObjectId/findRecordVersion -- see this module's own
+// header ("readContentRevision/readVersion USE THE SAME findDeep TOLERANCE") for the real, nested
+// `{record: {content_revision, version, ...}}` envelope this replaced a shallow top-level read for.
+const readNumberField = (value: unknown, names: readonly string[]): number | undefined =>
+  findDeep(value, (key, child) => names.includes(key) && typeof child === "number") as number | undefined;
 const readContentRevision = (value: unknown): number | undefined => readNumberField(value, ["content_revision", "contentRevision"]);
 const readVersion = (value: unknown): number | undefined => readNumberField(value, ["version"]);
 
