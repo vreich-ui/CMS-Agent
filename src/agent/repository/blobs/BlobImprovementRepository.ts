@@ -2,10 +2,10 @@ import { healthyRepositoryStatus, type RepositoryHealth } from "../RepositoryHea
 import { sortNewestFirst } from "../newestFirst.js";
 import type { ImprovementRepository } from "../interfaces/ImprovementRepository.js";
 import type { EvalDataset, ImprovementProposal, NodePlaybook, ProposalStatus, TrialRecord } from "../../improvement/improvementTypes.js";
-import { getBlobJson, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
+import { getBlobJson, getBlobJsonWithEtag, getCmsAgentBlobStore, storeBackendLabel, type BlobStoreClient } from "./blobClient.js";
 import { playbookSeeds } from "../../improvement/playbookSeeds.js";
 import { applyPlaybookDelta, assertPlaybookScope } from "../../improvement/playbook.js";
-import { isFleetScope, scopeStorageSegments, type PolicyScope } from "../../scope/policyScope.js";
+import { isFleetScope, scopeKey, scopeStorageSegments, type PolicyScope } from "../../scope/policyScope.js";
 
 const proposalKey = (proposalId: string) => `improvement/proposals/${proposalId}.json`;
 const trialKey = (trialId: string) => `improvement/trials/${trialId}.json`;
@@ -19,6 +19,16 @@ const playbookKey = (nodeId: string, scope?: PolicyScope) => {
 };
 
 const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records);
+const MAX_WRITE_RETRIES = 5;
+
+// Track B — the promotion-effect claim ledger. One ledger per SCOPE (not per node: a scope can
+// promote to several nodes in one pass, and each node's effect ids are already distinct strings,
+// so one ledger per scope keeps this to one blob read/write per promotion pass instead of one per
+// node). `${nodeId}` never appears in this key; it is already inside every effect id
+// (`strategyPromotionEffectId`/`strategyCounterEffectId` both hash it in).
+type PromotionEffectLedger = { claimed: string[] };
+const promotionEffectLedgerKeyFor = (scope?: PolicyScope) => `improvement/promotion-effects/${encodeURIComponent(scopeKey(scope))}.json`;
+const emptyPromotionEffectLedger = (): PromotionEffectLedger => ({ claimed: [] });
 
 // Blob/GCS-backed optimizer state. Proposals/trials/datasets are status-bearing documents (plain
 // JSON, overwritten on status transitions); playbooks are one document per node.
@@ -67,4 +77,53 @@ export class BlobImprovementRepository implements ImprovementRepository {
     return playbook ?? undefined;
   }
   async savePlaybook(playbook: NodePlaybook) { await this.store.setJSON(playbookKey(playbook.nodeId, playbook.scope), playbook); return playbook; }
+
+  // Track B — see ImprovementRepository.mutatePlaybook. Read-with-etag, mutate, conditional write,
+  // retry on conflict against the value that actually landed — the same CAS shape as
+  // BlobLearningRepository.mutateLedger, applied to a playbook instead of a ledger. `mutate` is
+  // called fresh on every attempt so a retry never re-applies a decision made against stale data.
+  async mutatePlaybook(
+    nodeId: string,
+    scope: PolicyScope | undefined,
+    mutate: (existing: NodePlaybook | undefined) => NodePlaybook | undefined
+  ): Promise<NodePlaybook | undefined> {
+    const key = playbookKey(nodeId, scope);
+    for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
+      const current = await getBlobJsonWithEtag<NodePlaybook>(this.store, key);
+      // T15.17 seeding: mirrors getPlaybook's own fleet-seed materialization, so a mutate against a
+      // never-read seeded node starts from the seed rather than from nothing.
+      const existing = current.data ?? (isFleetScope(scope) && playbookSeeds.has(nodeId)
+        ? applyPlaybookDelta(undefined, nodeId, playbookSeeds.get(nodeId)!, new Date().toISOString())
+        : undefined);
+      const next = mutate(existing);
+      // Track B -- `undefined` means the caller determined, from this exact `existing`, that
+      // nothing actually needs to change (e.g. a contradiction candidate that does not oppose any
+      // current item). Return the untouched value and skip the write -- never persist a no-op
+      // delta, which would otherwise fabricate an empty playbook document the first time any node
+      // is merely CONSIDERED for promotion.
+      if (next === undefined) return existing;
+      const result = await this.store.setJSON(key, next, current.etag ? { onlyIfMatch: current.etag } : { onlyIfNew: true });
+      if (!result || (result as { modified?: boolean }).modified !== false) return next;
+    }
+    throw new Error(`playbook_mutation_conflict:${nodeId}:${scopeKey(scope)}`);
+  }
+
+  // Track B — see ImprovementRepository.claimPromotionEffects. Same CAS shape as
+  // BlobLearningRepository.claimStrategyIngestionKeys, one ledger per scope instead of per project.
+  async claimPromotionEffects(scope: PolicyScope | undefined, effectIds: readonly string[]): Promise<Set<string>> {
+    const wanted = [...new Set(effectIds)];
+    if (!wanted.length) return new Set();
+    const key = promotionEffectLedgerKeyFor(scope);
+    for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
+      const current = await getBlobJsonWithEtag<PromotionEffectLedger>(this.store, key);
+      const ledger = current.data ?? emptyPromotionEffectLedger();
+      const already = new Set(ledger.claimed);
+      const newlyClaimed = wanted.filter((candidate) => !already.has(candidate));
+      if (!newlyClaimed.length) return new Set();
+      const next: PromotionEffectLedger = { claimed: [...ledger.claimed, ...newlyClaimed] };
+      const result = await this.store.setJSON(key, next, current.etag ? { onlyIfMatch: current.etag } : { onlyIfNew: true });
+      if (!result || (result as { modified?: boolean }).modified !== false) return new Set(newlyClaimed);
+    }
+    throw new Error(`promotion_effect_claim_conflict:${scopeKey(scope)}`);
+  }
 }

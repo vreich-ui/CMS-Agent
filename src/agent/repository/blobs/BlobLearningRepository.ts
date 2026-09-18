@@ -14,6 +14,15 @@ type ConversationTurnLearningLedger = { supersessions: ConversationTurnSupersess
 const ledgerKeyFor = (projectId: string, conversationId: string) => `conversation-turn-gc/${encodeURIComponent(projectId)}/${encodeURIComponent(conversationId)}.json`;
 const emptyLedger = (): ConversationTurnLearningLedger => ({ supersessions: [], references: [] });
 
+// Track B — the ingestion-key claim ledger for `tracking:strategy.v1` (strategyLearning.ts). One
+// ledger per SINK tenant (`projectId`), holding every ingestion key this tenant has ever claimed.
+// A dedicated prefix for the same C-1 reason the conversation-turn ledger has one: this is
+// bookkeeping, never an observation, and must never be mistaken for one by anything that scans a
+// prefix.
+type StrategyIngestionLedger = { claimed: string[] };
+const strategyIngestionLedgerKeyFor = (projectId: string) => `strategy-ingestion-claims/${encodeURIComponent(projectId)}.json`;
+const emptyStrategyIngestionLedger = (): StrategyIngestionLedger => ({ claimed: [] });
+
 export class BlobLearningRepository implements LearningRepository {
   constructor(private readonly workspaceRepository: WorkspaceRepository, private readonly store: BlobStoreClient = getCmsAgentBlobStore()) {}
 
@@ -80,6 +89,29 @@ export class BlobLearningRepository implements LearningRepository {
       if (!result || (result as { modified?: boolean }).modified !== false) return;
     }
     throw new Error(`conversation_turn_learning_ledger_conflict:${projectId}:${conversationId}`);
+  }
+
+  // Track B — see LearningRepository.claimStrategyIngestionKeys. The CAS loop mirrors
+  // mutateLedger below exactly (same retry count, same onlyIfMatch/onlyIfNew choice); it is not
+  // reused directly because it returns which KEYS newly landed rather than void, and because the
+  // ledger it mutates is keyed by projectId alone, not by projectId+conversationId.
+  async claimStrategyIngestionKeys(projectId: string, keys: readonly string[]): Promise<Set<string>> {
+    const wanted = [...new Set(keys)];
+    if (!wanted.length) return new Set();
+    const key = strategyIngestionLedgerKeyFor(projectId);
+    for (let attempt = 0; attempt < MAX_WRITE_RETRIES; attempt++) {
+      const current = await getBlobJsonWithEtag<StrategyIngestionLedger>(this.store, key);
+      const ledger = current.data ?? emptyStrategyIngestionLedger();
+      const already = new Set(ledger.claimed);
+      const newlyClaimed = wanted.filter((candidate) => !already.has(candidate));
+      if (!newlyClaimed.length) return new Set();
+      const next: StrategyIngestionLedger = { claimed: [...ledger.claimed, ...newlyClaimed] };
+      const result = await this.store.setJSON(key, next, current.etag ? { onlyIfMatch: current.etag } : { onlyIfNew: true });
+      if (!result || (result as { modified?: boolean }).modified !== false) return new Set(newlyClaimed);
+      // Conflict: another writer landed a claim between our read and our write. Re-read and
+      // recompute against the NEW state — a key we wanted may now belong to that other writer.
+    }
+    throw new Error(`strategy_ingestion_claim_conflict:${projectId}`);
   }
 
   async health(): Promise<RepositoryHealth> { return { ...healthyRepositoryStatus(storeBackendLabel()), version: "blobs.v1" }; }
