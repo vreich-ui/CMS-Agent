@@ -19,7 +19,10 @@ const SECTION_CONTRACT = {
     additionalProperties: true,
     required: ["sectionType", "data"],
     properties: { sectionType: { type: "string", enum: ["prose", "bio", "faq", "steps"] }, data: { type: "object", additionalProperties: true } }
-  }
+  },
+  // The real registry lives here — a TOP-LEVEL contract field, never a path inside `schema` (see
+  // siteContentObjectCompiler.ts's "CORRECTION" note, PR #387 review).
+  sectionTypes: ["prose", "bio", "faq", "steps"]
 };
 const PAGE_CONTRACT = {
   objectType: "page",
