@@ -38,6 +38,7 @@
 //
 // THIS MODULE NEVER PUBLISHES OR RELEASES. It saves one object's body -- the same "save" changeSet.ts's
 // effects declare and nothing more.
+import { contentDigest } from "./contentHash.js";
 import type { PageMaterializationPlan, PageObjectPatchOp } from "./siteContentObjectCompiler.js";
 
 export type AppliedObjectReceipt = {
@@ -107,6 +108,13 @@ export type ApplyJournalEntry = {
 export type ApplyJournalRecord = {
   materializationKey: string;
   tenantId: string;
+  // A digest of the PAYLOAD this key was first attempted with (page target + the one write effect).
+  // The materializationKey alone identifies the OPERATION, not its content: a caller that retries the
+  // same key carrying a different payload -- a doctored plan, a plan rebuilt by a newer compiler, a
+  // hand-edited ops array -- would otherwise be answered `already_applied` and have its change
+  // silently dropped. Optional only so a journal written before this field existed still reads back;
+  // a record without one is treated as "unknown payload", never as "matches".
+  planDigest?: string;
   status: "in_progress" | "complete" | "failed";
   entry: ApplyJournalEntry;
   startedAt: string;
@@ -169,6 +177,25 @@ export async function applySiteContentPlan(plan: PageMaterializationPlan, deps: 
 
   const existing = await journal.read({ tenantId: plan.tenantId, materializationKey: plan.materializationKey });
 
+  // SAME OPERATION ID, DIFFERENT PAYLOAD -> REFUSE. The materializationKey names the operation; it
+  // does not vouch for what that operation carries. A retry whose payload differs from the one this
+  // key was first attempted with is not a replay, it is a different write wearing a replay's name --
+  // and answering it `already_applied` would drop the caller's actual change without a trace.
+  const planDigest = contentDigest({ page: plan.page, write: plan.write });
+  if (existing && existing.planDigest !== undefined && existing.planDigest !== planDigest) {
+    return {
+      materializationKey: plan.materializationKey,
+      tenantId: plan.tenantId,
+      outcome: "not_applied",
+      failure: {
+        objectType: "page",
+        objectId: existing.entry.objectId ?? null,
+        code: "plan_payload_changed",
+        message: `This materializationKey was already attempted with a DIFFERENT payload. The key identifies the operation, not its content, so applying this one would either duplicate the earlier write or silently replace it -- neither is a replay. Recompile against the current tenant state to obtain a key of this payload's own, or establish what the earlier attempt wrote before retrying.`
+      }
+    };
+  }
+
   if (existing?.status === "complete" && existing.entry.status === "applied" && existing.entry.objectId && existing.entry.contentRevision !== undefined && existing.entry.version !== undefined) {
     return {
       materializationKey: plan.materializationKey,
@@ -216,8 +243,12 @@ export async function applySiteContentPlan(plan: PageMaterializationPlan, deps: 
 
   const record: ApplyJournalRecord = existing
     ? (structuredClone(existing) as ApplyJournalRecord)
-    : { materializationKey: plan.materializationKey, tenantId: plan.tenantId, status: "in_progress", entry: { objectType: "page", action, status: "pending", ...(objectId ? { objectId } : {}), at: now() }, startedAt: now(), updatedAt: now() };
+    : { materializationKey: plan.materializationKey, tenantId: plan.tenantId, planDigest, status: "in_progress", entry: { objectType: "page", action, status: "pending", ...(objectId ? { objectId } : {}), at: now() }, startedAt: now(), updatedAt: now() };
   record.status = "in_progress";
+  // A journal written before planDigest existed carries none; stamping it on the retry is what makes
+  // the NEXT retry checkable, and is safe precisely because the mismatch guard above already let this
+  // payload through (it either matched, or there was nothing to match against).
+  record.planDigest = planDigest;
 
   const commit = async () => {
     record.updatedAt = now();

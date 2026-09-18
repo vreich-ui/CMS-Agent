@@ -25,6 +25,8 @@
 // `section_types` registry) and `object_get({object_type:"page", object_id:"<any real page>",
 // projection:"summary"})` against the live Kugel-Platform connector, paste the relevant entries in
 // verbatim, and update LIVE_CAPTURE_AT below.
+import type { PageTypeRule, SectionTypeRegistryEntry } from "../../../../src/agent/operations/siteContext.js";
+
 export const LIVE_CAPTURE_AT = "2026-09-18";
 export const LIVE_CAPTURE_SOURCE = 'the live "Kugel-Platform" MCP connector, object_contract(page|section) + object_get(page, page_home)';
 
@@ -223,3 +225,1004 @@ export const LIVE_PAGE_GET_SUMMARY = {
   },
   projection: "summary"
 } as const;
+
+// THE REGISTRY GATE, STRUCTURED (C2) — all 28 entries of the live
+// `object_contract("page").contract.section_types`, each carrying `type`, `component_bound` and
+// `footprint` verbatim. Exactly two entries — `card` and `shared_ref` — carry
+// `component_bound: false` / `footprint: null`; `before_after` is present, `component_bound: true`,
+// region `flow`. `dataSchema` is carried verbatim for the handful this repo's compiler actually
+// routes to (plus `hero`, `card`, `shared_ref`); it is omitted for the rest purely to keep this
+// fixture readable — the entries themselves are the complete 28.
+export const LIVE_SECTION_REGISTRY: readonly SectionTypeRegistryEntry[] = [
+  {
+    "type": "hero",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kicker": {
+          "type": "string"
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "page"
+                      },
+                      "page": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "page"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "taxonomy"
+                      },
+                      "termKind": {
+                        "type": "string",
+                        "enum": [
+                          "category",
+                          "tag"
+                        ]
+                      },
+                      "term_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "termKind",
+                      "term_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "listing"
+                      },
+                      "list": {
+                        "type": "string",
+                        "const": "content_index"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "list"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "external"
+                      },
+                      "href": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "href"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "asset"
+                      },
+                      "href": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "href"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "route"
+                      },
+                      "href": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "href"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "style": {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "link"
+                ]
+              }
+            },
+            "required": [
+              "label",
+              "target"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "center",
+            "split",
+            "background"
+          ]
+        }
+      },
+      "required": [
+        "heading",
+        "actions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "prose",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "lede",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "checklist",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "bio",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kicker": {
+          "type": "string"
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1
+        },
+        "portraitAssetRef": {
+          "type": "string"
+        },
+        "portrait": {
+          "type": "object",
+          "properties": {
+            "src": {
+              "type": "string",
+              "minLength": 1
+            },
+            "alt": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "src",
+            "alt"
+          ],
+          "additionalProperties": false
+        },
+        "body": {
+          "type": "string"
+        },
+        "trustNotes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disclaimer": {
+          "type": "string"
+        },
+        "anchor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "heading",
+        "body",
+        "trustNotes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "content_grid",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "newsletter_signup",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow",
+      "singleton": true
+    }
+  },
+  {
+    "type": "contact_form",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow",
+      "singleton": true
+    }
+  },
+  {
+    "type": "cta_banner",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "faq",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "heading": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "q": {
+                "type": "string",
+                "minLength": 1
+              },
+              "a": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "q",
+              "a"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "link_list",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "product_preview",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "steps",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kicker": {
+          "type": "string"
+        },
+        "heading": {
+          "type": "string"
+        },
+        "items": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "icon": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "columns": {
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 2
+            },
+            {
+              "type": "number",
+              "const": 3
+            },
+            {
+              "type": "number",
+              "const": 4
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "composition",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "content_split",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "before_after",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    },
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kicker": {
+          "type": "string"
+        },
+        "heading": {
+          "type": "string"
+        },
+        "before": {
+          "type": "object",
+          "properties": {
+            "src": {
+              "type": "string",
+              "minLength": 1
+            },
+            "alt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48
+            }
+          },
+          "required": [
+            "src",
+            "alt",
+            "label"
+          ],
+          "additionalProperties": false
+        },
+        "after": {
+          "type": "object",
+          "properties": {
+            "src": {
+              "type": "string",
+              "minLength": 1
+            },
+            "alt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48
+            }
+          },
+          "required": [
+            "src",
+            "alt",
+            "label"
+          ],
+          "additionalProperties": false
+        },
+        "caption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "page"
+                    },
+                    "page": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "page"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "taxonomy"
+                    },
+                    "termKind": {
+                      "type": "string",
+                      "enum": [
+                        "category",
+                        "tag"
+                      ]
+                    },
+                    "term_id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "termKind",
+                    "term_id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "listing"
+                    },
+                    "list": {
+                      "type": "string",
+                      "const": "content_index"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "list"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "external"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "asset"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "route"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "style": {
+              "type": "string",
+              "enum": [
+                "primary",
+                "secondary",
+                "link"
+              ]
+            }
+          },
+          "required": [
+            "label",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "anchor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "before",
+        "after"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "pricing_table",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "media",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "brand_row",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "stats",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "timeline",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "comparison_table",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "testimonial",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "search",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow",
+      "singleton": true
+    }
+  },
+  {
+    "type": "content_embed",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "form_confirmation",
+    "componentBound": true,
+    "footprint": {
+      "region": "flow"
+    }
+  },
+  {
+    "type": "card",
+    "componentBound": false,
+    "footprint": null,
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "link": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "page"
+                    },
+                    "page": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "page"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "taxonomy"
+                    },
+                    "termKind": {
+                      "type": "string",
+                      "enum": [
+                        "category",
+                        "tag"
+                      ]
+                    },
+                    "term_id": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "termKind",
+                    "term_id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "listing"
+                    },
+                    "list": {
+                      "type": "string",
+                      "const": "content_index"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "list"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "external"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "asset"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "route"
+                    },
+                    "href": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "style": {
+              "type": "string",
+              "enum": [
+                "primary",
+                "secondary",
+                "link"
+              ]
+            }
+          },
+          "required": [
+            "label",
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "shared_ref",
+    "componentBound": false,
+    "footprint": null,
+    "dataSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sectionName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "section"
+      ],
+      "additionalProperties": false
+    }
+  }
+];
+
+// PAGETYPE LAW — the full live `object_contract("page").contract.page_types`, verbatim. Six entries;
+// four restrict `allowedSections`. `home` requires `["hero"]`, `listing` requires `["lede"]`;
+// `clone` and `standard` place no restriction ("any").
+export const LIVE_PAGE_TYPES: readonly PageTypeRule[] = [
+  {
+    "id": "home",
+    "routePattern": "/",
+    "allowedSections": [
+      "hero",
+      "checklist",
+      "content_grid",
+      "bio",
+      "newsletter_signup",
+      "shared_ref"
+    ],
+    "requiredSections": [
+      "hero"
+    ]
+  },
+  {
+    "id": "clone",
+    "routePattern": "/[...captured]",
+    "allowedSections": "any",
+    "requiredSections": []
+  },
+  {
+    "id": "standard",
+    "routePattern": "/[slug]",
+    "allowedSections": "any",
+    "requiredSections": []
+  },
+  {
+    "id": "system",
+    "routePattern": "/[system]",
+    "allowedSections": [
+      "hero",
+      "prose",
+      "link_list",
+      "cta_banner"
+    ],
+    "requiredSections": []
+  },
+  {
+    "id": "listing",
+    "routePattern": "/[...listing]",
+    "allowedSections": [
+      "lede",
+      "prose",
+      "cta_banner",
+      "newsletter_signup",
+      "content_grid",
+      "link_list",
+      "shared_ref"
+    ],
+    "requiredSections": [
+      "lede"
+    ]
+  },
+  {
+    "id": "content_detail",
+    "routePattern": "/[...blog]",
+    "allowedSections": [
+      "prose",
+      "cta_banner",
+      "newsletter_signup",
+      "content_grid",
+      "link_list",
+      "shared_ref"
+    ],
+    "requiredSections": []
+  }
+];
