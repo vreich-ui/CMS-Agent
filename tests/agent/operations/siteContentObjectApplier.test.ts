@@ -15,10 +15,14 @@ import { createInMemorySiteContextSource, DEFAULT_REGISTRIES } from "./fixtures/
 
 const TENANT = "kugel-platform";
 
+// `sectionTypes` is the real, live-verified shape (a TOP-LEVEL registry, never a path inside
+// `schema`/`body_schema` — see siteContentObjectCompiler.ts's "CORRECTION" note); `schema` here still
+// backs compileCandidate's own {sectionType, data} envelope check, unrelated to this fix.
 const SECTION_CONTRACT: SiteObjectFieldContract = {
   objectType: "section",
   required: ["sectionType", "data"],
-  schema: { type: "object", additionalProperties: true, required: ["sectionType", "data"], properties: { sectionType: { type: "string", enum: ["prose", "bio", "faq", "steps"] }, data: { type: "object", additionalProperties: true } } }
+  schema: { type: "object", additionalProperties: true, required: ["sectionType", "data"], properties: { sectionType: { type: "string", enum: ["prose", "bio", "faq", "steps"] }, data: { type: "object", additionalProperties: true } } },
+  sectionTypes: ["prose", "bio", "faq", "steps"]
 };
 const PAGE_CONTRACT: SiteObjectFieldContract = {
   objectType: "page",
