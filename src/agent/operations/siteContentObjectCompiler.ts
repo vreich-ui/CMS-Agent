@@ -29,8 +29,21 @@
 //
 // 1. A SEMANTIC SECTION KIND IS NOT A COMPONENT TYPE. The planner's own `sectionType` vocabulary
 //    ("about_overview", "our_team", ...) is never a registered component type. What a tenant accepts
-//    is the enum in its own `section` object contract (SECTION_TYPE_ENUM_PATH below) -- the same
-//    registry Platform's real `section_types`/`registry_get(component)` describe.
+//    is `contract.sectionTypes` (siteContext.ts) -- the tenant's registered component vocabulary,
+//    carried on the `section` object contract this module reads via `supportedComponentTypes` below.
+//
+// CORRECTION (2026-09-18, post-merge adversarial review of PR #387): this module originally read the
+// registry off `properties.sectionType.enum` inside the section contract's `body_schema` -- a shape
+// that does not exist on the live contract and made `supportedComponentTypes` return null on every
+// real compile (`section_type_registry_unavailable`, unconditionally). A live read of
+// `object_contract` for BOTH `page` and `section` (2026-09-18) shows the real registry is a TOP-LEVEL
+// `section_types` key -- `[{ type, component_bound, data_schema, editor, footprint }, ...]` -- a
+// SIBLING of `body_schema`, never a path inside it; the live `section` contract's own `body_schema` is
+// instead `{ tracking, section: { oneOf: [ ...one variant per section type... ] } }`, which has no
+// `sectionType` property at all. `contract.sectionTypes` (siteContext.ts) is that registry, extracted
+// by siteContextSourceAdapter.ts from the real top-level key; the fixtures in this module's own test
+// file now carry a literal excerpt of that live response (tests/agent/operations/fixtures/
+// liveObjectContractCapture.ts) rather than a hand-imagined shape.
 //
 // 2. A MISSING FACT IS A REFUSAL, NEVER A DOWNGRADE. Unchanged from v1 -- see compileSection below.
 //
@@ -55,7 +68,6 @@ import type { SiteContextObject, SiteSnapshot } from "./siteContext.js";
 export const PAGE_MATERIALIZATION_SCHEMA_VERSION = "site-page-materialization.v2" as const;
 export type PageMaterializationSchemaVersion = typeof PAGE_MATERIALIZATION_SCHEMA_VERSION;
 
-const SECTION_TYPE_ENUM_PATH = ["properties", "sectionType", "enum"] as const;
 const MINTED_SECTION_ID_PATTERN = /^s_[a-z0-9]+$/;
 
 // Named page-object patch ops -- verbatim shape of Platform's live `object_patch(page)` arg_schemas
@@ -159,17 +171,12 @@ const isBag = (value: unknown): value is Record<string, unknown> => typeof value
 
 const asString = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value : undefined);
 
+// Reads the tenant's registered component-type vocabulary off `contract.sectionTypes` -- the real
+// top-level `section_types` registry (see this module's header, "CORRECTION" note, for the live
+// evidence this replaced a fictional `body_schema` path with).
 const supportedComponentTypes = (snapshot: SiteSnapshot): readonly string[] | null => {
-  const contract = snapshot.contracts.byType.section;
-  if (!contract) return null;
-  let cursor: unknown = contract.schema;
-  for (const key of SECTION_TYPE_ENUM_PATH) {
-    if (!isBag(cursor)) return null;
-    cursor = cursor[key];
-  }
-  if (!Array.isArray(cursor)) return null;
-  const types = cursor.filter((entry): entry is string => typeof entry === "string");
-  return types.length ? types : null;
+  const types = snapshot.contracts.byType.section?.sectionTypes;
+  return types && types.length ? types : null;
 };
 
 type SectionCompilation =
