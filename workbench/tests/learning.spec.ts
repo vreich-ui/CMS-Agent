@@ -69,6 +69,11 @@ test.describe('Learning', () => {
     await gotoLearning(page);
     await openSubtab(page, 'obs');
 
+    // CMS-Agent track A — curation now writes a REAL, scope-addressed playbook
+    // record (playbook_apply_delta), so a scope has to be picked first; an
+    // unselected scope must never silently become a fleet mutation target.
+    await page.locator('[aria-label="Playbook scope"]').first().selectOption({ label: 'Fleet (shared by every tenant)' });
+
     const row = page.locator('.obsrow', { hasText: 'Fix the id extraction in the publish sequencer' });
     await expect(row).toBeVisible();
     await row.locator('button', { hasText: 'curate →' }).click();
@@ -76,28 +81,32 @@ test.describe('Learning', () => {
     const form = page.locator('.card', { hasText: 'curate into playbook' }).last();
     await expect(form).toBeVisible();
     // node select pre-fills from the observation's own node (publish_executor).
-    await expect(form.locator('select')).toHaveValue('publish_executor');
+    await expect(form.locator('select').first()).toHaveValue('publish_executor');
 
-    await form.locator('button', { hasText: 'Curate → playbook_curate' }).click();
-    const dialog = await expectConfirmVerb(page, 'playbook_curate');
+    await form.locator('button', { hasText: 'Curate → playbook_apply_delta' }).click();
+    const dialog = await expectConfirmVerb(page, 'playbook_apply_delta');
     await dialog.locator('button', { hasText: 'Confirm' }).click();
     await expect(confirmDialog(page)).toHaveCount(0);
-    await expect(page.locator('#toasts')).toContainText('playbook_curate');
+    await expect(page.locator('#toasts')).toContainText('playbook_apply_delta');
 
     await openSubtab(page, 'fly');
     await expect(page.locator('.fstage', { hasText: 'Curate' }).locator('.big')).toHaveText('1');
 
-    // The lesson shows up on publish_executor's own Learning tab.
+    // The lesson shows up on publish_executor's own Learning tab, read through
+    // the exact same playbook_get call the Playbooks screen uses (Learning/
+    // PlaybookPanel.tsx) — not a session-local overlay. The scope picked above
+    // is shared, cross-screen state (Learning/scope.ts), so Fleet is still
+    // selected here without picking it again.
     // P2-01 — the workbench no longer boots with publish_executor selected,
     // so select it the way the rail does.
     await page.locator('nav.main button[data-s="bench"]').click();
     await page.locator('.rail .nrow', { hasText: 'publish_executor' }).click();
     await expect(page.locator('.nhead .id')).toHaveText('publish_executor');
     await page.locator('.center .tabs button', { hasText: 'Learning' }).click();
-    await expect(page.locator('.card', { hasText: 'playbook · injected lessons' })).toContainText('1 lesson curated');
-    await expect(page.locator('.card', { hasText: 'playbook · injected lessons' })).toContainText(
-      'create_missing_object_id',
-    );
+    const playbookCard = page.locator('.card', { hasText: 'playbook' }).first();
+    await expect(playbookCard).toContainText('1 active lesson at Fleet');
+    await expect(playbookCard).toContainText('create_missing_object_id');
+    await expect(playbookCard).toContainText('Fix the id extraction in the publish sequencer');
   });
 
   test('Compare: blind mode hides the champion until a verdict is recorded; ten keyboard verdicts complete in under twenty seconds', async ({

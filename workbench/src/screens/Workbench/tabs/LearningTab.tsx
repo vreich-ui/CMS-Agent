@@ -1,11 +1,18 @@
-// Learning tab — the node's view into the flywheel: playbook injection state
-// (with provenance back to the source observation), rubric status + score
-// trend, observations mentioning this node, and fine-tune readiness. Mirrors
-// spec/mockup.html's S.tab==='learn' branch. WP-54: every control here is
-// now live — curate/create-rubric/run-regression all fire real, confirm-
-// gated verbs; "view rendered injection" and the playbook lesson list read
-// from Learning/overlay.ts (see its header comment — the mock backend's
-// playbook_curate doesn't persist on its own, this is what does).
+// Learning tab — the node's view into the flywheel: playbook state (real,
+// persisted, scope-aware — CMS-Agent track A), rubric status + score trend,
+// observations mentioning this node, and fine-tune readiness. Mirrors
+// spec/mockup.html's S.tab==='learn' branch.
+//
+// CMS-Agent track A (2026-09-18): this card used to read from
+// Learning/overlay.ts's session-local CuratedLesson demonstration store and
+// render a hand-reconstructed "injection" string that was never what any
+// backend call actually returned — see the track-A report for the full
+// rationale. It now shares Learning/PlaybookPanel.tsx with the Learning →
+// Playbooks screen, so both surfaces read the exact same playbook_get /
+// playbook_apply_delta round trip through one normalization path
+// (api/adapters.ts's toPlaybookView). The playbook scope (fleet vs. a
+// specific tenant) is shared, cross-screen UI state from Learning/scope.ts —
+// picking it here also affects the Learning screen, and vice versa.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useObservations, useReadiness, useRubrics } from '../../../api/hooks';
@@ -16,10 +23,10 @@ import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_MOCK } from '../../../api/client';
 import { useStore } from '../../../store';
-import { usePlaybook } from '../queries';
-import { renderInjection } from '../../Learning/Playbooks';
-import { useApprovedDelta, useCuratedLessons } from '../../Learning/overlay';
-import { Disclosure, ErrorNote, LoadingNote } from './Shared';
+import { PlaybookPanel } from '../../Learning/PlaybookPanel';
+import { ScopePicker } from '../../Learning/ScopePicker';
+import { useApprovedDelta } from '../../Learning/overlay';
+import { ErrorNote, LoadingNote } from './Shared';
 
 const HELD_THRESHOLD = 0.85;
 
@@ -28,11 +35,9 @@ export function LearningTab({ nodeId }: { nodeId: string }) {
   const setScreen = useStore((s) => s.setScreen);
   const qc = useQueryClient();
 
-  const playbookQ = usePlaybook(nodeId);
   const rubricsQ = useRubrics();
   const readinessQ = useReadiness(nodeId);
   const obsQ = useObservations(nodeId);
-  const curated = useCuratedLessons(nodeId);
   const approvedDelta = useApprovedDelta();
 
   const rubric = rubricsQ.data?.find((r) => r.node === nodeId);
@@ -80,7 +85,6 @@ export function LearningTab({ nodeId }: { nodeId: string }) {
     }
   }
 
-  const tokens = curated.reduce((sum, l) => sum + l.tokens, 0);
   const approved = (readinessQ.data?.approvedExamples ?? 0) + approvedDelta;
 
   return (
@@ -88,52 +92,16 @@ export function LearningTab({ nodeId }: { nodeId: string }) {
       <Card
         label={
           <>
-            playbook · injected lessons <span className="pin live">live — part of the effective prompt</span>
+            playbook <span className="pin live">live — real backend record for the selected scope</span>
           </>
         }
       >
-        {curated.length > 0 ? (
-          <>
-            <p style={{ margin: '0 0 8px' }}>
-              {curated.length} lesson{curated.length === 1 ? '' : 's'} curated for this node · {tokens} tokens
-            </p>
-            {curated.map((l) => (
-              <div className="obsrow" key={l.id}>
-                <span className="when">{l.when}</span>
-                <span className="txt">
-                  {l.text}
-                  {l.fromObservationId && (
-                    <span className="mono" style={{ color: 'var(--faint)', marginLeft: 8, fontSize: 10.5 }}>
-                      from {l.fromObservationId.slice(-10)}
-                    </span>
-                  )}
-                </span>
-              </div>
-            ))}
-          </>
-        ) : playbookQ.isLoading ? (
-          <LoadingNote>Loading playbook…</LoadingNote>
-        ) : playbookQ.isError ? (
-          <ErrorNote message={playbookQ.error?.message} />
-        ) : (
-          <p style={{ color: 'var(--muted)', fontSize: 12.5, margin: '0 0 8px' }}>
-            No curated playbook yet for this node.{' '}
-            {obsQ.isLoading
-              ? 'Checking observations…'
-              : obs.length > 0
-                ? `${obs.length} observation(s) mention it — curate below.`
-                : 'Observations feed this: curate one from the Learning surface.'}
-          </p>
-        )}
-        <div className="editnote">
-          <Disclosure openLabel="view rendered injection" closeLabel="hide injection">
-            <div className="promptbox" style={{ maxHeight: 200 }}>
-              {renderInjection(nodeId)}
-            </div>
-          </Disclosure>
+        <div className="editnote" style={{ marginBottom: 8 }}>
+          <ScopePicker compact />
+          <Btn onClick={() => goLearning('pb')}>open playbook screen</Btn>
           <Btn onClick={() => goLearning('obs')}>open observations</Btn>
-          <Btn onClick={() => goLearning('pb')}>open playbook</Btn>
         </div>
+        <PlaybookPanel nodeId={nodeId} />
       </Card>
 
       <Card label="evaluation">
