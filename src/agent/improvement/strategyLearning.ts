@@ -1049,7 +1049,17 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   // become fleet knowledge just because no CMS-Agent id was given. Nothing about the observations
   // just written changes — only promotion is withheld, and the result says so by name rather than
   // reading identically to "nothing was stable yet".
-  if (!params.cmsAgentProjectId) {
+  //
+  // `.trim()` here is load-bearing, not cosmetic: `normalizeScope`/`isFleetScope` (policyScope.ts)
+  // treat a blank-after-trim scope value as UNNAMED and collapse `{ site: "  " }` straight to the
+  // fleet scope `{}` — the same fleet playbook key every other tenant reads. A bare `!x` check would
+  // wave a whitespace-only id through as "known" and hand it to `promoteStrategySignals`, which would
+  // then silently promote to fleet: the exact leak this fix exists to close, reopened by a value that
+  // cannot name a tenant by the scope vocabulary's own definition (`isPresent`) any more than an
+  // absent one can. The one caller wired today (`runStrategyLearningJob`) already trims before this
+  // point, but this function's own doc comment claims to BE the enforcement boundary, so it enforces
+  // it here rather than trusting every future caller to repeat that trim.
+  if (!params.cmsAgentProjectId?.trim()) {
     result.promotionSkipped = "unknown_tenant";
     return result;
   }
