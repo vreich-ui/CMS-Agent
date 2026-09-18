@@ -8,6 +8,7 @@ import {
   SiteContextSourceReadError,
   SiteContextSourceUnknownTenantError
 } from "../../../src/agent/operations/siteContextSourceAdapter.js";
+import { LIVE_PAGE_GET_SUMMARY, LIVE_SECTION_TYPES } from "./fixtures/liveObjectContractCapture.js";
 
 const jsonResponse = (result: unknown) => ({ ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) }) as unknown as Response;
 
@@ -69,6 +70,74 @@ describe("ProjectSiteContextSourceAdapter (production SiteContextSource, A4)", (
       // never fabricated, never left as the wrong value.
       { objectId: "vis_drlurie_old", objectType: "visual_standard", status: "changes_requested", version: 1, contentRevision: 1, publishedTime: null, updatedAt: "", fields: {} }
     ]);
+  });
+
+  // REGRESSION -- adversarial review of PR #387 (2026-09-18) found `fields` hardcoded to `{}` for
+  // every page, because object_inventory's LIST-mode summary rows never carry field content (confirmed
+  // live) and nothing backfilled it. This made a page's own inline sections invisible to
+  // siteContentObjectCompiler.ts's patch-diffing -- every "patch" compiled as if the page had none.
+  it("backfills a page row's `fields` from a real object_get, on top of the object_inventory listing (live-captured response)", async () => {
+    const { transport, calls } = makeTenantDouble({
+      object_inventory: () => ({ structuredContent: { items: [{ object_id: "page_home", object_type: "page", version: 21, content_revision: 6, status: "active" }] } }),
+      object_get: () => ({ structuredContent: LIVE_PAGE_GET_SUMMARY })
+    });
+    const adapter = buildAdapter(transport);
+    const objects = await adapter.listObjects({ tenantId: "dr-lurie", objectType: "page" });
+
+    expect(calls).toEqual([
+      { tool: "object_inventory", args: { object_type: "page" } },
+      { tool: "object_get", args: { object_type: "page", object_id: "page_home", projection: "summary" } }
+    ]);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]!.fields).toEqual(LIVE_PAGE_GET_SUMMARY.record.body);
+    expect((objects[0]!.fields as { sections: unknown[] }).sections).toHaveLength(2);
+  });
+
+  it("never enriches a non-page object type -- fields stays `{}` exactly as before this fix", async () => {
+    const { transport, calls } = makeTenantDouble({
+      object_inventory: () => ({ structuredContent: { items: [{ object_id: "vis_drlurie", object_type: "visual_standard", version: 1, content_revision: 1, status: "active" }] } })
+    });
+    const adapter = buildAdapter(transport);
+    const objects = await adapter.listObjects({ tenantId: "dr-lurie", objectType: "visual_standard" });
+
+    expect(calls).toEqual([{ tool: "object_inventory", args: { object_type: "visual_standard" } }]);
+    expect(objects[0]!.fields).toEqual({});
+  });
+
+  it("throws SiteContextSourceReadError, never a silently-empty fields object, when a page's own object_get read fails at the transport", async () => {
+    // A genuine TRANSPORT failure (non-200), matching how this file's other "surfaces structurally"
+    // tests simulate a real read failure -- `callReadTool`'s own `ok` reflects the transport, not an
+    // MCP-level `isError` (see clientToolResult.ts's header on that distinction); this adapter's reads
+    // have never inspected `isError` and this fix does not start doing so for object_get either.
+    const transport: McpTransport = async (_input, init) => {
+      const request = JSON.parse(init.body) as ParsedRequest;
+      if (request.method === "initialize") return jsonResponse({ protocolVersion: "2024-11-05" });
+      if (request.method === "tools/call" && request.params?.name === "object_inventory") {
+        return jsonResponse({ structuredContent: { items: [{ object_id: "page_home", object_type: "page", version: 21, content_revision: 6, status: "active" }] } });
+      }
+      return { ok: false, status: 503, json: async () => ({}), text: async () => "service unavailable" } as unknown as Response;
+    };
+    const adapter = buildAdapter(transport);
+    await expect(adapter.listObjects({ tenantId: "dr-lurie", objectType: "page" })).rejects.toThrow(SiteContextSourceReadError);
+  });
+
+  it("getObjectContract extracts the real, top-level `section_types` registry into `sectionTypes` (live-captured shape)", async () => {
+    const { transport, calls } = makeTenantDouble({
+      object_contract: () => ({
+        structuredContent: {
+          contract: {
+            object_type: "section",
+            body_schema: { type: "object", properties: { tracking: { type: "object" }, section: { oneOf: [] } } },
+            section_types: LIVE_SECTION_TYPES
+          }
+        }
+      })
+    });
+    const adapter = buildAdapter(transport);
+    const contract = await adapter.getObjectContract({ tenantId: "dr-lurie", objectType: "section" });
+
+    expect(calls).toEqual([{ tool: "object_contract", args: { object_type: "section" } }]);
+    expect(contract?.sectionTypes).toEqual(LIVE_SECTION_TYPES.map((entry) => entry.type));
   });
 
   it("getObjectContract calls exactly object_contract({object_type}) and reduces body_schema to {objectType, required, schema}", async () => {
