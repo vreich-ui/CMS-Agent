@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformSiteObjectWriter } from "../../../src/agent/projects/platformSiteObjectWriter.js";
 import type { ClientToolCall } from "../../../src/agent/projects/clientToolResult.js";
 import type { PageObjectPatchOp } from "../../../src/agent/operations/siteContentObjectCompiler.js";
+import { LIVE_PAGE_GET_SUMMARY } from "../operations/fixtures/liveObjectContractCapture.js";
 
 type ScriptedCall = { tool: string; args: Record<string, unknown> };
 
@@ -110,6 +111,20 @@ describe("createPlatformSiteObjectWriter — patchObject, the happy path", () =>
     expect(log[3]!.args).toMatchObject({ object_type: "page", object_id: "page_about", lock_token: "lock_abc123" });
   });
 
+  // NOT a live capture (object_patch is write-adjacent and forbidden to call live -- see this module's
+  // own header) -- this only proves the depth-agnostic reader introduced for the readObject regression
+  // below ALSO reaches content_revision/version if object_patch's response nests them the same way
+  // object_get's does, rather than assuming object_patch is exempt from the bug just because it was
+  // not independently observed.
+  it("reads content_revision/version off a record-nested object_patch response, not only a flat one", async () => {
+    const { call } = scriptedCall({ object_checkout: CHECKOUT_OK, object_validate: VALIDATE_OK, object_patch: { record: { object_id: "page_about", content_revision: 8, version: 9 } }, object_checkin: {} });
+    const writer = createPlatformSiteObjectWriter({ call, siteObjectId: "site_platform" });
+
+    const result = await writer.patchObject({ tenantId: "t", objectType: "page", objectId: "page_about", ops: [{ op: "set_page_meta", fields: { title: "About Us" } }] });
+
+    expect(result).toEqual({ objectId: "page_about", contentRevision: 8, version: 9 });
+  });
+
   it("reads the checkout's lock token under either spelling -- lockToken (the documented live shape) or lock_token", async () => {
     const { call, log } = scriptedCall({ object_checkout: { lock_token: "lock_snake", record_version: 2 }, object_validate: VALIDATE_OK, object_patch: { content_revision: 3, version: 3 }, object_checkin: {} });
     const writer = createPlatformSiteObjectWriter({ call, siteObjectId: "site_platform" });
@@ -194,5 +209,22 @@ describe("createPlatformSiteObjectWriter — readObject", () => {
     const writer = createPlatformSiteObjectWriter({ call, siteObjectId: "site_platform" });
 
     expect(await writer.readObject({ tenantId: "t", objectType: "page", objectId: "page_1" })).toBeNull();
+  });
+
+  // REGRESSION -- adversarial review of PR #387 (2026-09-18) found readContentRevision/readVersion
+  // reading content_revision/version at the envelope's own top level, when a live, read-only
+  // object_get call shows they live nested under `record` (this fixture is that exact live response,
+  // verbatim -- see liveObjectContractCapture.ts). Against the ORIGINAL shallow reader this test would
+  // have returned null (readObject reporting "no such object" for a page that plainly exists), which
+  // -- on the createObject/patchObject side of this same reader -- is exactly how a landed create could
+  // report itself `not_applied` and then `blocked_indeterminate` on retry: an orphan nobody is told
+  // about.
+  it("reads content_revision/version off the REAL, record-nested object_get envelope (live capture)", async () => {
+    const { call } = scriptedCall({ object_get: LIVE_PAGE_GET_SUMMARY });
+    const writer = createPlatformSiteObjectWriter({ call, siteObjectId: "site_platform" });
+
+    const result = await writer.readObject({ tenantId: "kugel-platform", objectType: "page", objectId: "page_home" });
+
+    expect(result).toEqual({ objectId: "page_home", contentRevision: 6, version: 21 });
   });
 });
