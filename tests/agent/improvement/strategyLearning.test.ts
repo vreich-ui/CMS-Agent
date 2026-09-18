@@ -544,6 +544,30 @@ describe("ingestStrategyRollups", () => {
       }
     });
 
+    it("treats a whitespace-only cmsAgentProjectId the same as a fully-absent one", async () => {
+      // The reviewer gap: `!cmsAgentProjectId` alone lets a blank-after-trim string ("  ") through as
+      // "known", because a non-empty string is truthy — but `normalizeScope`/`isFleetScope`
+      // (policyScope.ts) trim it away and treat it as UNNAMED, which would silently collapse
+      // `{ site: "  " }` to the literal fleet scope. That is the exact leak this fix exists to close,
+      // reopened by a value that cannot name a tenant any more than an absent one can. The guard must
+      // therefore quarantine a whitespace-only id exactly like `undefined`.
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "   ", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "   ", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+
+      expect(second.promotionSkipped).toBe("unknown_tenant");
+      expect(second.promotion.promoted).toEqual([]);
+      for (const nodeId of STRATEGY_PLAYBOOK_TARGET_NODES) {
+        // Same assertion as the fully-absent case: nothing this evidence produced reaches the FLEET
+        // playbook a tenant-blind dispatch would read.
+        expect(await improvementRepository.getPlaybook(nodeId)).toBeUndefined();
+      }
+      // And the evidence itself is still recorded, exactly as the fully-absent case is (see the first
+      // test in this block) — quarantine withholds promotion only, never the observation.
+      const stored = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+      expect(stored).toHaveLength(2);
+    });
+
     it("does not withhold promotion once the SAME evidence is re-ingested with a named tenant", async () => {
       // Quarantine is about missing attribution, not about the evidence itself: the exact same rows,
       // ingested with a resolvable tenant id, promote normally. This also pins that the guard is not
