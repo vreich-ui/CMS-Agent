@@ -4,7 +4,7 @@ import { createSiteContentTools } from "../../../src/agent/mcp/workspace/siteCon
 import type { SiteContextSource } from "../../../src/agent/operations/siteContext.js";
 import { WorkspaceToolError } from "../../../src/agent/mcp/workspace/toolKit.js";
 
-// site_content.compile_page_objects — the read-only review surface. The compilation rules
+// site_content.compile_page_objects -- the read-only review surface. The compilation rules
 // themselves are pinned in tests/agent/operations/siteContentObjectCompiler.test.ts; this file
 // guards the wire behaviour: project gating, a snapshot read failure reported as itself rather than
 // compiled against nothing, a refusal returned as a RESULT, and the absence of any write path.
@@ -60,10 +60,11 @@ describe("site_content.compile_page_objects", () => {
     // A fresh revision id per test avoids the module-level snapshot cache handing back another
     // test's capture.
     const result = (await compileTool(readOnlySource("rev_compile_ok")).execute({ project_id: "acme", drafted: [ORGANIZATION], page: PAGE })) as { data: unknown };
-    const payload = result.data as { compiled: boolean; plan: { sections: { componentType: string; order: number; sourceRunId: string }[] }; revisionId: string };
+    const payload = result.data as { compiled: boolean; plan: { schemaVersion: string; sectionProvenance: { componentType: string; order: number; sourceRunId: string }[] }; revisionId: string };
 
     expect(payload.compiled).toBe(true);
-    expect(payload.plan.sections[0]).toMatchObject({ componentType: "prose", order: 1, sourceRunId: "run_a" });
+    expect(payload.plan.schemaVersion).toBe("site-page-materialization.v2");
+    expect(payload.plan.sectionProvenance[0]).toMatchObject({ componentType: "prose", order: 1, sourceRunId: "run_a" });
     expect(payload.revisionId).toBe("rev_compile_ok");
   });
 
