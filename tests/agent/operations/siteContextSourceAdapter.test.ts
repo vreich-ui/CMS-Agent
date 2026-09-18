@@ -75,7 +75,7 @@ describe("ProjectSiteContextSourceAdapter (production SiteContextSource, A4)", (
   // REGRESSION -- adversarial review of PR #387 (2026-09-18) found `fields` hardcoded to `{}` for
   // every page, because object_inventory's LIST-mode summary rows never carry field content (confirmed
   // live) and nothing backfilled it. This made a page's own inline sections invisible to
-  // siteContentObjectCompiler.ts's patch-diffing — every "patch" compiled as if the page had none.
+  // siteContentObjectCompiler.ts's patch-diffing -- every "patch" compiled as if the page had none.
   it("backfills a page row's `fields` from a real object_get, on top of the object_inventory listing (live-captured response)", async () => {
     const { transport, calls } = makeTenantDouble({
       object_inventory: () => ({ structuredContent: { items: [{ object_id: "page_home", object_type: "page", version: 21, content_revision: 6, status: "active" }] } }),
