@@ -33,10 +33,15 @@ import readinessJson from './fixtures/readiness.json';
 import agentsJson from './fixtures/agents.json';
 import { WORKFLOW_CATALOG } from './workflowCatalog';
 import type {
+  PlaybookItemKind,
   RawAgent,
   RawDataset,
   RawFinetuneReadiness,
+  RawNodePlaybook,
   RawObservation,
+  RawPlaybookApplyDeltaResult,
+  RawPlaybookGetResult,
+  RawPlaybookItem,
   RawProject,
   RawRegressionReport,
   RawRubric,
@@ -169,12 +174,26 @@ class MockStore {
    *  `${runId}:${nodeId}`. In-memory only, exactly like every other mock
    *  mutation: a mock save is not a real one. */
   private stageOverrides: Map<string, { value: unknown; note?: string; savedAt: string }>;
+  /**
+   * CMS-Agent track A (2026-09-18) — per-(node, scope) playbook records, keyed
+   * `${nodeId}::${scopeKey}` where scopeKey is `fleet` or `site=<projectId>` —
+   * the exact string src/agent/scope/policyScope.ts's scopeKey() would produce,
+   * so the mock's `scope` field in playbook_get/apply_delta responses matches
+   * what a live call returns. In-memory only, seeded empty: the fixture set
+   * has never captured a playbook (see fixtures/README.md), so an operator
+   * curating in mock mode is building state from nothing, same as against a
+   * brand-new tenant on the live backend.
+   */
+  private playbooks: Map<string, RawNodePlaybook>;
+  /** Monotonic id source for mock playbook item ids — same pattern as executionCounter. */
+  private playbookItemCounter = 0;
 
   constructor() {
     this.workflows = WORKFLOW_CATALOG;
     this.nodes = clone((nodesJson as unknown as { nodes: RawWorkflowNode[] }).nodes);
     this.changeEvents = clone((changesJson as unknown as { events: MockChangeEvent[] }).events);
     this.stageOverrides = new Map();
+    this.playbooks = new Map();
     this.projects = clone((projectsJson as unknown as { projects: RawProject[] }).projects);
     this.runs = clone((runsJson as unknown as { runs: RawRun[] }).runs);
     this.costLedgers = new Map(
@@ -828,6 +847,195 @@ class MockStore {
     if (!obs) return undefined;
     this.observations = this.observations.filter((o) => o.id !== id);
     return obs;
+  }
+
+  // --- playbook (CMS-Agent track A, 2026-09-18) ---------------------------
+  // Mirrors src/agent/improvement/playbook.ts's applyPlaybookDelta /
+  // renderPlaybookForPrompt / composeScopedPlaybooksForPrompt and
+  // src/agent/improvement/playbookRetrieval.ts's composePlaybookForDispatch
+  // closely enough that a fixture-mode round trip (add → get → reload) is a
+  // real regression net for the live adapter, not a parallel fiction — see
+  // handlers.ts's own header comment on why that symmetry matters. Kept as
+  // a second, independent implementation deliberately: this is UI-bundle
+  // code and must not import the backend's Node-only agent modules (see
+  // CMS-Agent-track-A-report.md's dependency note on why the two can drift
+  // and how a contract test would catch it).
+
+  private playbookKey(nodeId: string, scopeKey: string): string {
+    return `${nodeId}::${scopeKey}`;
+  }
+
+  /** `{projectId}` → `site=<projectId>`; `undefined` → `fleet` — the same spelling scopeKey() in policyScope.ts produces. */
+  private playbookScopeKeyFor(projectId?: string): string {
+    return projectId ? `site=${projectId}` : 'fleet';
+  }
+
+  private normalizePlaybookText(text: string): string {
+    return text.toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  private playbookNetHelpfulness(item: RawPlaybookItem): number {
+    return item.helpfulCount - item.harmfulCount;
+  }
+
+  private makePlaybookItemId(): string {
+    this.playbookItemCounter += 1;
+    return `pb_${Date.now()}_${this.playbookItemCounter.toString(36)}`;
+  }
+
+  /** Exactly renderPlaybookForPrompt's rule: active items by net helpfulness, hard-truncated to the char budget. */
+  private renderPlaybookForPrompt(playbook: RawNodePlaybook): string {
+    const lines: string[] = [];
+    let used = 0;
+    const active = playbook.items
+      .filter((item) => item.status === 'active')
+      .sort((a, b) => this.playbookNetHelpfulness(b) - this.playbookNetHelpfulness(a));
+    for (const item of active) {
+      const line = `- (${item.kind}) ${item.text}`;
+      if (used + line.length + 1 > playbook.budget.maxChars) break;
+      lines.push(line);
+      used += line.length + 1;
+    }
+    return lines.join('\n');
+  }
+
+  /** Exactly composeScopedPlaybooksForPrompt's rule: chain order (site first, fleet last), dedup by normalized text (first scope in the chain wins), truncated to the largest budget in the chain. */
+  private composePlaybooksForPrompt(playbooks: RawNodePlaybook[]): string {
+    if (!playbooks.length) return '';
+    const maxChars = Math.max(...playbooks.map((p) => p.budget.maxChars));
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    let used = 0;
+    for (const playbook of playbooks) {
+      const active = playbook.items
+        .filter((item) => item.status === 'active')
+        .sort((a, b) => this.playbookNetHelpfulness(b) - this.playbookNetHelpfulness(a));
+      for (const item of active) {
+        const key = this.normalizePlaybookText(item.text);
+        if (seen.has(key)) continue;
+        const line = `- (${item.kind}) ${item.text}`;
+        if (used + line.length + 1 > maxChars) return lines.join('\n');
+        seen.add(key);
+        lines.push(line);
+        used += line.length + 1;
+      }
+    }
+    return lines.join('\n');
+  }
+
+  /** `playbook_get`. Chain order matches playbookScopeChain: this scope's own record first (if a tenant), then fleet. */
+  getPlaybook(nodeId: string, projectId?: string): RawPlaybookGetResult {
+    const scopeKey = this.playbookScopeKeyFor(projectId);
+    const own = this.playbooks.get(this.playbookKey(nodeId, scopeKey)) ?? null;
+    const chainKeys = projectId ? [scopeKey, 'fleet'] : ['fleet'];
+    const found: RawNodePlaybook[] = [];
+    const scopeKeys: string[] = [];
+    for (const key of chainKeys) {
+      const playbook = this.playbooks.get(this.playbookKey(nodeId, key));
+      if (!playbook) continue;
+      found.push(playbook);
+      scopeKeys.push(key);
+    }
+    return {
+      playbook: own,
+      scope: scopeKey,
+      rendered: own ? this.renderPlaybookForPrompt(own) : '',
+      composed: { text: this.composePlaybooksForPrompt(found), scopeKeys, unreadableScopeKeys: [] },
+    };
+  }
+
+  /** `playbook_apply_delta`. Add dedups by normalized text (a repeat add — including a retired item's exact text — flips it active and bumps helpfulCount, which is this fixture's only "restore" path, same as the live backend's); the budget evicts the lowest net-helpfulness active items first, never ones this delta just added. */
+  applyPlaybookDelta(
+    nodeId: string,
+    delta: { add?: Array<{ text: string; kind: PlaybookItemKind; provenance?: RawPlaybookItem['provenance'] }>; markHelpful?: string[]; markHarmful?: string[]; retire?: string[] },
+    projectId?: string,
+  ): RawPlaybookApplyDeltaResult {
+    const scopeKey = this.playbookScopeKeyFor(projectId);
+    const key = this.playbookKey(nodeId, scopeKey);
+    const nowIso = new Date().toISOString();
+    const existing = this.playbooks.get(key);
+    const playbook: RawNodePlaybook = existing
+      ? clone(existing)
+      : { nodeId, items: [], budget: { maxItems: 12, maxChars: 2000 }, version: 0, updatedAt: nowIso, ...(projectId ? { scope: { site: projectId } } : {}) };
+
+    const byNormalizedText = new Map(playbook.items.map((item) => [this.normalizePlaybookText(item.text), item]));
+    const addedIds = new Set<string>();
+    for (const addition of delta.add ?? []) {
+      const norm = this.normalizePlaybookText(addition.text);
+      const duplicate = byNormalizedText.get(norm);
+      if (duplicate) {
+        duplicate.helpfulCount += 1;
+        duplicate.status = 'active';
+        duplicate.updatedAt = nowIso;
+        continue;
+      }
+      const item: RawPlaybookItem = {
+        itemId: this.makePlaybookItemId(),
+        text: addition.text.trim(),
+        kind: addition.kind,
+        helpfulCount: 1,
+        harmfulCount: 0,
+        status: 'active',
+        provenance: addition.provenance ?? { source: 'human' },
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      playbook.items.push(item);
+      byNormalizedText.set(norm, item);
+      addedIds.add(item.itemId);
+    }
+    for (const itemId of delta.markHelpful ?? []) {
+      const item = playbook.items.find((i) => i.itemId === itemId);
+      if (item) { item.helpfulCount += 1; item.updatedAt = nowIso; }
+    }
+    for (const itemId of delta.markHarmful ?? []) {
+      const item = playbook.items.find((i) => i.itemId === itemId);
+      if (item) { item.harmfulCount += 1; item.updatedAt = nowIso; }
+    }
+    for (const itemId of delta.retire ?? []) {
+      const item = playbook.items.find((i) => i.itemId === itemId);
+      if (item) { item.status = 'retired'; item.updatedAt = nowIso; }
+    }
+
+    const active = playbook.items.filter((item) => item.status === 'active');
+    if (active.length > playbook.budget.maxItems) {
+      const evictable = active
+        .filter((item) => !addedIds.has(item.itemId))
+        .sort((a, b) => this.playbookNetHelpfulness(a) - this.playbookNetHelpfulness(b));
+      for (const item of evictable.slice(0, active.length - playbook.budget.maxItems)) {
+        item.status = 'retired';
+        item.updatedAt = nowIso;
+      }
+    }
+
+    playbook.version += 1;
+    playbook.updatedAt = nowIso;
+    this.playbooks.set(key, playbook);
+    return { playbook: clone(playbook), scope: scopeKey };
+  }
+
+  /** `playbook_migrate_observations`. Global, fleet-scoped only — matches the live tool's own scope (it calls `improvementRepository.getPlaybook(nodeId)` with no scope argument). Groups every non-archived observation that carries a nodeId (this fixture's observations are never archived — see getObservations/archiveObservation above, which deletes rather than flagging) and applies one `add` delta per node, provenance `migration`. */
+  migratePlaybookObservations(dryRun?: boolean): { migratedNodes: number; migratedObservations: number; skippedWithoutNodeId: number; dryRun: boolean } {
+    const byNode = new Map<string, string[]>();
+    let skipped = 0;
+    for (const obs of this.observations) {
+      const nodeId = obs.nodeId ?? undefined;
+      if (!nodeId) { skipped += 1; continue; }
+      const list = byNode.get(nodeId) ?? [];
+      list.push(obs.observation);
+      byNode.set(nodeId, list);
+    }
+    if (!dryRun) {
+      for (const [nodeId, texts] of byNode) {
+        this.applyPlaybookDelta(nodeId, { add: texts.map((text) => ({ text, kind: 'strategy' as const, provenance: { source: 'migration' as const } })) });
+      }
+    }
+    return {
+      migratedNodes: byNode.size,
+      migratedObservations: [...byNode.values()].reduce((sum, texts) => sum + texts.length, 0),
+      skippedWithoutNodeId: skipped,
+      dryRun: Boolean(dryRun),
+    };
   }
 
   getRubrics(): RawRubric[] {
