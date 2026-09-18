@@ -140,6 +140,56 @@ describe("ProjectSiteContextSourceAdapter (production SiteContextSource, A4)", (
     expect(contract?.sectionTypes).toEqual(LIVE_SECTION_TYPES.map((entry) => entry.type));
   });
 
+  it("getObjectContract extracts the STRUCTURED registry off the page contract, keeping component_bound and footprint", async () => {
+    // C2: a name list cannot express placeability. The adapter must carry `component_bound` and
+    // `footprint` through, or the compiler's placeability gate has nothing to read.
+    const { transport } = makeTenantDouble({
+      object_contract: () => ({
+        structuredContent: {
+          contract: {
+            object_type: "page",
+            body_schema: { type: "object", required: ["route", "pageType", "title", "seo", "sections"], properties: {} },
+            section_types: [
+              { type: "prose", component_bound: true, footprint: { region: "flow" }, data_schema: { type: "object" } },
+              { type: "before_after", component_bound: true, footprint: { region: "flow" } },
+              { type: "card", component_bound: false, footprint: null },
+              { type: "shared_ref", component_bound: false, footprint: null }
+            ],
+            page_types: [
+              { id: "home", routePattern: "/", allowedSections: ["hero", "bio"], requiredSections: ["hero"] },
+              { id: "standard", routePattern: "/[slug]", allowedSections: "any" }
+            ]
+          }
+        }
+      })
+    });
+    const adapter = buildAdapter(transport);
+    const contract = await adapter.getObjectContract({ tenantId: "dr-lurie", objectType: "page" });
+
+    expect(contract?.required).toEqual(["route", "pageType", "title", "seo", "sections"]);
+    expect(contract?.sectionRegistry).toEqual([
+      { type: "prose", componentBound: true, footprint: { region: "flow" }, dataSchema: { type: "object" } },
+      { type: "before_after", componentBound: true, footprint: { region: "flow" } },
+      { type: "card", componentBound: false, footprint: null },
+      { type: "shared_ref", componentBound: false, footprint: null }
+    ]);
+    expect(contract?.pageTypes).toEqual([
+      { id: "home", routePattern: "/", allowedSections: ["hero", "bio"], requiredSections: ["hero"] },
+      { id: "standard", routePattern: "/[slug]", allowedSections: "any", requiredSections: [] }
+    ]);
+  });
+
+  it("treats a registry entry with no component_bound flag as NOT placeable, never as placeable by default", async () => {
+    const { transport } = makeTenantDouble({
+      object_contract: () => ({
+        structuredContent: { contract: { object_type: "page", body_schema: { type: "object", properties: {} }, section_types: [{ type: "mystery" }] } }
+      })
+    });
+    const adapter = buildAdapter(transport);
+    const contract = await adapter.getObjectContract({ tenantId: "dr-lurie", objectType: "page" });
+    expect(contract?.sectionRegistry).toEqual([{ type: "mystery", componentBound: false, footprint: null }]);
+  });
+
   it("getObjectContract calls exactly object_contract({object_type}) and reduces body_schema to {objectType, required, schema}", async () => {
     const { transport, calls } = makeTenantDouble({
       object_contract: () => ({ structuredContent: { contract: { object_type: "visual_standard", body_schema: { type: "object", required: ["primaryColor"], properties: { primaryColor: { type: "string" } } } } } })

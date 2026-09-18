@@ -83,6 +83,9 @@ const toWireOp = (op: PageObjectPatchOp): Record<string, unknown> => {
       return { op: "set_section_visibility", section_id: op.sectionId, visibility: op.visibility };
     case "remove_section":
       return { op: "remove_section", section_id: op.sectionId };
+    case "set_tracking":
+      // The live arg_schema is `{op, fields}` (fields nullable) -- no `section_id`, and no rename.
+      return { op: "set_tracking", fields: op.fields };
   }
 };
 

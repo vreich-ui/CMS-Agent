@@ -558,16 +558,30 @@ export function compilePagePlanV2(params: CompilePagePlanV2Params): CompilePageP
 // -------------------------------------------------------------------------------------------
 
 export function isSitePageMaterializationV2Plan(value: unknown): value is SitePageMaterializationV2Plan {
-  return isBag(value) && value.schemaVersion === SITE_PAGE_MATERIALIZATION_V2_SCHEMA_VERSION;
+  // THE VERSION STRING ALONE IS NOT A DISCRIMINATOR. siteContentObjectCompiler.ts's own
+  // PAGE_MATERIALIZATION_SCHEMA_VERSION is the byte-identical string "site-page-materialization.v2"
+  // (both compilers were rebuilt against the same contract, in parallel, and landed on the same
+  // name). So a v1 plan matched this guard on the version alone, and the doc comments below claiming
+  // "a v1 plan carries no schemaVersion at all" were false the moment both landed on main -- which
+  // made `assertSitePageMaterializationV2Plan` accept a v1 plan and `assertNotSitePageMaterializationV2Plan`
+  // reject one. The two shapes are not ambiguous structurally: a v2 plan carries `units` (the compiled
+  // page units) and a single `changeSet`; a v1 plan carries `write`, `sectionProvenance` and a
+  // `changeSets` ARRAY, and has no `units` at all. Requiring `units` is what makes this guard mean
+  // what its name says.
+  //
+  // Renaming one of the two constants would also resolve it, but both are on the wire today
+  // (`site_content.compile_page_objects` returns the string, and its tool description names it), so
+  // the structural check is the non-breaking fix.
+  return isBag(value) && value.schemaVersion === SITE_PAGE_MATERIALIZATION_V2_SCHEMA_VERSION && Array.isArray((value as Record<string, unknown>).units);
 }
 
-/** Refuses anything that is not exactly a v2 plan — including a v1 SiteContentObjectPlan, which has no schemaVersion at all. */
+/** Refuses anything that is not exactly a v2 plan — including a v1 SiteContentObjectPlan, which carries the SAME schemaVersion string but no `units` (see the guard above). */
 export function assertSitePageMaterializationV2Plan(value: unknown, context = "plan"): asserts value is SitePageMaterializationV2Plan {
   if (isSitePageMaterializationV2Plan(value)) return;
   const gotVersion = isBag(value) ? value.schemaVersion : undefined;
   throw new Error(
     `Expected a "${SITE_PAGE_MATERIALIZATION_V2_SCHEMA_VERSION}" plan for ${context}, but got schemaVersion=${JSON.stringify(gotVersion)}. ` +
-      `A v1 SiteContentObjectPlan (siteContentObjectCompiler.ts) carries no schemaVersion field and is never a v2 plan by coincidence — this refusal is deliberate.`
+      `A v1 SiteContentObjectPlan (siteContentObjectCompiler.ts) carries the same schemaVersion string but no \`units\` array, and is never a v2 plan by coincidence — this refusal is deliberate.`
   );
 }
 

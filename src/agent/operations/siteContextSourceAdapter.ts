@@ -93,7 +93,7 @@
 // claims a tenant has nothing.
 import { tenantAdapterFor, type TenantCallContext } from "../tools/tenantInvoke.js";
 import type { ProjectRepository } from "../repository/interfaces/ProjectRepository.js";
-import type { SiteContextObject, SiteContextSource, SiteObjectFieldContract, SiteRegistries } from "./siteContext.js";
+import type { PageTypeRule, SectionTypeRegistryEntry, SiteContextObject, SiteContextSource, SiteObjectFieldContract, SiteRegistries } from "./siteContext.js";
 
 export class SiteContextSourceReadError extends Error {
   constructor(readonly tool: string, readonly tenantId: string, readonly detail: string, readonly objectType?: string) {
@@ -248,6 +248,67 @@ const extractSectionTypeNames = (raw: Record<string, unknown>): readonly string[
   return names.length ? names : undefined;
 };
 
+// THE REGISTRY GATE (C2) — the same top-level `section_types` array, kept STRUCTURED. `component_bound`
+// and `footprint` are what decide PLACEABILITY, and the name list above cannot express that, so a
+// second extractor keeps them. Live shape (object_contract("page"), 2026-09-18):
+// `{type, component_bound, data_schema, editor, footprint}`; `card` and `shared_ref` are the only two
+// entries carrying `component_bound: false` / `footprint: null`.
+const extractSectionRegistry = (raw: Record<string, unknown>): readonly SectionTypeRegistryEntry[] | undefined => {
+  const entries = pick(raw, ["section_types", "sectionTypes"]);
+  if (!isArray(entries)) return undefined;
+  const registry: SectionTypeRegistryEntry[] = [];
+  for (const entry of entries) {
+    if (!isObject(entry)) continue;
+    const type = pick(entry, ["type"]);
+    if (!isNonEmptyString(type)) continue;
+    // A registry entry that does not state `component_bound` is NOT assumed placeable: an absent
+    // flag is treated exactly like `false`, so a tenant serving an older/narrower contract refuses
+    // placement by name rather than silently placing a type whose component may not exist.
+    const componentBoundRaw = pick(entry, ["component_bound", "componentBound"]);
+    const footprintRaw = pick(entry, ["footprint"]);
+    const dataSchemaRaw = pick(entry, ["data_schema", "dataSchema"]);
+    registry.push({
+      type,
+      componentBound: componentBoundRaw === true,
+      footprint: isObject(footprintRaw) ? footprintRaw : null,
+      ...(isObject(dataSchemaRaw) ? { dataSchema: dataSchemaRaw } : {})
+    });
+  }
+  return registry.length ? registry : undefined;
+};
+
+// PageType law — object_contract("page")'s top-level `page_types`. Live shape (2026-09-18):
+// `{id, routePattern, allowedSections, requiredSections?, reviewPolicy, ...}`, where `allowedSections`
+// is either an array of type names or the literal string "any".
+const extractPageTypes = (raw: Record<string, unknown>): readonly PageTypeRule[] | undefined => {
+  const entries = pick(raw, ["page_types", "pageTypes"]);
+  if (!isArray(entries)) return undefined;
+  const rules: PageTypeRule[] = [];
+  for (const entry of entries) {
+    if (!isObject(entry)) continue;
+    const id = pick(entry, ["id"]);
+    if (!isNonEmptyString(id)) continue;
+    const routePattern = pick(entry, ["routePattern", "route_pattern", "route"]);
+    const allowedRaw = pick(entry, ["allowedSections", "allowed_sections"]);
+    const requiredRaw = pick(entry, ["requiredSections", "required_sections"]);
+    const allowedSections: readonly string[] | "any" = allowedRaw === "any"
+      ? "any"
+      : isArray(allowedRaw)
+        ? allowedRaw.filter((name): name is string => typeof name === "string" && name.length > 0)
+        // A page type that states NEITHER an allow-list NOR "any" restricts nothing this adapter can
+        // read; "any" is the honest normalization, and the compiler's own required-field gates still
+        // apply. Never an empty array here — that would mean "place nothing".
+        : "any";
+    rules.push({
+      id,
+      routePattern: isNonEmptyString(routePattern) ? routePattern : "",
+      allowedSections,
+      requiredSections: isArray(requiredRaw) ? requiredRaw.filter((name): name is string => typeof name === "string" && name.length > 0) : []
+    });
+  }
+  return rules.length ? rules : undefined;
+};
+
 const extractBodySchema = (raw: Record<string, unknown>): unknown => pick(raw, ["body_schema", "bodySchema", "schema"]);
 
 function normalizeObjectContract(raw: unknown, objectType: string): SiteObjectFieldContract | null {
@@ -261,7 +322,16 @@ function normalizeObjectContract(raw: unknown, objectType: string): SiteObjectFi
   const requiredRaw = bodySchema.required;
   const required = isArray(requiredRaw) ? requiredRaw.filter((entry): entry is string => typeof entry === "string") : [];
   const sectionTypes = extractSectionTypeNames(raw);
-  return { objectType, required, schema: bodySchema as Record<string, unknown>, ...(sectionTypes ? { sectionTypes } : {}) };
+  const sectionRegistry = extractSectionRegistry(raw);
+  const pageTypes = extractPageTypes(raw);
+  return {
+    objectType,
+    required,
+    schema: bodySchema as Record<string, unknown>,
+    ...(sectionTypes ? { sectionTypes } : {}),
+    ...(sectionRegistry ? { sectionRegistry } : {}),
+    ...(pageTypes ? { pageTypes } : {})
+  };
 }
 
 const normalizeRegistryEntry = (item: unknown): { id: string; kind: string; label?: string } | undefined => {

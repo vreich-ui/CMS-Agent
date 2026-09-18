@@ -12,25 +12,37 @@ import type { DraftedSectionInput, PageMaterializationPlan } from "../../../src/
 import { applySiteContentPlan } from "../../../src/agent/operations/siteContentObjectApplier.js";
 import type { ApplyJournal, ApplyJournalRecord, SiteObjectWriter } from "../../../src/agent/operations/siteContentObjectApplier.js";
 import { createInMemorySiteContextSource, DEFAULT_REGISTRIES } from "./fixtures/inMemorySiteContextSource.js";
+import { LIVE_PAGE_TYPES, LIVE_SECTION_REGISTRY } from "./fixtures/liveObjectContractCapture.js";
 
 const TENANT = "kugel-platform";
 
-// `sectionTypes` is the real, live-verified shape (a TOP-LEVEL registry, never a path inside
-// `schema`/`body_schema` — see siteContentObjectCompiler.ts's "CORRECTION" note); `schema` here still
-// backs compileCandidate's own {sectionType, data} envelope check, unrelated to this fix.
+// The STANDALONE `section` contract, live shape: `{required: ["section"], properties: [section,
+// tracking]}` -- NOT a `{sectionType, data}` record. The compiler no longer reads it at all; it is
+// here only so a snapshot can carry the object type.
 const SECTION_CONTRACT: SiteObjectFieldContract = {
   objectType: "section",
-  required: ["sectionType", "data"],
-  schema: { type: "object", additionalProperties: true, required: ["sectionType", "data"], properties: { sectionType: { type: "string", enum: ["prose", "bio", "faq", "steps"] }, data: { type: "object", additionalProperties: true } } },
-  sectionTypes: ["prose", "bio", "faq", "steps"]
+  required: ["section"],
+  schema: { type: "object", additionalProperties: false, required: ["section"], properties: { section: { type: "object", additionalProperties: true }, tracking: { type: "object", additionalProperties: true } } }
 };
+// The live page contract: the five required fields (seo included) plus the two TOP-LEVEL registries
+// the compiler's gates read -- `section_types` (structured) and `page_types`.
 const PAGE_CONTRACT: SiteObjectFieldContract = {
   objectType: "page",
-  required: ["pageType", "slug", "title", "sections"],
-  schema: { type: "object", additionalProperties: true, required: ["pageType", "slug", "title", "sections"], properties: { pageType: { type: "string" }, slug: { type: "string", minLength: 1 }, title: { type: "string", minLength: 1 }, sections: { type: "array" } } }
+  required: ["route", "pageType", "title", "seo", "sections"],
+  schema: {
+    type: "object",
+    additionalProperties: true,
+    required: ["route", "pageType", "title", "seo", "sections"],
+    properties: { route: { type: "string", minLength: 1 }, pageType: { type: "string" }, title: { type: "string", minLength: 1 }, seo: { type: "object", additionalProperties: true }, sections: { type: "array" } }
+  },
+  sectionRegistry: LIVE_SECTION_REGISTRY,
+  pageTypes: LIVE_PAGE_TYPES
 };
 
+const PAGE_FIELDS = { route: "/about", pageType: "standard", title: "About", seo: { title: "About" } };
+
 const drafted = (order: number, kind: "organization" | "people" = "organization"): DraftedSectionInput => ({
+  unitKey: `u${order}`,
   order,
   sectionType: kind === "people" ? "our_team" : "about_overview",
   draft: { narrativeKind: kind, title: `Section ${order}`, body: `<p>Body ${order}.</p>`, groundedIn: ["src"] },
@@ -47,13 +59,13 @@ const pageObject = (objectId: string, sections: InlineSection[] = [], contentRev
   contentRevision,
   publishedTime: null,
   updatedAt: "2026-09-01T00:00:00.000Z",
-  fields: { pageType: "standard", slug: "about", title: "About", sections }
+  fields: { route: "/about", pageType: "standard", title: "About", seo: { title: "About" }, sections }
 });
 
 const compile = async (
   sections: DraftedSectionInput[],
   objects: { page?: SiteContextObject[] } = {},
-  target: { pageObjectId?: string | null; sectionTargets?: Record<number, string> } = {}
+  target: { pageObjectId?: string | null; sectionTargets?: Record<string, string>; pageFields?: Record<string, unknown> } = {}
 ): Promise<PageMaterializationPlan> => {
   const { source } = createInMemorySiteContextSource({ tenantId: TENANT, revisionId: "rev_1", objectsByType: { section: [], page: objects.page ?? [] }, contractsByType: { section: SECTION_CONTRACT, page: PAGE_CONTRACT }, registries: DEFAULT_REGISTRIES });
   const snapshot = await captureSiteSnapshot(source, { tenantId: TENANT, objectTypes: ["page", "section"] });
@@ -61,7 +73,7 @@ const compile = async (
     projectId: TENANT,
     drafted: sections,
     snapshot,
-    target: { pageObjectId: target.pageObjectId ?? null, pageFields: { pageType: "standard", slug: "about", title: "About" }, ...(target.sectionTargets ? { sectionTargets: target.sectionTargets } : {}) }
+    target: { pageObjectId: target.pageObjectId ?? null, pageFields: target.pageFields ?? (target.pageObjectId ? {} : PAGE_FIELDS), ...(target.sectionTargets ? { sectionTargets: target.sectionTargets } : {}) }
   });
   if (!result.ok) throw new Error(`fixture plan did not compile: ${JSON.stringify(result.blockers)}`);
   return result.plan;
@@ -181,7 +193,9 @@ describe("applySiteContentPlan — page patch (mixed ops)", () => {
   it("passes the plan's frozen page contentRevision through as the guard, and applies the mixed ops", async () => {
     const existing: InlineSection = { id: "s_team", type: "bio", data: { heading: "The team", body: "<p>old</p>", trustNotes: [] } };
     const page = pageObject("page_about", [existing], 3);
-    const plan = await compile([drafted(4, "people"), drafted(9)], { page: [page] }, { pageObjectId: "page_about", sectionTargets: { 4: "s_team" } });
+    // Append-only: the revise path (naming an existing inline section to rewrite) is refused by
+    // name now -- see the compiler's own suite. A patch still carries set_page_meta + upsert_section.
+    const plan = await compile([drafted(4, "people"), drafted(9)], { page: [page] }, { pageObjectId: "page_about", pageFields: { title: "About the studio" } });
     const { writer, calls, store } = createWriter();
     // Seed the fake tenant store with the page's actual starting content -- the fixture's own local
     // `store` map has no notion of "what the tenant already holds" until something writes to it, so
@@ -195,8 +209,11 @@ describe("applySiteContentPlan — page patch (mixed ops)", () => {
     expect(calls[0]).toMatchObject({ method: "patch", objectId: "page_about", expectedContentRevision: 3 });
     const written = store.get("page_about")!;
     const sections = written.fields.sections as InlineSection[];
-    expect(sections).toHaveLength(2);
-    expect(sections[0]!.data.body).toBe("<p>Body 4.</p>");
+    // One pre-existing section, untouched, plus the two this plan appended.
+    expect(sections).toHaveLength(3);
+    expect(sections[0]!.id).toBe("s_team");
+    expect(sections[0]!.data.body).toBe("<p>old</p>");
+    expect(sections.slice(1).map((section) => section.data.body)).toEqual(["<p>Body 4.</p>", "<p>Body 9.</p>"]);
   });
 });
 
@@ -246,6 +263,51 @@ describe("applySiteContentPlan — duplicate retry", () => {
     expect(second.outcome).toBe("already_applied");
     expect(calls.length).toBe(callsAfterFirst);
     expect(second.receipt!.objectId).toBe(first.receipt!.objectId);
+  });
+
+  // THE ASSERTION NEITHER #387 NOR #388 HAD. #388 proves the digest changes on a genuine reorder --
+  // the forward direction. Nothing proved the INVERSE: that a retry carrying the SAME operation id
+  // but a DIFFERENT payload is refused. Without it, the materializationKey is trusted to vouch for
+  // content it never covered, and a caller whose payload changed (a doctored plan, a plan rebuilt by
+  // a newer compiler, a hand-edited ops array) is answered "already_applied" while its actual change
+  // is silently dropped -- the worst failure this module can have, because it reports success.
+  it("REFUSES a retry of the same operation id carrying a CHANGED payload, rather than reporting already_applied", async () => {
+    const plan = await compile([drafted(0)]);
+    const { writer, calls } = createWriter();
+    const { journal } = createJournal();
+
+    const first = await applySiteContentPlan(plan, { writer, journal });
+    expect(first.outcome).toBe("applied");
+    const callsAfterFirst = calls.length;
+
+    // Same materializationKey, different write payload.
+    const changed: PageMaterializationPlan = {
+      ...plan,
+      write: plan.write.kind === "create"
+        ? { kind: "create", fields: { ...plan.write.fields, title: "A different title nobody approved" } }
+        : plan.write
+    };
+    expect(changed.materializationKey).toBe(plan.materializationKey);
+
+    const second = await applySiteContentPlan(changed, { writer, journal });
+
+    expect(second.outcome).toBe("not_applied");
+    expect(second.failure!.code).toBe("plan_payload_changed");
+    // And nothing was written for it.
+    expect(calls.length).toBe(callsAfterFirst);
+  });
+
+  it("still recognises a genuine replay -- the payload guard does not break idempotency", async () => {
+    const plan = await compile([drafted(0)]);
+    const { writer, calls } = createWriter();
+    const { journal } = createJournal();
+
+    await applySiteContentPlan(plan, { writer, journal });
+    const callsAfterFirst = calls.length;
+    const replay = await applySiteContentPlan({ ...plan, write: structuredClone(plan.write) }, { writer, journal });
+
+    expect(replay.outcome).toBe("already_applied");
+    expect(calls.length).toBe(callsAfterFirst);
   });
 
   it("recompiling the identical request produces the same materialization key, so the retry is recognised", async () => {
@@ -349,7 +411,7 @@ describe("applySiteContentPlan — the window a journal cannot close", () => {
   it("refuses a malformed patch op rather than sending it to the writer", async () => {
     const existing: InlineSection = { id: "s_team", type: "bio", data: { heading: "The team", body: "<p>old</p>", trustNotes: [] } };
     const page = pageObject("page_about", [existing], 3);
-    const plan = await compile([drafted(4, "people")], { page: [page] }, { pageObjectId: "page_about", sectionTargets: { 4: "s_team" } });
+    const plan = await compile([drafted(4, "people")], { page: [page] }, { pageObjectId: "page_about" });
     // A doctored ops array carrying something that is not one of the six named ops.
     const doctored: PageMaterializationPlan = { ...plan, write: { kind: "patch", ops: [{ op: "delete_everything" } as never] } };
     const { writer, calls } = createWriter();

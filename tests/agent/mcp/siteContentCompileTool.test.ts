@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createSiteContentTools } from "../../../src/agent/mcp/workspace/siteContentTools.js";
 import type { SiteContextSource } from "../../../src/agent/operations/siteContext.js";
 import { WorkspaceToolError } from "../../../src/agent/mcp/workspace/toolKit.js";
+import { LIVE_PAGE_TYPES, LIVE_SECTION_REGISTRY } from "../operations/fixtures/liveObjectContractCapture.js";
 
 // site_content.compile_page_objects -- the read-only review surface. The compilation rules
 // themselves are pinned in tests/agent/operations/siteContentObjectCompiler.test.ts; this file
@@ -11,28 +12,30 @@ import { WorkspaceToolError } from "../../../src/agent/mcp/workspace/toolKit.js"
 
 const activeProject = { get: async () => ({ projectId: "acme", status: "active" }) } as never;
 
+// The live standalone `section` contract: `{required: ["section"], properties: [section, tracking]}`.
 const SECTION_CONTRACT = {
   objectType: "section",
-  required: ["sectionType", "data"],
+  required: ["section"],
   schema: {
     type: "object",
-    additionalProperties: true,
-    required: ["sectionType", "data"],
-    properties: { sectionType: { type: "string", enum: ["prose", "bio", "faq", "steps"] }, data: { type: "object", additionalProperties: true } }
-  },
-  // The real registry lives here — a TOP-LEVEL contract field, never a path inside `schema` (see
-  // siteContentObjectCompiler.ts's "CORRECTION" note, PR #387 review).
-  sectionTypes: ["prose", "bio", "faq", "steps"]
+    additionalProperties: false,
+    required: ["section"],
+    properties: { section: { type: "object", additionalProperties: true }, tracking: { type: "object", additionalProperties: true } }
+  }
 };
+// The live page contract: five required fields (seo included) plus the two TOP-LEVEL registries the
+// compiler's gates read.
 const PAGE_CONTRACT = {
   objectType: "page",
-  required: ["pageType", "slug", "title", "sections"],
+  required: ["route", "pageType", "title", "seo", "sections"],
   schema: {
     type: "object",
     additionalProperties: true,
-    required: ["pageType", "slug", "title", "sections"],
-    properties: { pageType: { type: "string" }, slug: { type: "string", minLength: 1 }, title: { type: "string", minLength: 1 }, sections: { type: "array" } }
-  }
+    required: ["route", "pageType", "title", "seo", "sections"],
+    properties: { route: { type: "string", minLength: 1 }, pageType: { type: "string" }, title: { type: "string", minLength: 1 }, seo: { type: "object", additionalProperties: true }, sections: { type: "array" } }
+  },
+  sectionRegistry: LIVE_SECTION_REGISTRY,
+  pageTypes: LIVE_PAGE_TYPES
 };
 
 // Every method a write would have to travel through throws if touched; a compile that completes
@@ -49,7 +52,7 @@ const compileTool = (source: SiteContextSource) =>
   createSiteContentTools({ projectRepository: activeProject, siteContextSource: source }).find((entry) => entry.name === "site_content.compile_page_objects")!;
 
 const ORGANIZATION = { order: 1, sectionType: "about_overview", draft: { narrativeKind: "organization", title: "Who we are", body: "<p>Since 1974.</p>", groundedIn: ["src"] }, runId: "run_a", executionId: "exec_a" };
-const PAGE = { fields: { pageType: "standard", slug: "about", title: "About" } };
+const PAGE = { fields: { route: "/about", pageType: "standard", title: "About", seo: { title: "About" } } };
 
 describe("site_content.compile_page_objects", () => {
   it("is registered, and its description says compiling is not applying", () => {

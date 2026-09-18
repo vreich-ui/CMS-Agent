@@ -63,6 +63,43 @@ export type SiteObjectFieldContract = {
   // type, or a synthetic contract a test built without one) — a caller that needs the component
   // registry treats undefined/empty exactly like "unavailable", never an empty allow-list.
   sectionTypes?: readonly string[];
+  // THE REGISTRY GATE (C2). The same top-level `section_types` array, kept STRUCTURED rather than
+  // flattened to names — `component_bound` and `footprint` are what decide whether a type may be
+  // PLACED on a page at all, and a name list cannot express that. Read live from
+  // `object_contract("page")` on 2026-09-18: 28 entries, of which exactly two (`card`, `shared_ref`)
+  // carry `component_bound: false` / `footprint: null`. `before_after` is present and
+  // `component_bound: true`, region `flow` — it needs no capability gate of its own, and gating it on
+  // a tenant snapshot produces false `unsupported_section_type` refusals.
+  //
+  // The PAGE contract's copy is the authority for placement, because placement law (`page_types`,
+  // below) lives on the page contract too. The `section` contract carries an identical registry, but
+  // a standalone `section` body is `{section, tracking}` — NOT a `{sectionType, data}` record — so it
+  // is not the contract a page's inline sections are validated against.
+  sectionRegistry?: readonly SectionTypeRegistryEntry[];
+  // `object_contract("page").page_types` — PageType law. Six entries live on 2026-09-18; four of them
+  // restrict which section types may appear. undefined when a contract carries no page-type law (a
+  // non-page object type, or a synthetic contract a test built without one).
+  pageTypes?: readonly PageTypeRule[];
+};
+
+// One entry of the live top-level `section_types` registry, normalized to this repo's camelCase.
+// `dataSchema` is that type's own `data_schema` — the JSON schema a page's inline section `data` must
+// satisfy (the live `schema_zod` constraint is strict: unknown keys are rejected).
+export type SectionTypeRegistryEntry = {
+  type: string;
+  componentBound: boolean;
+  footprint: Record<string, unknown> | null;
+  dataSchema?: Record<string, unknown>;
+};
+
+// One entry of the live top-level `page_types` law. `allowedSections` is the literal string "any"
+// when that page type places no restriction (the live `clone` and `standard` types), never an empty
+// array — an empty array would mean "nothing may be placed", the opposite of "any".
+export type PageTypeRule = {
+  id: string;
+  routePattern: string;
+  allowedSections: readonly string[] | "any";
+  requiredSections: readonly string[];
 };
 
 // Registry-shaped reference data that is not itself a typed content object — see the module header

@@ -1,63 +1,63 @@
 // P2 v2 acceptance -- the drafted page -> ONE page materialization write step.
 //
-// The section-type list and page types in these fixtures are the ones the LIVE platform component
-// and page_type registries returned on 2026-09-17 (registry_get); the page body_schema's inline
-// section shape (`{id, visibility, notes, type, data}`) and the patch op grammar
-// (set_page_meta/upsert_section/update_section_data/...) are the ones object_contract(page) and
-// object_contract(section) returned LIVE on 2026-09-18. These tests pin the routing, the
-// create/patch decision, the chosen op per section, ordering, idempotency and every refusal -- not
-// the shape of a component's own `data`.
+// EVERY contract fact these tests pin was read LIVE from `object_contract("page")` and
+// `object_contract("section")` against the Kugel-Platform connector on 2026-09-18 and is carried in
+// tests/agent/operations/fixtures/liveObjectContractCapture.ts (LIVE_SECTION_REGISTRY: all 28
+// registry entries with their `component_bound`/`footprint`; LIVE_PAGE_TYPES: all six page types).
+// Nothing here is derived from a repo fixture, a captured snapshot, PR prose or a code comment --
+// all three of those still encode a stale dialect, which is what these tests exist to stop.
+//
+// The five live-required page fields are route, pageType, title, seo, sections -- `seo` INCLUDED.
 import { describe, expect, it } from "vitest";
 
 import { captureSiteSnapshot } from "../../../src/agent/operations/siteContext.js";
 import type { SiteContextObject, SiteObjectFieldContract } from "../../../src/agent/operations/siteContext.js";
-import { compileSiteContentObjects, PAGE_MATERIALIZATION_SCHEMA_VERSION } from "../../../src/agent/operations/siteContentObjectCompiler.js";
+import { compileSiteContentObjects, PAGE_MATERIALIZATION_SCHEMA_VERSION, PAGE_REQUIRED_FIELDS } from "../../../src/agent/operations/siteContentObjectCompiler.js";
 import type { DraftedSectionInput } from "../../../src/agent/operations/siteContentObjectCompiler.js";
 import { createInMemorySiteContextSource, DEFAULT_REGISTRIES } from "./fixtures/inMemorySiteContextSource.js";
 import type { FixtureTenantData } from "./fixtures/inMemorySiteContextSource.js";
-import { LIVE_SECTION_TYPE_NAMES, LIVE_SECTION_TYPES } from "./fixtures/liveObjectContractCapture.js";
-
-// The live registered component-type vocabulary -- object_contract's own TOP-LEVEL `section_types`
-// array, read live on 2026-09-18 (tests/agent/operations/fixtures/liveObjectContractCapture.ts has the
-// full provenance and a verbatim excerpt of several entries' own data_schema/editor blocks).
-const LIVE_COMPONENT_TYPES = LIVE_SECTION_TYPE_NAMES;
-
-// The STANDALONE `section` object contract -- used today only for a `shared_ref` target, and by the
-// compiler purely as the component-type registry (see the compiler's own header on why the same
-// registry backs both). A page's own inline sections never appear under this contract's object list.
-// `sectionTypes` is that registry (a TOP-LEVEL contract field, never a path inside `schema`); `schema`
-// here still backs compileCandidate's own {sectionType, data} envelope check, unrelated to this fix.
-const SECTION_CONTRACT: SiteObjectFieldContract = {
-  objectType: "section",
-  required: ["sectionType", "data"],
-  schema: {
-    type: "object",
-    additionalProperties: true,
-    required: ["sectionType", "data"],
-    properties: { sectionType: { type: "string", enum: LIVE_COMPONENT_TYPES }, data: { type: "object", additionalProperties: true } }
-  },
-  sectionTypes: LIVE_COMPONENT_TYPES
-};
-
-const PAGE_CONTRACT: SiteObjectFieldContract = {
-  objectType: "page",
-  required: ["pageType", "slug", "title", "sections"],
-  schema: {
-    type: "object",
-    additionalProperties: true,
-    required: ["pageType", "slug", "title", "sections"],
-    properties: {
-      pageType: { type: "string", enum: ["home", "standard", "listing", "content_detail", "system", "clone"] },
-      slug: { type: "string", minLength: 1 },
-      title: { type: "string", minLength: 1 },
-      sections: { type: "array", items: { type: "object", additionalProperties: true } }
-    }
-  }
-};
+import { LIVE_PAGE_TYPES, LIVE_SECTION_REGISTRY, LIVE_SECTION_TYPE_NAMES } from "./fixtures/liveObjectContractCapture.js";
 
 const TENANT = "kugel-platform";
 
-type InlineSection = { id: string; type: string; data: Record<string, unknown>; visibility?: string };
+// The live page body_schema, trimmed to the keys these tests exercise but with the REAL required
+// list. `sectionRegistry` and `pageTypes` are the live top-level registries, verbatim.
+const PAGE_CONTRACT: SiteObjectFieldContract = {
+  objectType: "page",
+  required: ["route", "pageType", "title", "seo", "sections"],
+  schema: {
+    type: "object",
+    additionalProperties: true,
+    required: ["route", "pageType", "title", "seo", "sections"],
+    properties: {
+      route: { type: "string", minLength: 1 },
+      pageType: { type: "string", enum: ["home", "standard", "listing", "content_detail", "system", "clone"] },
+      title: { type: "string", minLength: 1 },
+      seo: { type: "object", additionalProperties: true },
+      sections: { type: "array", items: { type: "object", additionalProperties: true } }
+    }
+  },
+  sectionTypes: LIVE_SECTION_TYPE_NAMES,
+  sectionRegistry: LIVE_SECTION_REGISTRY,
+  pageTypes: LIVE_PAGE_TYPES
+};
+
+// The STANDALONE `section` object contract. Its live body_schema is `{required: ["section"],
+// properties: [section, tracking]}` -- NOT a `{sectionType, data}` record, which is exactly the
+// fiction this suite's predecessor validated against. The compiler no longer reads it at all; it is
+// present only so a standalone/shared section object can appear in a snapshot's object list.
+const SECTION_CONTRACT: SiteObjectFieldContract = {
+  objectType: "section",
+  required: ["section"],
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["section"],
+    properties: { section: { type: "object", additionalProperties: true }, tracking: { type: "object", additionalProperties: true } }
+  }
+};
+
+type InlineSection = { id: string; type: string; data: Record<string, unknown> };
 
 const pageObject = (objectId: string, sections: InlineSection[] = [], contentRevision = 7): SiteContextObject => ({
   objectId,
@@ -67,26 +67,35 @@ const pageObject = (objectId: string, sections: InlineSection[] = [], contentRev
   contentRevision,
   publishedTime: "2026-09-01T00:00:00.000Z",
   updatedAt: "2026-09-01T00:00:00.000Z",
-  fields: { pageType: "standard", slug: "about", title: "About", sections }
+  fields: { route: "/about", pageType: "standard", title: "About", seo: { title: "About" }, sections }
 });
 
-// A standalone `section` object -- the shared_ref case. Present in the snapshot's own object list,
-// never inside any page's inline `sections` array in these fixtures (matching what a real capture
-// shows today -- see the compiler's own header).
+// A page row as PRODUCTION sees it: `object_inventory`'s summary listing carries no body at all.
+const bodylessPageObject = (objectId: string): SiteContextObject => ({
+  objectId,
+  objectType: "page",
+  status: "saved",
+  version: 9,
+  contentRevision: 7,
+  publishedTime: null,
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  fields: {}
+});
+
 const standaloneSection = (objectId: string): SiteContextObject => ({
   objectId,
   objectType: "section",
   status: "saved",
   version: 2,
   contentRevision: 1,
-  publishedTime: "2026-09-01T00:00:00.000Z",
+  publishedTime: null,
   updatedAt: "2026-09-01T00:00:00.000Z",
-  fields: { sectionType: "newsletter_signup", data: { formName: "footer_signup" } }
+  fields: { section: { id: "s_shared1", type: "newsletter_signup", data: { formName: "footer_signup" } } }
 });
 
 const fixture = (overrides: Partial<FixtureTenantData> = {}): FixtureTenantData => ({
   tenantId: TENANT,
-  revisionId: "rev_2026_09_17_01",
+  revisionId: "rev_2026_09_18_01",
   objectsByType: { section: [], page: [] },
   contractsByType: { section: SECTION_CONTRACT, page: PAGE_CONTRACT },
   registries: DEFAULT_REGISTRIES,
@@ -98,17 +107,19 @@ const snapshotOf = async (data: FixtureTenantData) => {
   return captureSiteSnapshot(source, { tenantId: data.tenantId, objectTypes: ["page", "section"] });
 };
 
-const PAGE_FIELDS = { pageType: "standard", slug: "about", title: "About" };
+const PAGE_FIELDS = { route: "/about", pageType: "standard", title: "About", seo: { title: "About", robots: { index: true, follow: true } } };
 
-const organization = (order: number): DraftedSectionInput => ({
+const organization = (order: number, unitKey = `u${order}`, body = "<p>Founded to restore films.</p>"): DraftedSectionInput => ({
+  unitKey,
   order,
   sectionType: "about_overview",
-  draft: { narrativeKind: "organization", title: "Who we are", body: "<p>Founded to restore films.</p>", groundedIn: ["src_1"] },
+  draft: { narrativeKind: "organization", title: "Who we are", body, groundedIn: ["src_1"] },
   runId: `run_${order}`,
   executionId: `exec_${order}`
 });
 
-const people = (order: number): DraftedSectionInput => ({
+const people = (order: number, unitKey = `u${order}`): DraftedSectionInput => ({
+  unitKey,
   order,
   sectionType: "our_team",
   draft: { narrativeKind: "people", title: "The team", body: "<p>Four archivists.</p>", groundedIn: ["src_2"] },
@@ -116,39 +127,96 @@ const people = (order: number): DraftedSectionInput => ({
   executionId: `exec_${order}`
 });
 
-const values = (order: number): DraftedSectionInput => ({
+const faq = (order: number, items: unknown[], unitKey = `u${order}`): DraftedSectionInput => ({
+  unitKey,
   order,
-  sectionType: "our_values",
-  draft: { referenceKind: "policy", title: "What we stand for", body: "<p>Preservation before profit.</p>", groundedIn: ["src_3"] }
+  sectionType: "common_questions",
+  draft: { referenceKind: "faq", title: "Questions", items }
 });
 
-describe("compileSiteContentObjects — creating a new page (inline sections)", () => {
-  it("compiles About + team + values into ONE create write with inline sections, preserving non-contiguous planner orders", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [values(7), organization(1), people(4)],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
+const process = (order: number, items: unknown[], unitKey = `u${order}`): DraftedSectionInput => ({
+  unitKey,
+  order,
+  sectionType: "how_it_works",
+  draft: { referenceKind: "process", title: "How it works", items }
+});
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+const comparison = (order: number, items: unknown[], unitKey = `u${order}`): DraftedSectionInput => ({
+  unitKey,
+  order,
+  sectionType: "before_and_after",
+  draft: { referenceKind: "comparison", title: "Before and after", items }
+});
+
+const compile = (drafted: DraftedSectionInput[], snapshot: Awaited<ReturnType<typeof snapshotOf>>, target: Record<string, unknown> = {}) =>
+  compileSiteContentObjects({
+    projectId: TENANT,
+    drafted,
+    snapshot,
+    target: { pageObjectId: null, pageFields: PAGE_FIELDS, ...target } as never
+  });
+
+const codes = (result: ReturnType<typeof compileSiteContentObjects>): string[] => (result.ok ? [] : result.blockers.map((entry) => entry.code));
+
+// ---------------------------------------------------------------------------------------------
+// The contract facts themselves. If Platform's registry changes shape, these fail FIRST and name
+// which fact moved, rather than letting a downstream test fail for an unrelated-looking reason.
+// ---------------------------------------------------------------------------------------------
+describe("the live page contract these tests are written against", () => {
+  it("registers 28 section types, of which exactly card and shared_ref are not component-bound", () => {
+    expect(LIVE_SECTION_REGISTRY).toHaveLength(28);
+    expect(LIVE_SECTION_REGISTRY.filter((entry) => !entry.componentBound).map((entry) => entry.type).sort()).toEqual(["card", "shared_ref"]);
+    expect(LIVE_SECTION_REGISTRY.filter((entry) => entry.footprint === null).map((entry) => entry.type).sort()).toEqual(["card", "shared_ref"]);
+  });
+
+  it("registers before_after as a component-bound, flow-region type -- it needs no capability gate", () => {
+    const entry = LIVE_SECTION_REGISTRY.find((candidate) => candidate.type === "before_after");
+    expect(entry).toBeDefined();
+    expect(entry!.componentBound).toBe(true);
+    expect(entry!.footprint).toEqual({ region: "flow" });
+  });
+
+  it("requires five page fields, seo included", () => {
+    expect([...PAGE_REQUIRED_FIELDS]).toEqual(["route", "pageType", "title", "seo", "sections"]);
+  });
+
+  it("declares six page types, four of which restrict which sections may be placed", () => {
+    expect(LIVE_PAGE_TYPES).toHaveLength(6);
+    expect(LIVE_PAGE_TYPES.filter((rule) => rule.allowedSections !== "any")).toHaveLength(4);
+    const home = LIVE_PAGE_TYPES.find((rule) => rule.id === "home")!;
+    expect(home.routePattern).toBe("/");
+    expect(home.allowedSections).toEqual(["hero", "checklist", "content_grid", "bio", "newsletter_signup", "shared_ref"]);
+    expect(home.requiredSections).toEqual(["hero"]);
+    const system = LIVE_PAGE_TYPES.find((rule) => rule.id === "system")!;
+    expect(system.routePattern).toBe("/[system]");
+    expect(system.allowedSections).toEqual(["hero", "prose", "link_list", "cta_banner"]);
+  });
+
+  it("carries no `sectionType` key anywhere in either contract", () => {
+    expect(JSON.stringify(LIVE_SECTION_REGISTRY)).not.toContain("sectionType");
+    expect(JSON.stringify(SECTION_CONTRACT.schema)).not.toContain("sectionType");
+    expect(SECTION_CONTRACT.required).toEqual(["section"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("compileSiteContentObjects — creating a new page (inline sections)", () => {
+  it("compiles drafts into ONE create write with inline sections, preserving non-contiguous planner orders", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(7, "values"), organization(1, "about"), people(4, "team")], snapshot);
+
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
     expect(result.plan.schemaVersion).toBe(PAGE_MATERIALIZATION_SCHEMA_VERSION);
-    expect(result.plan.write.kind).toBe("create");
-    if (result.plan.write.kind !== "create") return;
-    // Ascending planner order, and the planner's own numbers -- never renumbered to 0,1,2.
     expect(result.plan.sectionProvenance.map((section) => section.order)).toEqual([1, 4, 7]);
     expect(result.plan.sectionProvenance.map((section) => section.componentType)).toEqual(["prose", "bio", "prose"]);
-    expect(result.plan.sectionProvenance.every((section) => section.action === "create")).toBe(true);
+    expect(result.plan.sectionProvenance.map((section) => section.unitKey)).toEqual(["about", "team", "values"]);
     expect(result.plan.page.action).toBe("create");
-    // The traceability chain: a compiled section names the dispatch that wrote its draft (#382).
     expect(result.plan.sectionProvenance[0]!.sourceRunId).toBe("run_1");
     expect(result.plan.sectionProvenance[1]!.sourceExecutionId).toBe("exec_4");
 
     const sections = result.plan.write.fields.sections as InlineSection[];
-    expect(sections.map((s) => s.type)).toEqual(["prose", "bio", "prose"]);
-    // Every minted id matches Platform's own inline id pattern and lines up with sectionProvenance.
+    expect(sections.map((section) => section.type)).toEqual(["prose", "bio", "prose"]);
     for (const [index, section] of sections.entries()) {
       expect(section.id).toMatch(/^s_[a-z0-9]+$/);
       expect(section.id).toBe(result.plan.sectionProvenance[index]!.sectionId);
@@ -157,418 +225,464 @@ describe("compileSiteContentObjects — creating a new page (inline sections)", 
     expect(result.plan.changeSets[0]!.objectType).toBe("page");
   });
 
-  it("mints distinct ids for two byte-identical drafts at different orders", async () => {
+  it("compiles an FAQ draft into the registry's own `{items:[{q,a}]}` data shape", async () => {
     const snapshot = await snapshotOf(fixture());
-    const identical = (order: number): DraftedSectionInput => ({ order, sectionType: "about_overview", draft: { narrativeKind: "organization", title: "Same", body: "<p>Same.</p>" } });
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [identical(1), identical(2)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(true);
+    const result = compile([faq(0, [{ question: "How long?", answer: "Six weeks." }])], snapshot);
+    expect(codes(result)).toEqual([]);
     if (!result.ok || result.plan.write.kind !== "create") return;
-    const ids = (result.plan.write.fields.sections as InlineSection[]).map((s) => s.id);
-    expect(new Set(ids).size).toBe(2);
+    const section = (result.plan.write.fields.sections as InlineSection[])[0]!;
+    expect(section.type).toBe("faq");
+    expect(section.data).toEqual({ heading: "Questions", items: [{ q: "How long?", a: "Six weeks." }] });
   });
 
-  it("replaying the identical request produces the identical materializationKey and the identical minted section ids", async () => {
+  it("compiles a process draft into the registry's own `steps` data shape", async () => {
     const snapshot = await snapshotOf(fixture());
-    const request = { projectId: TENANT, drafted: [organization(1), people(4)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } };
+    const result = compile([process(0, [{ question: "Assess", answer: "We inspect the reel." }])], snapshot);
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    const section = (result.plan.write.fields.sections as InlineSection[])[0]!;
+    expect(section.type).toBe("steps");
+    expect(section.data).toEqual({ heading: "How it works", items: [{ title: "Assess", description: "We inspect the reel." }] });
+  });
+});
 
-    const first = compileSiteContentObjects(request);
-    const second = compileSiteContentObjects(request);
-
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok || first.plan.write.kind !== "create" || second.plan.write.kind !== "create") return;
-    expect(second.plan.materializationKey).toBe(first.plan.materializationKey);
-    expect((second.plan.write.fields.sections as InlineSection[]).map((s) => s.id)).toEqual((first.plan.write.fields.sections as InlineSection[]).map((s) => s.id));
+// ---------------------------------------------------------------------------------------------
+// C2 -- the registry gate, placeability, and PageType law.
+// ---------------------------------------------------------------------------------------------
+describe("C2 — the section-type registry is read from object_contract(\"page\").section_types", () => {
+  it("refuses when the page contract carries no section_types registry, naming the page contract", async () => {
+    const withoutRegistry: SiteObjectFieldContract = { objectType: "page", required: PAGE_CONTRACT.required, schema: PAGE_CONTRACT.schema, pageTypes: LIVE_PAGE_TYPES };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: SECTION_CONTRACT, page: withoutRegistry } }));
+    const result = compile([organization(0)], snapshot);
+    expect(codes(result)).toEqual(["section_type_registry_unavailable"]);
   });
 
-  it("a different draft is a different materialization -- the key is not a constant", async () => {
+  it("does NOT fall back to the `section` contract's registry -- the page contract is the authority", async () => {
+    // The section contract carries the identical registry live, but placement law lives on the page
+    // contract; reading the section contract is how the compiler previously validated nothing at all.
+    const sectionWithRegistry: SiteObjectFieldContract = { ...SECTION_CONTRACT, sectionRegistry: LIVE_SECTION_REGISTRY };
+    const pageWithoutRegistry: SiteObjectFieldContract = { objectType: "page", required: PAGE_CONTRACT.required, schema: PAGE_CONTRACT.schema };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: sectionWithRegistry, page: pageWithoutRegistry } }));
+    expect(codes(compile([organization(0)], snapshot))).toEqual(["section_type_registry_unavailable"]);
+  });
+
+  it("refuses a section type the registry does not contain, listing what is registered", async () => {
+    const narrowed: SiteObjectFieldContract = { ...PAGE_CONTRACT, sectionRegistry: LIVE_SECTION_REGISTRY.filter((entry) => entry.type !== "bio") };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: SECTION_CONTRACT, page: narrowed } }));
+    const result = compile([people(0)], snapshot);
+    expect(codes(result)).toEqual(["unsupported_section_type"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.message).toContain("bio");
+    expect(result.blockers[0]!.message).toContain("prose");
+  });
+
+  it("refuses a NON-PLACEABLE type by rule, not by name -- any component_bound:false entry, not just `card`", async () => {
+    // `prose` is component-bound live. Flipping THIS entry (not card's) proves the refusal is the
+    // general placeability rule and would catch a 29th non-component type added tomorrow.
+    const unplaceableProse: SiteObjectFieldContract = {
+      ...PAGE_CONTRACT,
+      sectionRegistry: LIVE_SECTION_REGISTRY.map((entry) => (entry.type === "prose" ? { ...entry, componentBound: false, footprint: null } : entry))
+    };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: SECTION_CONTRACT, page: unplaceableProse } }));
+    const result = compile([organization(0)], snapshot);
+    expect(codes(result)).toEqual(["section_type_not_placeable"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence).toMatchObject({ componentType: "prose", componentBound: false, footprint: null });
+  });
+
+  it("refuses data the registry entry's own data_schema rejects, rather than letting the tenant reject the write", async () => {
+    // The live `schema_zod` constraint is strict (`additionalProperties: false`). Validating the
+    // compiled `data` against the registry's own `data_schema` turns a tenant-side 4xx an operator
+    // would have to reconstruct into a named compile-time refusal.
+    const strictProse: SiteObjectFieldContract = {
+      ...PAGE_CONTRACT,
+      sectionRegistry: LIVE_SECTION_REGISTRY.map((entry) =>
+        entry.type === "prose"
+          ? { ...entry, dataSchema: { type: "object", required: ["body", "kicker"], properties: { body: { type: "string" }, kicker: { type: "string" } }, additionalProperties: false } }
+          : entry
+      )
+    };
+    const snapshot = await snapshotOf(fixture({ contractsByType: { section: SECTION_CONTRACT, page: strictProse } }));
+    const result = compile([organization(0)], snapshot);
+    expect(codes(result)).toEqual(["section_data_invalid"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.message).toContain("kicker");
+  });
+
+  it("places before_after with no capability gate of its own once its data is registry-shaped", async () => {
     const snapshot = await snapshotOf(fixture());
-    const base = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(1)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-    const edited = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ ...organization(1), draft: { ...organization(1).draft, body: "<p>Founded in 1974 to restore films.</p>" } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
+    const media = (label: string) => ({ src: `/img/${label}.jpg`, alt: `${label} state`, label });
+    const result = compile([comparison(0, [{ before: media("before"), after: media("after") }])], snapshot);
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    expect((result.plan.write.fields.sections as InlineSection[])[0]!.type).toBe("before_after");
+  });
+});
+
+describe("C2 — PageType law (allowedSections / requiredSections)", () => {
+  it("refuses a section the declared page type does not allow, naming the allow-list", async () => {
+    const snapshot = await snapshotOf(fixture());
+    // pageType "system" allows hero/prose/link_list/cta_banner -- a `bio` is not among them.
+    const result = compile([people(0)], snapshot, { pageFields: { ...PAGE_FIELDS, route: "/404", pageType: "system" } });
+    expect(codes(result)).toEqual(["section_not_allowed_for_page_type"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence).toMatchObject({ componentType: "bio", pageType: "system" });
+  });
+
+  it("refuses a page type whose required section is absent", async () => {
+    const snapshot = await snapshotOf(fixture());
+    // pageType "home" requires a `hero`; it also does not allow `prose`, so both blockers are named.
+    const result = compile([organization(0)], snapshot, { pageFields: { ...PAGE_FIELDS, route: "/", pageType: "home" } });
+    expect(codes(result).sort()).toEqual(["page_type_required_section_missing", "section_not_allowed_for_page_type"]);
+  });
+
+  it("allows anything on a page type whose allowedSections is \"any\"", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0), people(1)], snapshot, { pageFields: { ...PAGE_FIELDS, pageType: "clone", route: "/captured/x" } });
+    expect(codes(result)).toEqual([]);
+  });
+
+  it("refuses a page type the contract's law does not define", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, { pageFields: { ...PAGE_FIELDS, pageType: "microsite" } });
+    expect(codes(result)).toContain("page_type_unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// C3 -- required page fields and the tracking funnel.
+// ---------------------------------------------------------------------------------------------
+describe("C3 — the five required page fields", () => {
+  it.each(["route", "pageType", "title", "seo"] as const)("refuses a missing %s by name rather than inventing one", async (field) => {
+    const snapshot = await snapshotOf(fixture());
+    const pageFields: Record<string, unknown> = { ...PAGE_FIELDS };
+    delete pageFields[field];
+    const result = compile([organization(0)], snapshot, { pageFields });
+    expect(codes(result)).toContain("page_field_required_missing");
+    if (result.ok) return;
+    const named = result.blockers.find((entry) => entry.evidence?.field === field);
+    expect(named).toBeDefined();
+    expect(named!.message).toContain(field);
+  });
+
+  it("names EVERY missing required field, not just the first", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, { pageFields: { title: "About" } });
+    expect(codes(result)).toEqual(["page_field_required_missing", "page_field_required_missing", "page_field_required_missing"]);
+    if (result.ok) return;
+    expect(result.blockers.map((entry) => entry.evidence?.field).sort()).toEqual(["pageType", "route", "seo"]);
+  });
+
+  it("accepts the live seo shape and carries it into the create body untouched", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const seo = { title: "About us", description: "Who we are.", ogImage: "/og.png", robots: { index: true, follow: false } };
+    const result = compile([organization(0)], snapshot, { pageFields: { ...PAGE_FIELDS, seo } });
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    expect(result.plan.write.fields.seo).toEqual(seo);
+  });
+});
+
+describe("C3 — the tracking one-writer funnel", () => {
+  it("refuses a `tracking` key inside pageFields by name, naming set_tracking as the channel", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, { pageFields: { ...PAGE_FIELDS, tracking: { enabled: true } } });
+    expect(codes(result)).toEqual(["page_fields_tracking_reserved"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.remedy).toContain("set_tracking");
+  });
+
+  it("compiles target.tracking into its own set_tracking op on a patch, never into set_page_meta", async () => {
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [pageObject("page_about", [{ id: "s_existing1", type: "prose", data: { body: "<p>Old.</p>" } }])] } }));
+    const result = compile([organization(0)], snapshot, { pageObjectId: "page_about", pageFields: { title: "About the studio" }, tracking: { enabled: true, label: "about" } });
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "patch") return;
+    const ops = result.plan.write.ops;
+    expect(ops.map((op) => op.op)).toEqual(["set_page_meta", "upsert_section", "set_tracking"]);
+    const meta = ops.find((op) => op.op === "set_page_meta")!;
+    expect(meta.op === "set_page_meta" && Object.keys(meta.fields)).toEqual(["title"]);
+    const tracking = ops.find((op) => op.op === "set_tracking")!;
+    expect(tracking).toEqual({ op: "set_tracking", fields: { enabled: true, label: "about" } });
+  });
+
+  it("carries tracking in the create body -- object_create takes a whole body, the funnel constrains patch ops", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, { tracking: { enabled: true } });
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    expect(result.plan.write.fields.tracking).toEqual({ enabled: true });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// C4 -- section identity.
+// ---------------------------------------------------------------------------------------------
+describe("C4 — caller-preallocated section ids", () => {
+  it("uses the caller's preallocated ids verbatim and records their origin", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "about"), people(1, "team")], snapshot, { sectionIds: { about: "s_about1", team: "s_team2" } });
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    expect((result.plan.write.fields.sections as InlineSection[]).map((section) => section.id)).toEqual(["s_about1", "s_team2"]);
+    expect(result.plan.sectionProvenance.every((section) => section.sectionIdOrigin === "preallocated")).toBe(true);
+  });
+
+  it("keeps two BYTE-IDENTICAL drafts distinct -- which a content digest alone cannot do", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const same = "<p>Identical copy.</p>";
+    const result = compile([organization(0, "a", same), organization(1, "b", same)], snapshot, { sectionIds: { a: "s_a1", b: "s_b2" } });
+    expect(codes(result)).toEqual([]);
+    if (!result.ok || result.plan.write.kind !== "create") return;
+    const sections = result.plan.write.fields.sections as InlineSection[];
+    expect(sections.map((section) => section.id)).toEqual(["s_a1", "s_b2"]);
+    expect(sections[0]!.data).toEqual(sections[1]!.data);
+  });
+
+  it("refuses a preallocated id that does not match Platform's ^s_[a-z0-9]+$ pattern", async () => {
+    const snapshot = await snapshotOf(fixture());
+    for (const bad of ["sec_about", "s_About", "s_about-1", "s_"]) {
+      const result = compile([organization(0, "about")], snapshot, { sectionIds: { about: bad } });
+      expect(codes(result)).toContain("section_id_malformed");
+    }
+  });
+
+  it("mints a conformant id where none is supplied at all", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "about")], snapshot);
+    expect(codes(result)).toEqual([]);
+    if (!result.ok) return;
+    expect(result.plan.sectionProvenance[0]!.sectionId).toMatch(/^s_[a-z0-9]+$/);
+    expect(result.plan.sectionProvenance[0]!.sectionIdOrigin).toBe("minted");
+  });
+
+  it("refuses a PARTIAL preallocation by name rather than minting the rest behind the caller's intent", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "about"), people(1, "team")], snapshot, { sectionIds: { about: "s_about1" } });
+    expect(codes(result)).toEqual(["preallocated_section_id_missing"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence).toMatchObject({ missingUnitKeys: ["team"] });
+  });
+
+  it("refuses two units preallocated the SAME id by name", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "a"), people(1, "b")], snapshot, { sectionIds: { a: "s_dup1", b: "s_dup1" } });
+    expect(codes(result)).toEqual(["duplicate_section_id"]);
+  });
+
+  it("refuses a preallocated id naming a unit that was never drafted", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "about")], snapshot, { sectionIds: { about: "s_about1", ghost: "s_ghost1" } });
+    expect(codes(result)).toContain("preallocated_section_id_unmatched");
+  });
+
+  it("refuses two drafted units sharing a unit key, since a preallocated id could not be attributed", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "same"), people(1, "same")], snapshot);
+    expect(codes(result)).toContain("duplicate_unit_key");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// C5 -- the ported battery.
+// ---------------------------------------------------------------------------------------------
+describe("C5 — per-item structured-content blockers", () => {
+  it("refuses an FAQ item missing its answer", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([faq(0, [{ question: "How long?" }])], snapshot))).toEqual(["faq_item_incomplete"]);
+  });
+
+  it("refuses an FAQ item missing its question", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([faq(0, [{ answer: "Six weeks." }])], snapshot);
+    expect(codes(result)).toEqual(["faq_item_incomplete"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.message).toContain("question");
+  });
+
+  it("refuses an FAQ with no items at all rather than downgrading it to prose", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([faq(0, [])], snapshot))).toEqual(["faq_items_missing"]);
+  });
+
+  it("refuses a process step missing its description", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([process(0, [{ question: "Assess" }])], snapshot))).toEqual(["process_step_incomplete"]);
+  });
+
+  it("refuses a process with no ordered items rather than downgrading it to prose", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([process(0, [])], snapshot))).toEqual(["process_steps_missing"]);
+  });
+
+  it("refuses a comparison item missing its after value", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([comparison(0, [{ before: { src: "/a.jpg", alt: "a", label: "a" } }])], snapshot))).toEqual(["comparison_item_incomplete"]);
+  });
+
+  it("refuses a comparison with no items at all", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([comparison(0, [])], snapshot))).toEqual(["comparison_items_missing"]);
+  });
+
+  it("refuses a TEXT-only comparison: before_after's live data schema is a single {src,alt,label} image pair", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([comparison(0, [{ before: "Cracked emulsion", after: "Restored" }])], snapshot))).toEqual(["comparison_media_unavailable"]);
+  });
+
+  it("refuses a multi-row comparison: before_after holds exactly one pair", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const media = (label: string) => ({ src: `/${label}.jpg`, alt: label, label });
+    const items = [{ before: media("b1"), after: media("a1") }, { before: media("b2"), after: media("a2") }];
+    expect(codes(compile([comparison(0, items)], snapshot))).toEqual(["comparison_multiple_pairs_unsupported"]);
+  });
+
+  it("refuses a draft carrying none of the discriminators it routes on", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const orphan: DraftedSectionInput = { unitKey: "x", order: 0, sectionType: "mystery", draft: { title: "T", body: "<p>B</p>" } };
+    expect(codes(compile([orphan], snapshot))).toEqual(["unrecognized_draft_artifact"]);
+  });
+
+  it("is ALL OR NOTHING: one bad unit fails the whole compilation and returns no partial plan", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0, "good"), faq(1, [], "bad")], snapshot);
+    expect(result.ok).toBe(false);
+    expect(codes(result)).toEqual(["faq_items_missing"]);
+  });
+});
+
+describe("C5 — reserved and out-of-scope inputs", () => {
+  it("refuses a caller-supplied `sections` key in pageFields rather than silently overwriting it", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, { pageFields: { ...PAGE_FIELDS, sections: [{ id: "s_mine1", type: "prose", data: { body: "<p>Mine.</p>" } }] } });
+    expect(codes(result)).toEqual(["page_fields_sections_reserved"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence?.suppliedKeys).toContain("sections");
+  });
+
+  it("refuses a named cross-object change rather than folding it into the page write", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compile([organization(0)], snapshot, {
+      crossObjectChanges: [{ objectType: "navigation", objectId: "nav_main", reason: "add the new page to the primary menu" }]
     });
+    expect(codes(result)).toEqual(["cross_object_change_unsupported"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence).toMatchObject({ objectType: "navigation", objectId: "nav_main" });
+  });
 
+  it("refuses drafts compiled against another tenant's snapshot", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const result = compileSiteContentObjects({ projectId: "dr-lurie", drafted: [organization(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
+    expect(codes(result)).toEqual(["foreign_tenant_reference"]);
+  });
+
+  it("refuses an empty drafting result", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([], snapshot))).toEqual(["no_drafted_sections"]);
+  });
+
+  it("refuses two drafts sharing a planner order", async () => {
+    const snapshot = await snapshotOf(fixture());
+    expect(codes(compile([organization(3, "a"), people(3, "b")], snapshot))).toContain("duplicate_section_order");
+  });
+});
+
+describe("C5 — materializationKey determinism", () => {
+  it("is deterministic: identical inputs and ids produce the identical key and the identical section ids", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const units = [organization(0, "about"), people(1, "team")];
+    const ids = { about: "s_about1", team: "s_team2" };
+    const first = compile(units, snapshot, { sectionIds: ids });
+    const second = compile(units, snapshot, { sectionIds: ids });
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(second.plan.materializationKey).toBe(first.plan.materializationKey);
+    expect(second.plan.sectionProvenance.map((section) => section.sectionId)).toEqual(first.plan.sectionProvenance.map((section) => section.sectionId));
+    expect(second.plan.changeSets[0]!.changeSetId).toBe(first.plan.changeSets[0]!.changeSetId);
+  });
+
+  it("a REORDER changes the digest -- it must never dedupe onto the pre-reorder apply", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const ids = { about: "s_about1", team: "s_team2" };
+    const before = compile([organization(0, "about"), people(1, "team")], snapshot, { sectionIds: ids });
+    const after = compile([organization(1, "about"), people(0, "team")], snapshot, { sectionIds: ids });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    // Each unit keeps its own id; only their sequence on the page moved.
+    expect(before.plan.sectionProvenance.map((section) => [section.unitKey, section.sectionId])).toEqual([["about", "s_about1"], ["team", "s_team2"]]);
+    expect(after.plan.sectionProvenance.map((section) => [section.unitKey, section.sectionId])).toEqual([["team", "s_team2"], ["about", "s_about1"]]);
+    expect(after.plan.materializationKey).not.toBe(before.plan.materializationKey);
+  });
+
+  it("a changed draft body changes the key -- the key is not a constant", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const base = compile([organization(0, "about")], snapshot, { sectionIds: { about: "s_about1" } });
+    const edited = compile([organization(0, "about", "<p>Founded in 1974.</p>")], snapshot, { sectionIds: { about: "s_about1" } });
     expect(base.ok && edited.ok).toBe(true);
     if (!base.ok || !edited.ok) return;
     expect(edited.plan.materializationKey).not.toBe(base.plan.materializationKey);
   });
 
-  it("compiles a product/service description as prose rather than inventing a product id", async () => {
+  it("a changed PAGE FIELD changes the key even when every section is untouched", async () => {
     const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "offering", draft: { offeringKind: "service", title: "Restoration", body: "<p>Frame by frame.</p>", groundedIn: ["src"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: { ...PAGE_FIELDS, slug: "services", title: "Services" } }
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.sectionProvenance[0]!.componentType).toBe("prose");
-  });
-
-  it("compiles a process draft into steps when the draft has ordered items", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [
-        {
-          order: 2,
-          sectionType: "how_it_works",
-          draft: { referenceKind: "process", title: "Submitting a film", body: "<p>Three stages.</p>", items: [{ question: "Prepare the reel", answer: "Clean and inspect." }, { question: "Ship it", answer: "Use the archive courier." }], groundedIn: ["src"] }
-        }
-      ],
-      snapshot,
-      target: { pageObjectId: null, pageFields: { ...PAGE_FIELDS, slug: "docs", title: "Documentation" } }
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.sectionProvenance[0]!.componentType).toBe("steps");
-  });
-
-  it("compiles an FAQ draft into a faq section, carrying its question/answer pairs", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "questions", draft: { referenceKind: "faq", title: "Common questions", body: "<p>…</p>", items: [{ question: "Do you accept 16mm?", answer: "Yes." }], groundedIn: ["src"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: { ...PAGE_FIELDS, slug: "faq", title: "FAQ" } }
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok || result.plan.write.kind !== "create") return;
-    expect(result.plan.sectionProvenance[0]!.componentType).toBe("faq");
-    const data = (result.plan.write.fields.sections as InlineSection[])[0]!.data as { items: unknown[] };
-    expect(data.items).toEqual([{ q: "Do you accept 16mm?", a: "Yes." }]);
+    const base = compile([organization(0, "about")], snapshot, { sectionIds: { about: "s_about1" } });
+    const retitled = compile([organization(0, "about")], snapshot, { pageFields: { ...PAGE_FIELDS, title: "About the studio" }, sectionIds: { about: "s_about1" } });
+    expect(base.ok && retitled.ok).toBe(true);
+    if (!base.ok || !retitled.ok) return;
+    expect(retitled.plan.materializationKey).not.toBe(base.plan.materializationKey);
   });
 });
 
-describe("compileSiteContentObjects — patching an existing page (mixed ops)", () => {
-  it("builds set_page_meta + upsert_section + update_section_data in one ops array", async () => {
-    const existingBio: InlineSection = { id: "s_existingteam", type: "bio", data: { heading: "The team", body: "<p>Three archivists.</p>", trustNotes: [] } };
-    const page = pageObject("page_about", [existingBio]);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
+// ---------------------------------------------------------------------------------------------
+// The revise path -- refused by name, with its carry-forward recorded.
+// ---------------------------------------------------------------------------------------------
+describe("the page-revise path is refused by name (carry-forward, not an oversight)", () => {
+  it("refuses a request naming an existing inline section to rewrite", async () => {
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [pageObject("page_about", [{ id: "s_existing1", type: "prose", data: { body: "<p>Old.</p>" } }])] } }));
+    const result = compile([organization(0, "about")], snapshot, { pageObjectId: "page_about", sectionTargets: { about: "s_existing1" } });
+    expect(codes(result)).toEqual(["page_revise_path_unsupported"]);
+    if (result.ok) return;
+    expect(result.blockers[0]!.evidence?.carryForward).toBe("page-revise path: separate task");
+  });
 
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [people(4), values(9)],
-      snapshot,
-      target: { pageObjectId: "page_about", pageFields: { ...PAGE_FIELDS, title: "About Us" }, sectionTargets: { 4: "s_existingteam" } }
-    });
+  it("refuses a patch whose page row carries no body at all -- the production object_inventory case", async () => {
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [bodylessPageObject("page_about")] } }));
+    const result = compile([organization(0, "about")], snapshot, { pageObjectId: "page_about" });
+    expect(codes(result)).toEqual(["page_body_unavailable_for_patch"]);
+  });
 
-    expect(result.ok).toBe(true);
+  it("still refuses a shared/standalone section mutation under its own name", async () => {
+    const snapshot = await snapshotOf(fixture({
+      objectsByType: { section: [standaloneSection("sec_shared")], page: [pageObject("page_about", [{ id: "s_existing1", type: "prose", data: { body: "<p>Old.</p>" } }])] }
+    }));
+    const result = compile([organization(0, "about")], snapshot, { pageObjectId: "page_about", sectionTargets: { about: "sec_shared" } });
+    expect(codes(result)).toEqual(["unsupported_shared_section_mutation"]);
+  });
+
+  it("refuses a revision draft that names no target", async () => {
+    const snapshot = await snapshotOf(fixture());
+    const revision: DraftedSectionInput = { unitKey: "rev", order: 0, sectionType: "revised_prose", draft: { mode: "revise", revisedBody: "<p>New copy.</p>" } };
+    expect(codes(compile([revision], snapshot))).toEqual(["revision_without_target"]);
+  });
+
+  it("still APPENDS to an existing page whose body is known, at the right positions", async () => {
+    const existing = [{ id: "s_existing1", type: "prose", data: { body: "<p>Old.</p>" } }];
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [pageObject("page_about", existing)] } }));
+    const result = compile([organization(0, "a"), people(1, "b")], snapshot, { pageObjectId: "page_about", pageFields: {} });
+    expect(codes(result)).toEqual([]);
     if (!result.ok || result.plan.write.kind !== "patch") return;
-    expect(result.plan.page.action).toBe("patch");
-    const ops = result.plan.write.ops;
-    expect(ops[0]).toMatchObject({ op: "set_page_meta", fields: { title: "About Us" } });
-    // The revised team bio: same componentType, only data changed -> a merge op naming just the id.
-    const teamOp = ops.find((op) => op.op === "update_section_data");
-    expect(teamOp).toMatchObject({ op: "update_section_data", sectionId: "s_existingteam" });
-    // The new "values" section: no target named -> upsert_section, appended after the one existing
-    // inline section.
-    const newOp = ops.find((op) => op.op === "upsert_section");
-    expect(newOp).toMatchObject({ op: "upsert_section", position: 1 });
-    expect(result.plan.sectionProvenance.find((s) => s.order === 4)!.action).toBe("update");
-    expect(result.plan.sectionProvenance.find((s) => s.order === 9)!.action).toBe("create");
+    const upserts = result.plan.write.ops.filter((op) => op.op === "upsert_section");
+    expect(upserts).toHaveLength(2);
+    expect(upserts.map((op) => (op.op === "upsert_section" ? op.position : null))).toEqual([1, 2]);
+    expect(result.plan.page.targetContentRevision).toBe(7);
   });
 
-  it("uses upsert_section (a full replace), not update_section_data, when the component type itself changes", async () => {
-    const existingProse: InlineSection = { id: "s_existingvalues", type: "prose", data: { body: "<p>old</p>" } };
-    const page = pageObject("page_about", [existingProse]);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
-
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [people(0)],
-      snapshot,
-      target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 0: "s_existingvalues" } }
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok || result.plan.write.kind !== "patch") return;
-    expect(result.plan.write.ops).toEqual([{ op: "upsert_section", section: { id: "s_existingvalues", type: "bio", data: { heading: "The team", body: "<p>Four archivists.</p>", trustNotes: [] } } }]);
+  it("refuses a patch target the snapshot does not contain", async () => {
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [] } }));
+    expect(codes(compile([organization(0)], snapshot, { pageObjectId: "page_ghost", pageFields: {} }))).toEqual(["patch_target_not_in_snapshot"]);
   });
 
-  it("marks a section unchanged and emits no op for it when the revised data is identical", async () => {
-    const existingBio: InlineSection = { id: "s_team", type: "bio", data: { heading: "The team", body: "<p>Four archivists.</p>", trustNotes: [] } };
-    const page = pageObject("page_about", [existingBio]);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
-
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [people(4), organization(0)],
-      snapshot,
-      target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 4: "s_team" } }
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok || result.plan.write.kind !== "patch") return;
-    expect(result.plan.sectionProvenance.find((s) => s.order === 4)!.action).toBe("unchanged");
-    // Only the new section's upsert -- nothing for the unchanged one.
-    expect(result.plan.write.ops.filter((op) => op.op !== "set_page_meta")).toHaveLength(1);
-  });
-
-  it("refuses with no_effective_changes when nothing about the page or its named sections actually moved", async () => {
-    const existingBio: InlineSection = { id: "s_team", type: "bio", data: { heading: "The team", body: "<p>Four archivists.</p>", trustNotes: [] } };
-    const page = pageObject("page_about", [existingBio]);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
-
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(4)], snapshot, target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 4: "s_team" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("no_effective_changes");
-  });
-});
-
-describe("compileSiteContentObjects — the shared/standalone section refusal", () => {
-  it("refuses a patch target that is a standalone `section` object rather than one of the page's own inline sections", async () => {
-    const page = pageObject("page_about", []);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [standaloneSection("sec_shared_1")], page: [page] } }));
-
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 0: "sec_shared_1" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("unsupported_shared_section_mutation");
-  });
-
-  it("refuses a patch target that is an inline shared_ref pointer, even though it appears in the page's own sections array", async () => {
-    const sharedRefEntry: InlineSection = { id: "s_ref1", type: "shared_ref", data: { target: "sec_shared_1" } };
-    const page = pageObject("page_about", [sharedRefEntry]);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [standaloneSection("sec_shared_1")], page: [page] } }));
-
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 0: "s_ref1" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("unsupported_shared_section_mutation");
-  });
-});
-
-describe("compileSiteContentObjects — what it refuses", () => {
-  it("refuses a stale page patch target rather than applying an approval to a changed page", async () => {
-    const page = pageObject("page_about", [], 9);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [organization(0)],
-      snapshot,
-      target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, expectedPageContentRevision: 3 }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("stale_target");
-    expect(result.blockers[0]!.evidence).toMatchObject({ expectedContentRevision: 3, actualContentRevision: 9 });
-  });
-
-  it("refuses target.pageFields carrying its own \"sections\" key", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(0)], snapshot, target: { pageObjectId: null, pageFields: { ...PAGE_FIELDS, sections: [] } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("page_fields_must_not_include_sections");
-  });
-
-  it("refuses a section target named with no page being patched", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS, sectionTargets: { 0: "s_x" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("section_target_without_page");
-  });
-
-  it("refuses a process section whose draft produced prose instead of steps -- never a silent downgrade", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "how_it_works", draft: { referenceKind: "process", title: "Submitting", body: "<p>Three stages, in a paragraph.</p>", groundedIn: ["src"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("process_steps_missing");
-    expect(result.blockers[0]!.remedy).toContain("re-plan");
-  });
-
-  it("refuses an FAQ with no items", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "questions", draft: { referenceKind: "faq", title: "Questions", body: "<p>…</p>", groundedIn: ["src"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("faq_items_missing");
-  });
-
-  it("refuses an FAQ item missing its answer -- one incomplete item is a malformed draft, not one fewer question", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "questions", draft: { referenceKind: "faq", title: "Q", body: "<p>…</p>", items: [{ question: "Do you accept 16mm?", answer: "Yes." }, { question: "And 35mm?" }], groundedIn: ["s"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("faq_item_incomplete");
-    expect(result.blockers[0]!.message).toContain("item 1");
-  });
-
-  it("refuses a process item missing its description rather than shipping a step list with a gap", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "how_it_works", draft: { referenceKind: "process", title: "Submitting", body: "<p>…</p>", items: [{ question: "Prepare the reel", answer: "Clean it." }, { question: "Ship it" }], groundedIn: ["s"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("process_step_incomplete");
-    expect(result.blockers[0]!.message).toContain("item 1");
-  });
-
-  it("refuses a page patch target the snapshot does not contain, rather than diffing against nothing", async () => {
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [pageObject("page_about")] } }));
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(0)], snapshot, target: { pageObjectId: "page_abuot", pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("patch_target_not_in_snapshot");
-    expect(result.blockers[0]!.evidence).toMatchObject({ objectType: "page" });
-  });
-
-  it("refuses a section patch target that is not among the page's own inline sections", async () => {
-    const page = pageObject("page_about", []);
-    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [page] } }));
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: "page_about", pageFields: PAGE_FIELDS, sectionTargets: { 0: "s_nope" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("patch_target_not_in_snapshot");
-  });
-
-  it("refuses a component type this tenant's own contract does not declare", async () => {
-    const narrowed: SiteObjectFieldContract = { ...SECTION_CONTRACT, sectionTypes: ["prose", "hero"] };
-    const snapshot = await snapshotOf(fixture({ contractsByType: { section: narrowed, page: PAGE_CONTRACT } }));
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("unsupported_section_type");
-    expect(result.blockers[0]!.message).toContain("bio");
-  });
-
-  it("refuses to compile at all when the snapshot carries no section contract", async () => {
-    const snapshot = await snapshotOf(fixture({ contractsByType: { page: PAGE_CONTRACT } }));
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("section_type_registry_unavailable");
-  });
-
-  it("refuses drafts produced for another tenant", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: "zilberman-ff", drafted: [organization(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("foreign_tenant_reference");
-  });
-
-  it("refuses a revision with no section to revise", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [{ order: 0, sectionType: "about_overview", draft: { mode: "revise", revisedBody: "<p>Tighter.</p>", changesSummary: ["shortened"] } }],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("revision_without_target");
-  });
-
-  it("refuses the whole page when one section refuses -- never a half-built page", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({
-      projectId: TENANT,
-      drafted: [organization(1), { order: 2, sectionType: "questions", draft: { referenceKind: "faq", title: "Q", body: "<p>…</p>", groundedIn: ["s"] } }, people(3)],
-      snapshot,
-      target: { pageObjectId: null, pageFields: PAGE_FIELDS }
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers.map((entry) => entry.code)).toEqual(["faq_items_missing"]);
-  });
-
-  it("refuses a draft carrying no discriminator this compiler routes on", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [{ order: 0, sectionType: "mystery", draft: { title: "T", body: "<p>b</p>" } }], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers[0]!.code).toBe("unrecognized_draft_artifact");
-  });
-
-  it("refuses two sections claiming the same position", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(2), people(2)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.blockers.some((entry) => entry.code === "duplicate_section_order")).toBe(true);
-  });
-
-  it("refuses a page whose own contract is not satisfied, naming the field", async () => {
-    const snapshot = await snapshotOf(fixture());
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [organization(0)], snapshot, target: { pageObjectId: null, pageFields: { pageType: "standard" } } });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(JSON.stringify(result.blockers)).toContain("slug");
-  });
-});
-
-// REGRESSION -- adversarial review of PR #387 (2026-09-18) found `supportedComponentTypes` reading the
-// registry off `properties.sectionType.enum` inside `body_schema`, a path that does not exist on the
-// live contract (its real `body_schema` for `section` is `{tracking, section: {oneOf: [...]}}` -- no
-// `sectionType` property at all) and made every real compile refuse `section_type_registry_unavailable`
-// unconditionally. This contract is shaped exactly like the live one -- `sectionTypes` populated the
-// way siteContextSourceAdapter.ts's own extraction does, and a `schema` that deliberately carries none
-// of the fictional path -- so a regression back to reading `schema` for the registry fails this test.
-describe("site content compiler -- component-type registry (live-contract-shaped regression)", () => {
-  it("resolves supported component types from contract.sectionTypes, never from schema.properties.sectionType.enum", async () => {
-    const liveShapedContract: SiteObjectFieldContract = {
-      objectType: "section",
-      required: [],
-      schema: { type: "object", additionalProperties: true, properties: { tracking: { type: "object" }, section: { oneOf: [] } } },
-      sectionTypes: LIVE_SECTION_TYPES.map((entry) => entry.type)
-    };
-    const snapshot = await snapshotOf(fixture({ contractsByType: { section: liveShapedContract, page: PAGE_CONTRACT } }));
-    const result = compileSiteContentObjects({ projectId: TENANT, drafted: [people(0)], snapshot, target: { pageObjectId: null, pageFields: PAGE_FIELDS } });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.sectionProvenance[0]).toMatchObject({ componentType: "bio" });
+  it("refuses a patch whose page moved since the request was prepared", async () => {
+    const snapshot = await snapshotOf(fixture({ objectsByType: { section: [], page: [pageObject("page_about", [], 9)] } }));
+    expect(codes(compile([organization(0)], snapshot, { pageObjectId: "page_about", pageFields: {}, expectedPageContentRevision: 7 }))).toEqual(["stale_target"]);
   });
 });
