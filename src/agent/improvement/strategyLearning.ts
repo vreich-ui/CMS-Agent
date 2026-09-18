@@ -1,1 +1,1081 @@
-PLACEHOLDER
+// Strategy-level learning (T21.35) — the third and last thing the tracking sink can teach, and the
+// only one that outlives a single piece of content.
+//
+// WHAT WAS MISSING. The two existing outer loops are both PER-ARTIFACT. T21.7 pulls `by=producer`
+// rollups and files them as feedback outcomes against the node/run that made one object; T21.22 reads
+// those back and tells one node it is below the site median. Both answer "how did THIS do?". Neither
+// can answer the question an editor actually asks — "what KIND of piece works here?" — because
+// nothing in the pipeline ever grouped published performance by the STRATEGY and INTENT the piece was
+// written to. A finding like "the pieces that open on the reader's objection hold attention twice as
+// long" is invisible to a per-object view no matter how many objects it sees.
+//
+// WHAT THIS DOES. Pull the sink's `by=strategy` grain (one row per strategy/intent/day), aggregate it
+// per strategy/intent over the window, compare each group against the SITE-WIDE figure for the SAME
+// window, and write the material differences down as `learning_record_observation` entries with
+// source `tracking:strategy.v1`. Then — and only when a finding has held up — promote it into the
+// per-node ACE playbooks of the writer and planning nodes, through the same applyPlaybookDelta the
+// curator uses.
+//
+// THE BAR FOR TEACHING SOMETHING. An observation is cheap; a playbook item changes what every future
+// piece is written to. So promotion needs BOTH:
+//   * n >= STRATEGY_PROMOTION_MIN_N — the sink's own `n` for the group. A rate computed off 12 of
+//     anything is a rumour.
+//
+//     WHAT `n` COUNTS CHANGED UNDER THIS BAR, AND THE BAR HAS NOT BEEN RE-PICKED. This text used to
+//     say "raw attributed-event count, NOT sessions". kugel-data's `by=strategy` grain (migration
+//     012) emits `n = sessions`, deliberately: sessions is the only class-A denominator on that
+//     deployment. So the same threshold now gates on roughly an order of magnitude fewer units, and
+//     100 was calibrated for events. Nothing errors — the loop simply promotes less, or stops. Left
+//     as an OPEN DECISION rather than silently re-picked here, because moving a promotion bar is a
+//     judgement about how much evidence a lesson needs, not a refactor. See KNOWN_ISSUES T-14b.
+//   * the same direction in >= STRATEGY_PROMOTION_MIN_WINDOWS consecutive windows — one good week is
+//     a week, not a lesson.
+// Countering is deliberately CHEAPER than promoting: a single later window that contradicts a
+// promoted item, at the same n bar, counters it. Being slow to unlearn a wrong lesson is worse than
+// being slow to learn a right one.
+//
+// SAFETY, same posture as trackingIngest.ts / engagement.ts. Read-only against the sink; one GET
+// through the ONE client (fetchRollupRows), the pinned query contract untouched. Reached by env NAMES
+// only. NEVER throws: an unconfigured sink, an unreachable sink, a 503 from a grain whose migration
+// has not run on this deployment, zero rows, or a repository that refuses a write all end as a
+// no-observation result. Nothing is ever fabricated: a metric the sink did not report is absent, not
+// zero, and a group with nothing to compare against produces no finding.
+import type { LearningRepository } from "../repository/interfaces/LearningRepository.js";
+import type { ImprovementRepository } from "../repository/interfaces/ImprovementRepository.js";
+import type { LearningObservation } from "../mcp/workspace/store.js";
+import { applyPlaybookDelta } from "./playbook.js";
+import { FLEET_SCOPE_KEY, scopeKey, type PolicyScope } from "../scope/policyScope.js";
+import { stableHash } from "./improvementTypes.js";
+import type { PlaybookDelta, PlaybookItem, PlaybookItemKind } from "./improvementTypes.js";
+import { fetchRollupRows, metricsFromRow, trackingSinkConnectionState, type RollupFetchDeps } from "./trackingIngest.js";
+
+const now = () => new Date().toISOString();
+
+/** Observation `source` stamped on every entry this module writes; the contract the promotion pass
+ * (and any later reader) filters on. */
+export const STRATEGY_OBSERVATION_SOURCE = "tracking:strategy.v1";
+
+/** The strategy.v1 metric set, in wire (snake_case) spelling. `buy_click_rate` is this grain's own —
+ * engagement.v1 has no such column — which is why the row projector takes its key list rather than
+ * hard-coding one. Anything else on a row is ignored. */
+export const STRATEGY_METRIC_KEYS = [
+  "pageviews",
+  "exposures",
+  "sessions",
+  "completion_rate",
+  "cta_ctr",
+  "buy_click_rate",
+  "purchase_rate",
+  "revenue_cents",
+  "p75_dwell_ms"
+] as const;
+export type StrategyMetricKey = typeof STRATEGY_METRIC_KEYS[number];
+
+/** The metrics a strategy group is COMPARED on. Counts are excluded for the same reason engagement.ts
+ * excludes them: pageviews and sessions measure how much traffic a group got, not how well it did
+ * with it, and a window total is not comparable to a per-cell median at all. Every key here is
+ * scale-free (a rate, or a per-reader duration).
+ *
+ * FIX (c) — DIRECTION IS A NAMED, PER-KEY FACT, NOT AN ASSUMPTION BAKED INTO THE COMPARISON. This
+ * used to be a bare key list with a comment claiming "higher is better on all of them" — true for
+ * every key that has ever been added, and never checked anywhere a new key COULD be added without
+ * checking it. `metricDirections` below infers the key set from the object literal's own keys, so
+ * the key list and its directions cannot drift apart the way two parallel arrays could; every
+ * existing key defaults to `"higher_is_better"`, which is exactly today's behaviour — additive, not
+ * a reinterpretation of a stored number. A metric that is better LOWER (a bounce/exit/abandon-style
+ * measure) is added the same way with `"lower_is_better"`, and every function that ranks or labels a
+ * finding (`strategyPlaybookItemKind`, `strategyPlaybookItemPrefix`, `isFavorableFinding`) takes the
+ * direction as an explicit argument instead of assuming one. */
+export type MetricDirection = "higher_is_better" | "lower_is_better";
+
+const metricDirections = <K extends string>(directions: Record<K, MetricDirection>): Record<K, MetricDirection> => directions;
+
+export const STRATEGY_METRIC_DIRECTIONS = metricDirections({
+  completion_rate: "higher_is_better",
+  cta_ctr: "higher_is_better",
+  buy_click_rate: "higher_is_better",
+  purchase_rate: "higher_is_better",
+  p75_dwell_ms: "higher_is_better"
+});
+export type StrategyComparableKey = keyof typeof STRATEGY_METRIC_DIRECTIONS;
+/** Same key set, same order, as STRATEGY_METRIC_DIRECTIONS — kept as an array because most readers
+ * here want to iterate or `.includes()` rather than look a direction up. */
+export const STRATEGY_COMPARABLE_KEYS = Object.keys(STRATEGY_METRIC_DIRECTIONS) as StrategyComparableKey[];
+
+/** The sink's own `n` a group needs before it can promote or counter anything: whatever the grain
+ * says the rates were computed from. On kugel-data's `by=strategy` grain (migration 012) that is
+ * SESSIONS. This number was picked when `n` meant attributed events; it has not been re-picked.
+ * See the header, and KNOWN_ISSUES T-14b. */
+export const STRATEGY_PROMOTION_MIN_N = 100;
+/** Consecutive windows a finding must hold the same direction across before it becomes a lesson. */
+export const STRATEGY_PROMOTION_MIN_WINDOWS = 2;
+/**
+ * The sink's own `n` a group needs before its finding is written down AT ALL.
+ *
+ * Promotion has always had a bar. OBSERVATION had none, and the first live run made that asymmetry
+ * look like what it is. On 2026-09-09, against a 2-day window, this loop recorded seven observations
+ * at n=1..2 — among them "intent `reassure` (strategy `recommendation`): p75 dwell 6.5x site median
+ * (n=1)". Nothing was promoted; STRATEGY_PROMOTION_MIN_N held exactly as designed. But
+ * `strategy-review` — the one output in this system addressed to a HUMAN — reads OBSERVATIONS, not
+ * promotions. So a single session's dwell time was on its way into a person's weekly thread wearing
+ * the same clothes as a real finding.
+ *
+ * Deliberately far BELOW STRATEGY_PROMOTION_MIN_N rather than equal to it. The two bars answer
+ * different questions: an observation is a note that something might be true and is allowed to stay
+ * provisional, while a playbook item changes what every future piece is written to. Equalising them
+ * would throw away the provisional middle this loop needs in order to ever accumulate two consecutive
+ * windows of anything. 10 is the point below which a p75 ratio is arithmetic performed on nothing.
+ */
+export const STRATEGY_OBSERVATION_MIN_N = 10;
+/** A group's metric is materially ABOVE the site-wide figure at or over this ratio, and materially
+ * BELOW it at or under STRATEGY_MATERIAL_BELOW_RATIO. Plain "different from the middle" is a coin
+ * flip — half of everything is — so a finding worth writing down needs a margin. The low side mirrors
+ * engagement.ts's ENGAGEMENT_SHORTFALL_RATIO so the two loops call the same gap the same size. */
+export const STRATEGY_MATERIAL_ABOVE_RATIO = 1.2;
+export const STRATEGY_MATERIAL_BELOW_RATIO = 0.8;
+
+/**
+ * The DEFAULT nodes a promoted strategy lesson is written to: the WRITER and the PLANNING nodes — the
+ * ones that decide what shape a piece takes and then take it. Deliberately an explicit list rather
+ * than a node-kind query: `kind` is a loose label (placement_resolver is `strategy` and runs on a
+ * deterministic engine path, where a bullet lesson would be injected into nothing), and a lesson
+ * landing in a node that cannot act on it is prompt budget spent on noise.
+ *
+ * FIX (d) — a DEFAULT, not the only possible answer. `promoteStrategySignals`'s `options.nodeIds` and
+ * `StrategyLearningParams.playbookTargetNodes` both override this list for one call; a caller that
+ * passes neither gets exactly this list, unchanged.
+ */
+export const STRATEGY_PLAYBOOK_TARGET_NODES = [
+  "brief_architect",     // planning — decides the piece's structure
+  "angle_strategy",      // planning — decides the angle
+  "objection_mapping",   // planning — decides which objections the piece takes on
+  "narrative_movement",  // planning — decides how the piece moves
+  "reader_insight",      // planning — decides who it is written to
+  "draft_writer"         // the writer
+] as const;
+
+// ── row → group ──────────────────────────────────────────────────────────────
+
+export type StrategyGroupKey = { strategy?: string; intent?: string };
+export type StrategyGroup = StrategyGroupKey & {
+  /** Sink `n` summed over the group's rows: the raw attributed-event count the rates rest on. */
+  n: number;
+  /** Days the group actually appeared on inside the window. */
+  days: number;
+  metrics: Partial<Record<StrategyMetricKey, number>>;
+};
+
+const isFinite_ = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const round = (value: number, digits: number): number => Number(value.toFixed(digits));
+const asLabel = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+
+/** Stable identity for one strategy/intent group. A row with neither is not a group anyone can learn
+ * about, and is dropped rather than collected under a fabricated "unknown" bucket. */
+export const strategyGroupKeyOf = (key: StrategyGroupKey): string => `${key.strategy ?? ""}|${key.intent ?? ""}`;
+
+/** Read the sink's `n` off a row. Absent or non-numeric means the row states no backing count, which
+ * is treated as 0 — never as "probably enough". */
+const rowCount = (row: Record<string, unknown>): number => {
+  const raw = row.n ?? row.count ?? (row as { eventCount?: unknown }).eventCount;
+  const value = typeof raw === "string" && raw.trim() ? Number(raw) : raw;
+  return isFinite_(value) && value > 0 ? value : 0;
+};
+
+/**
+ * Collapse the window's rows into one row per strategy/intent.
+ *
+ * Counts SUM. Rates and dwell are n-WEIGHTED means — n is the sink's own count of the events each
+ * rate was computed from, so it is the only correct weight; an unweighted mean lets a 4-event day
+ * outvote a 4,000-event one. A row that states no n carries weight 1 rather than being dropped, so it
+ * still contributes without dominating. A metric no row reported is ABSENT from the group, not zero.
+ *
+ * `p75_dwell_ms` is a weighted mean of per-row p75s, not a true window percentile — that is not
+ * recoverable from pre-aggregated rollups, and it is said wherever the number is rendered rather than
+ * quietly presented as a real percentile.
+ */
+export function strategyGroupsFromRows(rows: Array<Record<string, unknown>>): StrategyGroup[] {
+  type Accumulator = StrategyGroup & { weighted: Map<StrategyMetricKey, { total: number; weight: number }> };
+  const groups = new Map<string, Accumulator>();
+  for (const row of rows) {
+    const strategy = asLabel(row.strategy);
+    const intent = asLabel(row.intent);
+    if (!strategy && !intent) continue;
+    const key = strategyGroupKeyOf({ strategy, intent });
+    const group: Accumulator = groups.get(key) ?? { ...(strategy ? { strategy } : {}), ...(intent ? { intent } : {}), n: 0, days: 0, metrics: {}, weighted: new Map() };
+    const n = rowCount(row);
+    const weight = n > 0 ? n : 1;
+    group.n += n;
+    group.days += 1;
+    const metrics = metricsFromRow(row, STRATEGY_METRIC_KEYS) as Partial<Record<StrategyMetricKey, number>>;
+    for (const metricKey of STRATEGY_METRIC_KEYS) {
+      const value = metrics[metricKey];
+      if (!isFinite_(value)) continue;
+      if (metricKey === "pageviews" || metricKey === "exposures" || metricKey === "sessions" || metricKey === "revenue_cents") {
+        group.metrics[metricKey] = (group.metrics[metricKey] ?? 0) + value;
+      } else {
+        const bucket = group.weighted.get(metricKey) ?? { total: 0, weight: 0 };
+        bucket.total += value * weight;
+        bucket.weight += weight;
+        group.weighted.set(metricKey, bucket);
+      }
+    }
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(({ weighted, ...group }) => {
+    for (const [metricKey, bucket] of weighted) if (bucket.weight > 0) group.metrics[metricKey] = round(bucket.total / bucket.weight, metricKey === "p75_dwell_ms" ? 0 : 6);
+    return group;
+  });
+}
+
+/**
+ * The n-WEIGHTED median of a set of (value, weight) pairs: sort by value, walk the weights, and take
+ * the value at which the running weight first reaches half the total. With every weight equal this
+ * is the ordinary median; with unequal weights it is the value a randomly chosen SESSION sits at,
+ * not the value a randomly chosen ROW sits at.
+ *
+ * Interpolates the two straddling values on an exact half-and-half split, so an even, evenly
+ * weighted set behaves exactly as the previous unweighted implementation did — that equivalence is
+ * pinned by test rather than asserted here.
+ */
+const weightedMedian = (pairs: Array<{ value: number; weight: number }>, digits: number): number | undefined => {
+  if (!pairs.length) return undefined;
+  const sorted = [...pairs].sort((a, b) => a.value - b.value);
+  const total = sorted.reduce((sum, pair) => sum + pair.weight, 0);
+  if (total <= 0) return undefined;
+  const half = total / 2;
+  let running = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    running += sorted[index]!.weight;
+    if (running > half) return round(sorted[index]!.value, digits);
+    // Exactly half the weight sits at or below this value: the median is the midpoint of this value
+    // and the next, mirroring the even-length case of a plain median.
+    if (running === half && index + 1 < sorted.length) return round((sorted[index]!.value + sorted[index + 1]!.value) / 2, digits);
+  }
+  return round(sorted[sorted.length - 1]!.value, digits);
+};
+
+/**
+ * The site-wide figure for the SAME window: the per-metric n-WEIGHTED median across every
+ * strategy/intent/day cell the sink returned.
+ *
+ * WHY WEIGHTED, AND WHAT WAS WRONG BEFORE. This used to be an UNWEIGHTED median across rows, while
+ * every group it is compared against is an n-weighted mean (`strategyGroupsFromRows`). Two different
+ * kinds of number on the two sides of one ratio. It survives while rows carry similar n and breaks
+ * as soon as they do not: on drlurie's first real 14-day window the sink returned 90 rows whose n
+ * ranged 1..42, the thin cells dragged the unweighted median for `p75_dwell_ms` down to 1893 ms, and
+ * the loop reported `hook`/`educate` at "85.1x site median" — a group that cannot plausibly hold a
+ * reader eighty-five times longer than typical. The finding was an artifact of the comparison, not a
+ * fact about the site.
+ *
+ * Weighting the baseline by the same `n` the group aggregation uses makes both sides answer the same
+ * question: what a typical SESSION saw, rather than what a typical ROW reported. A day on which one
+ * session bounced no longer counts as much as a day on which forty read to the end.
+ *
+ * STILL A MEDIAN, for the original reason: one runaway cell should not redefine "typical". And still
+ * across ROWS rather than groups, because a row is the sink's own unit of measurement.
+ *
+ * Only comparable (scale-free) metrics get one — see STRATEGY_COMPARABLE_KEYS. A metric no row
+ * reported has NO site figure, and therefore produces no comparison at all.
+ *
+ * A group being compared is itself among the rows the median is taken over (exactly as a node's own
+ * objects are among the site's in engagement.ts). With few groups that pulls the median toward the
+ * group; the material-ratio margin is what keeps that from manufacturing a finding.
+ *
+ * WHAT THIS DOES NOT FIX. A metric whose weighted median is 0 — on this deployment `cta_ctr`,
+ * `buy_click_rate` and `purchase_rate`, because the typical session clicks nothing — still yields no
+ * finding at any group value, since a ratio against zero is not a number. That is arguably correct
+ * ("typical is zero") and arguably a blind spot on exactly the metrics that pay for the site, but it
+ * is a different decision (ratio vs absolute delta) and is deliberately left alone here.
+ */
+export function strategySiteBaseline(rows: Array<Record<string, unknown>>): Partial<Record<StrategyComparableKey, number>> {
+  // The weight MUST be the one `strategyGroupsFromRows` uses, including its "a row stating no n
+  // carries weight 1 rather than being dropped" rule. If the two ever diverge, the ratio silently
+  // goes back to comparing two different populations.
+  const projected = rows.map((row) => {
+    const n = rowCount(row);
+    return { weight: n > 0 ? n : 1, metrics: metricsFromRow(row, STRATEGY_COMPARABLE_KEYS) };
+  });
+  const out: Partial<Record<StrategyComparableKey, number>> = {};
+  for (const metricKey of STRATEGY_COMPARABLE_KEYS) {
+    const pairs = projected
+      .map(({ weight, metrics }) => ({ value: metrics[metricKey], weight }))
+      .filter((pair): pair is { value: number; weight: number } => isFinite_(pair.value));
+    const median = weightedMedian(pairs, metricKey === "p75_dwell_ms" ? 0 : 6);
+    if (median !== undefined) out[metricKey] = median;
+  }
+  return out;
+}
+
+// ── findings ─────────────────────────────────────────────────────────────────
+
+export type StrategyDirection = "above" | "below";
+export type StrategyFinding = {
+  metric: StrategyComparableKey;
+  direction: StrategyDirection;
+  value: number;
+  siteFigure: number;
+  ratio: number;
+  /** Percentage-POINT difference, for the rate metrics only (dwell is a duration, not a rate). */
+  deltaPoints?: number;
+};
+
+/** Comparable metrics that sit materially away from the site-wide figure, biggest gap first. A metric
+ * missing on either side yields no finding — there is nothing to compare. */
+export function strategyFindings(group: StrategyGroup, baseline: Partial<Record<StrategyComparableKey, number>>): StrategyFinding[] {
+  const findings: StrategyFinding[] = [];
+  for (const metric of STRATEGY_COMPARABLE_KEYS) {
+    const value = group.metrics[metric];
+    const siteFigure = baseline[metric];
+    if (!isFinite_(value) || !isFinite_(siteFigure) || siteFigure <= 0) continue;
+    const ratio = round(value / siteFigure, 3);
+    if (ratio < STRATEGY_MATERIAL_ABOVE_RATIO && ratio > STRATEGY_MATERIAL_BELOW_RATIO) continue;
+    findings.push({
+      metric,
+      direction: ratio >= STRATEGY_MATERIAL_ABOVE_RATIO ? "above" : "below",
+      value,
+      siteFigure,
+      ratio,
+      ...(metric === "p75_dwell_ms" ? {} : { deltaPoints: round((value - siteFigure) * 100, 1) })
+    });
+  }
+  return findings.sort((a, b) => Math.abs(Math.log(b.ratio)) - Math.abs(Math.log(a.ratio)));
+}
+
+// ── rendering ────────────────────────────────────────────────────────────────
+
+const METRIC_LABELS: Record<StrategyComparableKey, string> = {
+  completion_rate: "completion",
+  cta_ctr: "CTA CTR",
+  buy_click_rate: "buy-click rate",
+  purchase_rate: "purchase rate",
+  p75_dwell_ms: "p75 dwell"
+};
+
+/** 18 → "18", 3.25 → "3.3". Trailing ".0" is noise in a sentence a human reads. */
+const num = (value: number): string => String(round(value, 1)).replace(/\.0$/, "");
+
+/** "p75 dwell 2.1× site median" for a duration; "completion +18 pts" for a rate. */
+export const renderStrategyFinding = (finding: StrategyFinding): string =>
+  finding.metric === "p75_dwell_ms"
+    ? `${METRIC_LABELS[finding.metric]} ${num(finding.ratio)}× site median`
+    : `${METRIC_LABELS[finding.metric]} ${(finding.deltaPoints ?? 0) >= 0 ? "+" : ""}${num(finding.deltaPoints ?? 0)} pts`;
+
+/** "intent `objection_handling` (strategy `objection_first`)" — whichever halves the row actually
+ * carried. Never invents the missing half. */
+export function strategySubjectPhrase(key: StrategyGroupKey): string {
+  if (key.intent && key.strategy) return `intent \`${key.intent}\` (strategy \`${key.strategy}\`)`;
+  if (key.intent) return `intent \`${key.intent}\``;
+  return `strategy \`${key.strategy}\``;
+}
+
+export type StrategyWindow = { from: string; to: string };
+export const strategyWindowKey = (window: StrategyWindow): string => `${window.from}..${window.to}`;
+
+/**
+ * THE OBSERVATION TEMPLATE.
+ *
+ *   `<subject>: <finding>, <finding> (n=<n>, window <from>..<to>)`
+ *
+ * e.g. "intent `objection_handling` (strategy `objection_first`): p75 dwell 2.1× site median,
+ * completion +18 pts (n=412, window 2026-08-24..2026-08-30)".
+ *
+ * Phrased as the CROSS-ARTICLE finding it is — a claim about a kind of piece, carrying the window it
+ * was measured over and the count it rests on, both of which a later reader needs to decide whether
+ * to believe it.
+ */
+/**
+ * The `from:` clause names the metrics this claim actually rests on.
+ *
+ * It is derived from the FINDINGS, not from the row's metric map, and the
+ * difference matters. `metricsFromRow` keeps a metric whose value is 0, and on
+ * the strategy grain most of the nine ARE 0 structurally — `pageview` and
+ * `exposure` are article-level and carry no node_id, so they cannot reach a node
+ * grain at all, and the three per-exposure rates therefore have no denominator
+ * (kugel-data migration 012's header; ATTRIBUTION.md §5). Listing "the metrics
+ * this row had values for" would present those structural zeroes as
+ * measurements, which is the exact confusion KI-29 describes: the wire cannot
+ * say "unavailable", so every missing measure arrives as 0.
+ *
+ * A finding only exists where a comparison was possible and material, so the
+ * findings' own metrics are the honest answer to "what was this learned from".
+ */
+export const renderStrategyObservation = (
+  key: StrategyGroupKey,
+  findings: StrategyFinding[],
+  n: number,
+  window: StrategyWindow
+): string => {
+  const from = [...new Set(findings.map((finding) => finding.metric))].sort();
+  return `${strategySubjectPhrase(key)}: ${findings.map(renderStrategyFinding).join(", ")} (n=${Math.round(n)}, window ${window.from}..${window.to}${
+    from.length ? `, from: ${from.join(", ")}` : ""
+  })`;
+};
+
+// ── playbook item text ───────────────────────────────────────────────────────
+
+// The craft instruction behind each metric — what a writer would actually DO differently. Keyed by
+// the metric because that is the only thing the measurement licenses: the sink can say readers
+// stayed longer on this kind of piece, it cannot say why, so the lesson names the behaviour the
+// metric measures and the craft that moves it, and never invents a mechanism nobody observed.
+const METRIC_CRAFT: Record<StrategyComparableKey, string> = {
+  completion_rate: "make the opening promise the one the piece actually keeps, and keep it in order — a reader who finishes is a reader who was never made to wait for it",
+  cta_ctr: "put the next step where the reader is already convinced, in the words they would use themselves",
+  buy_click_rate: "let the offer follow the argument instead of interrupting it",
+  purchase_rate: "let the offer follow the argument instead of interrupting it, and be concrete about what changes after the purchase",
+  p75_dwell_ms: "give the reader a reason to stay past the first screen: the question they arrived with, answered where they can watch it being answered"
+};
+
+const effectClause = (finding: StrategyFinding): string => {
+  const pts = num(Math.abs(finding.deltaPoints ?? 0));
+  const more = finding.direction === "above";
+  switch (finding.metric) {
+    case "p75_dwell_ms": return more ? `holds attention ${num(finding.ratio)}× the site typical` : `holds attention at only ${num(finding.ratio)}× the site typical`;
+    case "completion_rate": return `is read to the end ${pts} pts ${more ? "more" : "less"} often than the site typical`;
+    case "cta_ctr": return `earns ${pts} pts ${more ? "more" : "fewer"} CTA clicks than the site typical`;
+    case "buy_click_rate": return `earns ${pts} pts ${more ? "more" : "fewer"} buy clicks than the site typical`;
+    case "purchase_rate": return `converts ${pts} pts ${more ? "above" : "below"} the site typical`;
+  }
+};
+
+/**
+ * The STABLE half of a promoted item's text: subject + direction + the craft instruction, with no
+ * measurement in it. It is how an item promoted in one window is found again in the next — to be
+ * reinforced (helpfulCount) or countered (harmfulCount) — without matching on numbers that move every
+ * window. The effect sentence is appended after it, so the item still reads as a claim with evidence.
+ */
+/**
+ * FIX (c) — is a raw "above/below the site figure" reading actually GOOD news for this metric? Only
+ * `"above"` on a metric where higher is better, or `"below"` on one where lower is better. Exported
+ * on its own, rather than folded straight into the two functions below, because it is the one place
+ * the direction assumption lives, and it is unit-testable against a `"lower_is_better"` direction
+ * without needing a second, parallel metric to exist in production.
+ */
+export const isFavorableFinding = (metricDirection: MetricDirection, rawDirection: StrategyDirection): boolean =>
+  metricDirection === "higher_is_better" ? rawDirection === "above" : rawDirection === "below";
+
+/** Defaults to `"higher_is_better"` — every key this module has ever compared on — so a caller that
+ * does not pass a direction (this file's own call sites now do) keeps exactly today's behaviour. */
+export const strategyPlaybookItemPrefix = (key: StrategyGroupKey, metric: StrategyComparableKey, direction: StrategyDirection, metricDirection: MetricDirection = "higher_is_better"): string =>
+  isFavorableFinding(metricDirection, direction)
+    ? `Reach for ${strategySubjectPhrase(key)} when the brief allows it — ${METRIC_CRAFT[metric]};`
+    : `Do not default to ${strategySubjectPhrase(key)} — ${METRIC_CRAFT[metric]};`;
+
+/**
+ * THE PLAYBOOK ITEM TEMPLATE.
+ *
+ *   `<prefix> it <effect>. (<source>, <k> consecutive windows through <to>, n=<n>.)`
+ *
+ * e.g. "Reach for intent `objection_handling` (strategy `objection_first`) when the brief allows it —
+ * give the reader a reason to stay past the first screen: the question they arrived with, answered
+ * where they can watch it being answered; it holds attention 2.1× the site typical.
+ * (tracking:strategy.v1, 2 consecutive windows through 2026-08-31, n=838.)"
+ *
+ * Guidance first, evidence in parentheses — the opposite order from an observation, because this text
+ * is injected into a writer's prompt and has to read as an instruction, not as a dashboard row.
+ */
+export const renderStrategyPlaybookItem = (signal: StableStrategySignal): string =>
+  `${strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric])} it ${effectClause(signal.latest)}. (${STRATEGY_OBSERVATION_SOURCE}, ${signal.windows} consecutive windows through ${signal.through}, n=${Math.round(signal.n)}.)`;
+
+/** A FAVORABLE finding is a thing to DO (a strategy); an unfavorable one is a thing to stop doing (a
+ * pitfall) — see `isFavorableFinding` for what "favorable" means once metric direction is accounted
+ * for. Those are two of the playbook's three existing kinds — no new vocabulary. Defaults to
+ * `"higher_is_better"` for the same reason `strategyPlaybookItemPrefix` does. */
+export const strategyPlaybookItemKind = (direction: StrategyDirection, metricDirection: MetricDirection = "higher_is_better"): PlaybookItemKind =>
+  (isFavorableFinding(metricDirection, direction) ? "strategy" : "pitfall");
+
+// ── observations → stable signals ────────────────────────────────────────────
+
+export type StrategySignalKey = StrategyGroupKey & { metric: StrategyComparableKey };
+export const strategySignalKeyOf = (signal: StrategySignalKey): string => `${strategyGroupKeyOf(signal)}|${signal.metric}`;
+
+export type StrategySignalSighting = StrategySignalKey & { direction: StrategyDirection; n: number; window: StrategyWindow; finding: StrategyFinding };
+export type StableStrategySignal = StrategySignalKey & {
+  direction: StrategyDirection;
+  /** Consecutive windows the direction held, at or above the n bar, ending at `through`. */
+  windows: number;
+  /** Summed n over that streak. */
+  n: number;
+  through: string;
+  latest: StrategyFinding;
+};
+
+const readMetadata = (observation: LearningObservation): Record<string, unknown> => (observation.metadata && typeof observation.metadata === "object" ? observation.metadata : {}) as Record<string, unknown>;
+
+/**
+ * Recover the sightings this module wrote from stored observations. Reads the STRUCTURED metadata,
+ * never the rendered sentence — the sentence is for humans and is allowed to change; the metadata is
+ * the contract. Anything that is not a well-formed `tracking:strategy.v1` entry for this project is
+ * skipped rather than guessed at.
+ */
+export function strategySightingsFromObservations(observations: LearningObservation[], projectId?: string): StrategySignalSighting[] {
+  const sightings: StrategySignalSighting[] = [];
+  for (const observation of observations) {
+    const metadata = readMetadata(observation);
+    if (metadata.source !== STRATEGY_OBSERVATION_SOURCE) continue;
+    if (projectId && asLabel(metadata.projectId) !== projectId) continue;
+    const window = metadata.window as StrategyWindow | undefined;
+    if (!window || !asLabel(window.from) || !asLabel(window.to)) continue;
+    const n = isFinite_(metadata.n) ? metadata.n : 0;
+    const strategy = asLabel(metadata.strategy);
+    const intent = asLabel(metadata.intent);
+    if (!strategy && !intent) continue;
+    for (const finding of Array.isArray(metadata.findings) ? (metadata.findings as StrategyFinding[]) : []) {
+      if (!finding || !STRATEGY_COMPARABLE_KEYS.includes(finding.metric) || (finding.direction !== "above" && finding.direction !== "below")) continue;
+      sightings.push({ ...(strategy ? { strategy } : {}), ...(intent ? { intent } : {}), metric: finding.metric, direction: finding.direction, n, window, finding });
+    }
+  }
+  return sightings;
+}
+
+/**
+ * The ordered sequence of windows this project actually observed. "Consecutive" below means adjacent
+ * in THIS sequence, not calendar-adjacent: a day the daily job did not run (an outage, a deploy, a
+ * sink that was still unmigrated) must not silently reset evidence that is otherwise unbroken, and a
+ * gap is not counter-evidence — it is an absence of evidence.
+ */
+export const strategyWindowSequence = (sightings: StrategySignalSighting[]): string[] =>
+  [...new Set(sightings.map((sighting) => strategyWindowKey(sighting.window)))].sort();
+
+/**
+ * Track B — a CONSERVATIVE, DETERMINISTIC overlap test between two windows, treating `from`/`to`
+ * as a half-open [from, to) range (matching how this module has always built them —
+ * `ingestStrategyRollups`'s consecutive daily windows share a boundary date, e.g.
+ * `{from:"...29",to:"...30"}` then `{from:"...30",to:"...31"}`, and that shared boundary is NOT
+ * an overlap here, or every ordinary consecutive pair would wrongly fail this check).
+ *
+ * This does not claim statistical independence — two non-overlapping windows can still share
+ * sessions (a reader active across the boundary instant) and this module has never modeled that.
+ * It closes a narrower, checkable gap: a caller that reports windows sliding by less than their
+ * own width (a rolling 7-day window advanced by 1 day, say) would have the SAME sessions counted
+ * as "two independent windows" by the position-adjacency check alone, satisfying
+ * STRATEGY_PROMOTION_MIN_WINDOWS on data that is mostly one window repeated. Rejecting an overlap
+ * outright is the conservative call: an evidence pair this module cannot prove independent does
+ * not count as two.
+ */
+export const strategyWindowsOverlap = (a: StrategyWindow, b: StrategyWindow): boolean => a.from < b.to && b.from < a.to;
+
+/**
+ * Findings that have EARNED a playbook item: the same direction, at or above the n bar, across at
+ * least STRATEGY_PROMOTION_MIN_WINDOWS windows adjacent in the observed sequence, ending at the most
+ * recent window the signal was seen in. A window below the n bar breaks the streak — it is not
+ * evidence for or against, and treating it as either would let a quiet day either promote or unlearn.
+ */
+export function stableStrategySignals(sightings: StrategySignalSighting[]): StableStrategySignal[] {
+  const sequence = strategyWindowSequence(sightings);
+  const position = new Map(sequence.map((key, index) => [key, index]));
+  const bySignal = new Map<string, StrategySignalSighting[]>();
+  for (const sighting of sightings) bySignal.set(strategySignalKeyOf(sighting), [...(bySignal.get(strategySignalKeyOf(sighting)) ?? []), sighting]);
+
+  const stable: StableStrategySignal[] = [];
+  for (const group of bySignal.values()) {
+    const qualified = group
+      .filter((sighting) => sighting.n >= STRATEGY_PROMOTION_MIN_N)
+      .sort((a, b) => position.get(strategyWindowKey(a.window))! - position.get(strategyWindowKey(b.window))!);
+    if (qualified.length < STRATEGY_PROMOTION_MIN_WINDOWS) continue;
+    // Walk back from the latest qualified sighting while the window index steps down by one and the
+    // direction holds. That streak, and only it, is the evidence the item may cite.
+    const streak: StrategySignalSighting[] = [qualified[qualified.length - 1]!];
+    for (let index = qualified.length - 2; index >= 0; index--) {
+      const candidate = qualified[index]!;
+      const head = streak[0]!;
+      if (candidate.direction !== head.direction) break;
+      if (position.get(strategyWindowKey(candidate.window))! !== position.get(strategyWindowKey(head.window))! - 1) break;
+      // Track B — adjacent in the observed SEQUENCE is not the same fact as independent evidence:
+      // a candidate whose date range overlaps the streak's current head cannot extend it, however
+      // adjacent the two windows are in the position ordering (see strategyWindowsOverlap).
+      if (strategyWindowsOverlap(candidate.window, head.window)) break;
+      streak.unshift(candidate);
+    }
+    if (streak.length < STRATEGY_PROMOTION_MIN_WINDOWS) continue;
+    const latest = streak[streak.length - 1]!;
+    stable.push({
+      ...(latest.strategy ? { strategy: latest.strategy } : {}),
+      ...(latest.intent ? { intent: latest.intent } : {}),
+      metric: latest.metric,
+      direction: latest.direction,
+      windows: streak.length,
+      n: streak.reduce((sum, sighting) => sum + sighting.n, 0),
+      through: latest.window.to,
+      latest: latest.finding
+    });
+  }
+  return stable;
+}
+
+/**
+ * Sightings in the newest observed window that CONTRADICT a direction previously promoted: same
+ * subject, same metric, opposite direction, at or above the n bar. One such window is enough — see
+ * the module header on why countering is cheaper than promoting.
+ */
+export function contradictingStrategySightings(sightings: StrategySignalSighting[]): StrategySignalSighting[] {
+  const sequence = strategyWindowSequence(sightings);
+  const newest = sequence[sequence.length - 1];
+  if (!newest) return [];
+  return sightings.filter((sighting) => strategyWindowKey(sighting.window) === newest && sighting.n >= STRATEGY_PROMOTION_MIN_N);
+}
+
+// ── promotion ────────────────────────────────────────────────────────────────
+
+export type StrategyPromotionOutcome = {
+  /** C2 (part 2) — WHOSE playbooks this pass wrote to, in the scope vocabulary's own key form. */
+  scopeKey: string;
+  promoted: Array<{ nodeId: string; signal: string; text: string }>;
+  reinforced: Array<{ nodeId: string; signal: string; itemId: string }>;
+  countered: Array<{ nodeId: string; signal: string; itemId: string }>;
+  errors: Array<{ scope: string; error: string }>;
+};
+
+const findItemByPrefix = (items: PlaybookItem[], prefix: string): PlaybookItem | undefined => items.find((item) => item.text.startsWith(prefix));
+
+/**
+ * Track B — the identity of ONE PROMOTION EFFECT: this scope, this recipient node, this signal,
+ * holding this exact evidence (direction + through + windows-count). Two calls that recompute the
+ * SAME stable streak (a retried job, a second scheduler fire, a re-run against unchanged history)
+ * produce the SAME id and therefore claim nothing the second time — see
+ * ImprovementRepository.claimPromotionEffects. A genuinely NEW window that extends or breaks the
+ * streak changes `through`/`windows`/`direction` and therefore the id, so real new evidence is
+ * never blocked by an old claim.
+ */
+export const strategyPromotionEffectId = (params: { scope?: PolicyScope; nodeId: string; signal: StableStrategySignal }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    kind: "promote",
+    scopeKey: scopeKey(params.scope),
+    nodeId: params.nodeId,
+    signal: strategySignalKeyOf(params.signal),
+    direction: params.signal.direction,
+    through: params.signal.through,
+    windows: params.signal.windows
+  });
+
+/**
+ * Track B — the identity of ONE COUNTER EFFECT: this scope, this recipient node, this signal,
+ * contradicted in this exact window. `contradictingStrategySightings` only ever reports the newest
+ * observed window, so the window alone (with the signal and recipient) is enough to make this
+ * stable across replays of the same pass.
+ */
+export const strategyCounterEffectId = (params: { scope?: PolicyScope; nodeId: string; sighting: StrategySignalSighting }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    kind: "counter",
+    scopeKey: scopeKey(params.scope),
+    nodeId: params.nodeId,
+    signal: strategySignalKeyOf(params.sighting),
+    window: params.sighting.window
+  });
+
+/**
+ * Fold stable signals — and this window's contradictions — into the writer/planning playbooks.
+ *
+ * Every write goes through applyPlaybookDelta, which is the ONE mechanism this repo has for this:
+ *   * a signal with no item yet becomes an `add` (dedup and the item/char budget apply as always);
+ *   * a signal whose item already exists is `markHelpful` — the pre-existing reinforcement counter;
+ *   * a signal that contradicts an existing item is `markHarmful` — the pre-existing COUNTER. It
+ *     lowers net helpfulness, which is what orders items in the injected prompt and what the budget
+ *     evicts by, so a contradicted lesson sinks and then goes. No second demotion mechanism is
+ *     invented here, and nothing is deleted behind an operator's back.
+ *
+ * Never throws: a repository that refuses one node's playbook is recorded and the rest still run.
+ *
+ * C2 (part 2) — AND IT WRITES INTO A SCOPE. This function is reached from a PER-PROJECT ingest
+ * (StrategyLearningParams.projectId): the signals are one tenant's measured outcomes, from one
+ * tenant's tracking rollups. Until the scope vocabulary existed there was nowhere to put them except
+ * `getPlaybook(nodeId)` — the one global playbook for that node — so dr-lurie's measured outcomes
+ * were injected into every other tenant's dispatch of `draft_writer`, and nothing on the record said
+ * whose evidence it was. That is the leak `houseLessons.ts` had already dodged by hand for the chat
+ * path, and it is the reason this half of C2 exists.
+ *
+ * An omitted scope still writes the fleet playbook. That is not a default so much as a statement: a
+ * caller with no project to name has produced fleet evidence, and has to say so by not naming one.
+ * This is a DELIBERATE-CALL primitive, and that statement is only honest when the caller is the one
+ * deciding it — see FIX (a) on `ingestStrategyRollups`, which does NOT let a missing tenant id reach
+ * this default silently: it withholds the call entirely rather than passing an empty scope on the
+ * caller's behalf.
+ */
+export async function promoteStrategySignals(
+  sightings: StrategySignalSighting[],
+  deps: { improvementRepository: ImprovementRepository },
+  options: { scope?: PolicyScope; nodeIds?: readonly string[] } = {}
+): Promise<StrategyPromotionOutcome> {
+  const nodeIds = options.nodeIds ?? STRATEGY_PLAYBOOK_TARGET_NODES;
+  const scope = options.scope;
+  const outcome: StrategyPromotionOutcome = { scopeKey: scopeKey(scope), promoted: [], reinforced: [], countered: [], errors: [] };
+  const stable = stableStrategySignals(sightings);
+  const contradictions = contradictingStrategySightings(sightings);
+  if (!stable.length && !contradictions.length) return outcome;
+
+  const stableEffectKey = (nodeId: string, signal: StableStrategySignal) => nodeId + " " + strategySignalKeyOf(signal) + " " + signal.direction + " " + signal.through;
+  const counterEffectKey = (nodeId: string, sighting: StrategySignalSighting) => nodeId + " " + strategySignalKeyOf(sighting) + " " + strategyWindowKey(sighting.window);
+  const effectIdByKey = new Map<string, string>();
+  const candidateEffectIds: string[] = [];
+  for (const nodeId of nodeIds) {
+    for (const signal of stable) {
+      const id = strategyPromotionEffectId({ scope, nodeId, signal });
+      effectIdByKey.set(stableEffectKey(nodeId, signal), id);
+      candidateEffectIds.push(id);
+    }
+    for (const sighting of contradictions) {
+      const id = strategyCounterEffectId({ scope, nodeId, sighting });
+      effectIdByKey.set(counterEffectKey(nodeId, sighting), id);
+      candidateEffectIds.push(id);
+    }
+  }
+  const claimedEffects = await deps.improvementRepository.claimPromotionEffects(scope, candidateEffectIds);
+
+  for (const nodeId of nodeIds) {
+    const nodeStable = stable.filter((signal) => claimedEffects.has(effectIdByKey.get(stableEffectKey(nodeId, signal))!));
+    const nodeContradictions = contradictions.filter((sighting) => claimedEffects.has(effectIdByKey.get(counterEffectKey(nodeId, sighting))!));
+    if (!nodeStable.length && !nodeContradictions.length) continue;
+
+    // Track B -- these three accumulate the LAST attempt `mutatePlaybook` made, not every attempt:
+    // a CAS retry re-runs `mutate` against the freshly re-read playbook, and only the attempt whose
+    // write actually lands is the one this pass reports against. `mutate` itself stays a pure
+    // function of `existing` (plus the already-claimed nodeStable/nodeContradictions, which are
+    // fixed for this call) -- nothing here closes over a decision made against stale data.
+    let promotedThisPass: Array<{ signal: string; text: string }> = [];
+    let reinforcedThisPass: Array<{ signal: string; itemId: string }> = [];
+    let counteredThisPass: Array<{ signal: string; itemId: string }> = [];
+
+    try {
+      await deps.improvementRepository.mutatePlaybook(nodeId, scope, (existing) => {
+        const items = existing?.items ?? [];
+        const delta: PlaybookDelta = {};
+        const add: NonNullable<PlaybookDelta["add"]> = [];
+        const markHelpful: string[] = [];
+        const markHarmful = new Set<string>();
+        const promoted: Array<{ signal: string; text: string }> = [];
+        const reinforced: Array<{ signal: string; itemId: string }> = [];
+        const countered: Array<{ signal: string; itemId: string }> = [];
+
+        for (const signal of nodeStable) {
+          const prefix = strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]);
+          const current = findItemByPrefix(items, prefix);
+          if (current) {
+            markHelpful.push(current.itemId);
+            reinforced.push({ signal: strategySignalKeyOf(signal), itemId: current.itemId });
+            continue;
+          }
+          const text = renderStrategyPlaybookItem(signal);
+          add.push({ text, kind: strategyPlaybookItemKind(signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]), provenance: { source: "tracking" } });
+          promoted.push({ signal: strategySignalKeyOf(signal), text });
+        }
+
+        for (const sighting of nodeContradictions) {
+          const opposite: StrategyDirection = sighting.direction === "above" ? "below" : "above";
+          const counteredItem = findItemByPrefix(items, strategyPlaybookItemPrefix(sighting, sighting.metric, opposite, STRATEGY_METRIC_DIRECTIONS[sighting.metric]));
+          if (!counteredItem) continue;
+          markHarmful.add(counteredItem.itemId);
+          countered.push({ signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
+        }
+
+        // Track B -- a contradiction CANDIDATE (picked up because it sits in the newest window,
+        // before any lookup against the actual playbook) does not mean a contradiction APPLIES:
+        // that only happens if `counteredItem` is found above. A node with claimed candidates but
+        // no item they actually oppose, and no stable signal to add or reinforce, has nothing to
+        // persist -- returning `undefined` here (rather than an empty-delta `applyPlaybookDelta`
+        // call) tells `mutatePlaybook` to skip the write, so merely CONSIDERING a node for
+        // promotion never fabricates an empty playbook document for it.
+        if (!add.length && !markHelpful.length && !markHarmful.size) return undefined;
+        if (add.length) delta.add = add;
+        if (markHelpful.length) delta.markHelpful = markHelpful;
+        if (markHarmful.size) delta.markHarmful = [...markHarmful];
+        promotedThisPass = promoted;
+        reinforcedThisPass = reinforced;
+        counteredThisPass = countered;
+        return applyPlaybookDelta(existing, nodeId, delta, now(), scope);
+      });
+      for (const entry of promotedThisPass) outcome.promoted.push({ nodeId, ...entry });
+      for (const entry of reinforcedThisPass) outcome.reinforced.push({ nodeId, ...entry });
+      for (const entry of counteredThisPass) outcome.countered.push({ nodeId, ...entry });
+    } catch (error) {
+      outcome.errors.push({ scope: nodeId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return outcome;
+}
+
+// ── the ingest ───────────────────────────────────────────────────────────────
+
+export type StrategyLearningParams = {
+  /** The TRACKING partition to read — the sink's own id (`drlurie`), in the sink's namespace. */
+  projectId: string;
+  from: string;
+  to: string;
+  /**
+   * C2 (part 2) — the CMS-AGENT project id (`dr-lurie`) these lessons belong to, and the ONLY id
+   * that may become a playbook scope.
+   *
+   * A SEPARATE field from `projectId` for the same reason `TrackingIngestParams.cmsAgentProjectId`
+   * is separate from its own: the two ids name the same tenant in two different namespaces, and a
+   * run's scope context is built from `run.projectId`, which is the CMS-Agent spelling. Scoping by
+   * the sink's spelling would write a playbook at `site=drlurie` that no dispatch ever reads — a
+   * lesson stored nowhere, which is harder to notice than a lesson stored everywhere.
+   *
+   * FIX (a) — OMITTED NO LONGER MEANS FLEET. This used to say "the promotion writes the FLEET
+   * playbook, exactly as it did before scope existed" — which is precisely the hole the plan closes:
+   * an ingest that cannot name its tenant in CMS-Agent's namespace was teaching every OTHER tenant
+   * too, the exact leak `policyScope.ts`'s own header describes. Omitted now QUARANTINES this
+   * window's evidence instead — the observations above are still recorded in full, with their
+   * provenance intact (stamped under `projectId`, the sink's own id, exactly as always) — only the
+   * PROMOTION step is withheld, and `StrategyLearningResult.promotionSkipped` names why rather than
+   * reading like "nothing was stable yet". See `ingestStrategyRollups`'s own comment for why no
+   * bypass is offered here: every pull this function makes is already scoped to one sink partition,
+   * so there is no case at THIS layer where the honest answer is "promote to fleet because there was
+   * never a tenant". Generalising an already tenant-scoped lesson into a fleet one is a separate,
+   * deliberate operation this repo does not have yet (KNOWN_ISSUES K-A6) — noted as a followup rather
+   * than built here.
+   */
+  cmsAgentProjectId?: string;
+  /**
+   * FIX (d) — who a promoted lesson is written to, overriding STRATEGY_PLAYBOOK_TARGET_NODES for
+   * this call only. `promoteStrategySignals` has always accepted this as `options.nodeIds`; nothing
+   * upstream of it could ever set it, so every ingest taught the same fixed six nodes regardless of
+   * which workflow or task actually invoked the pass. Omitted, behaviour is byte-for-byte what it was
+   * before this field existed: the module's own default list. Never carries a `task` scope dimension
+   * — nodes are already addressed by id, not by the scope vocabulary
+   * (`playbook.ts`'s `assertPlaybookScope` refuses exactly that redundancy at the repository
+   * boundary).
+   */
+  playbookTargetNodes?: readonly string[];
+};
+export type StrategyLearningDeps = RollupFetchDeps & {
+  learningRepository: LearningRepository;
+  improvementRepository: ImprovementRepository;
+};
+
+export type StrategyLearningResult = {
+  /** Rows the sink returned, so "0 observations" can be told apart from "0 rows". */
+  rows: number;
+  /**
+   * Of those rows, how many carried a `strategy` or an `intent`. The gap between
+   * `rows` and `rowsLabelled` is the whole KI-08 failure mode: the sink can serve
+   * a full window of perfectly good rows whose labels are all NULL, and every one
+   * of them is dropped by `strategyGroupsFromRows`. Without this number that
+   * looks identical to a quiet week.
+   */
+  rowsLabelled: number;
+  groups: number;
+  observations: Array<{ id: string; strategy?: string; intent?: string; n: number; findings: number; observation: string }>;
+  /**
+   * Groups that HAD a material finding and were not written down, because their `n` was under
+   * STRATEGY_OBSERVATION_MIN_N. Reported rather than dropped silently: a thin window and a window
+   * with nothing to say produce the same empty `observations` array, and an operator reading
+   * "0 observations" needs to be able to tell "nothing happened" from "seven things happened to
+   * too few people to be worth writing down yet".
+   */
+  withheld: Array<{ strategy?: string; intent?: string; n: number; findings: number }>;
+  /**
+   * FIX (b) — groups whose evidence was ALREADY on file under the same ingestion key (same tenant,
+   * same window, same strategy/intent) and were therefore left alone rather than written a second
+   * time. Reported for the same reason `withheld` is: "0 new observations" needs to be tellable apart
+   * from "this window was already ingested" and from "everything was below the bar".
+   */
+  duplicates: Array<{ strategy?: string; intent?: string }>;
+  /**
+   * Track B — a duplicate whose STORED evidence disagrees with what this pass just computed for
+   * the same ingestion key (a metric's material direction flipped, or the set of metrics with a
+   * material finding changed) rather than merely drifting by the "a late-arriving row nudges a
+   * rate by a hundredth of a point" amount `strategyIngestionKey` was designed to absorb. The
+   * stored observation is left exactly as it was — no destructive migration, no silent acceptance
+   * of the new numbers as independent support — and this array is the explicit conflict signal an
+   * operator (or a later reconciliation pass) needs in order to decide what a changed source
+   * window means, instead of it reading identically to an ordinary idempotent replay.
+   */
+  revisionConflicts: Array<{ strategy?: string; intent?: string; ingestionKey: string }>;
+  promotion: StrategyPromotionOutcome;
+  /** Set when the pull did not happen at all and that is NOT a failure: the sink is not configured on
+   * this deployment, or its `by=strategy` grain has not been migrated yet (503). */
+  skipped?: "sink_unconfigured" | "grain_unavailable";
+  /**
+   * FIX (a) — set instead of running promotion at all when `StrategyLearningParams.cmsAgentProjectId`
+   * was not given: this window's evidence is quarantined to its own tenant's recorded observations
+   * and never reaches a playbook, fleet or otherwise, until a caller can name the tenant.
+   */
+  promotionSkipped?: "unknown_tenant";
+  errors: Array<{ scope?: string; error: string }>;
+};
+
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], duplicates: [], revisionConflicts: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+
+/** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
+ * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
+ * absent sink gets, with nothing surfaced to the caller as an error.
+ *
+ * This used to name "migration 008". It was never 008: kugel-data's 008 is
+ * `008_experiment_keyed_by_control_item.sql` and its migrations were already at 011, so anyone who
+ * checked whether 008 had run got "yes" and concluded the grain should be working. */
+const GRAIN_UNAVAILABLE_STATUS = 503;
+
+/**
+ * FIX (b) — a stable identity for "this group's evidence, for this tenant, in this window",
+ * independent of the rendered sentence and of anything a re-fetch of the SAME window could
+ * legitimately return slightly differently (a late-arriving row nudging a rate by a hundredth of a
+ * point). Built ONLY from the three things that answer WHICH evidence this is — the sink partition
+ * (`projectId`), the window, and the strategy/intent group identity — hashed as an OBJECT rather than
+ * concatenated into a string, so:
+ *   * the SAME inputs always produce the SAME key (replaying an identical pull is detected), and
+ *   * two GENUINELY different windows, tenants or groups cannot collide by a value smuggling in a
+ *     delimiter — each is its own field going into the hash, not a joined string a label like
+ *     `"a|b"` could forge.
+ * Stored on the observation's own metadata (`ingestionKey`) rather than recomputed from the stored
+ * record's rendered text, which is allowed to change wording (a copy edit to `renderStrategyFinding`)
+ * without that becoming "new" evidence.
+ */
+export const strategyIngestionKey = (params: { projectId: string; window: StrategyWindow; group: StrategyGroupKey }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    projectId: params.projectId,
+    window: { from: params.window.from, to: params.window.to },
+    group: { strategy: params.group.strategy, intent: params.group.intent }
+  });
+
+/**
+ * GET `${TRACKING_SINK_URL}/rollups?by=strategy` for the project/window, write the material
+ * cross-article findings down as `tracking:strategy.v1` observations, then promote whatever has held
+ * up into the writer/planning playbooks.
+ *
+ * NEVER throws. Unconfigured sink, unreachable sink, 503 grain, zero rows, a group with nothing
+ * comparable, a repository that refuses a write — all end as a result with no observations and
+ * today's behaviour unchanged.
+ */
+export async function ingestStrategyRollups(params: StrategyLearningParams, deps: StrategyLearningDeps): Promise<StrategyLearningResult> {
+  const result = emptyResult();
+  const env = deps.env ?? process.env;
+  const connection = trackingSinkConnectionState(env);
+  if (!connection.urlConfigured || !connection.tokenConfigured) {
+    result.skipped = "sink_unconfigured";
+    return result;
+  }
+
+  const page = await fetchRollupRows({ by: "strategy", projectId: params.projectId, from: params.from, to: params.to }, deps);
+  if (!page.ok) {
+    if (page.status === GRAIN_UNAVAILABLE_STATUS) {
+      result.skipped = "grain_unavailable";
+      return result;
+    }
+    result.errors.push({ error: page.error });
+    return result;
+  }
+
+  result.rows = page.rows.length;
+  result.rowsLabelled = page.rows.filter((row) => asLabel(row.strategy) || asLabel(row.intent)).length;
+  if (!page.rows.length) return result;
+
+  const window: StrategyWindow = { from: params.from.slice(0, 10), to: params.to.slice(0, 10) };
+  const groups = strategyGroupsFromRows(page.rows);
+  result.groups = groups.length;
+  const baseline = strategySiteBaseline(page.rows);
+
+  // Track B — idempotency, made ATOMIC. This used to be "listObservations() snapshot, decide,
+  // then write": two concurrent or retried passes computing the same candidate set could each read
+  // the same snapshot, each conclude the key is absent, and both proceed to `recordObservation` —
+  // the store has no notion of "this key already exists", only `strategyLearning.ts` does, so a
+  // stale-read decision landed as two real observations. `claimStrategyIngestionKeys` is the single
+  // compare-and-set point instead: every candidate this pass would write is claimed in ONE call,
+  // and only the keys THIS call actually won are written below. A key not won was already claimed
+  // — by an earlier successful ingest, or by whichever concurrent/retried caller reached the claim
+  // first — and is a duplicate, full stop, without a second read to race on.
+  type StrategyCandidate = { group: StrategyGroup; findings: StrategyFinding[]; ingestionKey: string };
+  const candidates: StrategyCandidate[] = [];
+  for (const group of groups) {
+    const findings = strategyFindings(group, baseline);
+    if (!findings.length) continue;
+    // The n bar is applied BEFORE the write, not as a filter on the way out: the store is what
+    // `strategy-review` reads, so anything that reaches it is something a human may be shown. A
+    // group held back here is counted (see `withheld`) and never recorded.
+    if (group.n < STRATEGY_OBSERVATION_MIN_N) {
+      result.withheld.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), n: group.n, findings: findings.length });
+      continue;
+    }
+    candidates.push({ group, findings, ingestionKey: strategyIngestionKey({ projectId: params.projectId, window, group }) });
+  }
+
+  const claimed = candidates.length
+    ? await deps.learningRepository.claimStrategyIngestionKeys(params.projectId, candidates.map((candidate) => candidate.ingestionKey))
+    : new Set<string>();
+  const duplicateCandidates = candidates.filter((candidate) => !claimed.has(candidate.ingestionKey));
+
+  // Track B — revision-conflict detection, ONLY for the keys that turned out to be duplicates, and
+  // only a plain read (this does not gate the claim above, so it carries none of the claim's race).
+  // `strategyIngestionKey` is deliberately insensitive to a value nudging by a hundredth of a point
+  // (see its own comment) — that is by design, not this check's concern. What this catches is a
+  // replay whose material FINDINGS (which metrics are material, and which way) disagree with what
+  // is already on file for the exact same tenant/window/group: a changed source window, not a
+  // harmless re-fetch. The existing record is never touched — only reported.
+  const findingSignature = (entries: ReadonlyArray<{ metric: string; direction: string }>): string =>
+    [...entries].map((entry) => `${entry.metric}:${entry.direction}`).sort().join(",");
+  let storedByIngestionKey: Map<string, Record<string, unknown>> | undefined;
+  if (duplicateCandidates.length) {
+    storedByIngestionKey = new Map();
+    for (const entry of await deps.learningRepository.listObservations()) {
+      const metadata = readMetadata(entry);
+      if (metadata.source !== STRATEGY_OBSERVATION_SOURCE) continue;
+      const key = asLabel(metadata.ingestionKey);
+      if (key) storedByIngestionKey.set(key, metadata);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const { group, findings, ingestionKey } = candidate;
+    if (!claimed.has(ingestionKey)) {
+      result.duplicates.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}) });
+      const stored = storedByIngestionKey?.get(ingestionKey);
+      if (stored) {
+        const storedFindings = Array.isArray(stored.findings) ? (stored.findings as Array<{ metric: string; direction: string }>) : [];
+        if (findingSignature(storedFindings) !== findingSignature(findings)) {
+          result.revisionConflicts.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), ingestionKey });
+        }
+      }
+      continue;
+    }
+    const observation = renderStrategyObservation(group, findings, group.n, window);
+    try {
+      const saved = await deps.learningRepository.recordObservation(observation, {
+        source: STRATEGY_OBSERVATION_SOURCE,
+        projectId: params.projectId,
+        ingestionKey,
+        ...(group.strategy ? { strategy: group.strategy } : {}),
+        ...(group.intent ? { intent: group.intent } : {}),
+        window,
+        n: group.n,
+        days: group.days,
+        metrics: group.metrics,
+        siteFigures: baseline,
+        findings
+      });
+      result.observations.push({ id: saved.id, ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), n: group.n, findings: findings.length, observation });
+    } catch (error) {
+      result.errors.push({ scope: strategyGroupKeyOf(group), error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  // FIX (a) — quarantine unresolved tenant attribution. See StrategyLearningParams.cmsAgentProjectId
+  // for the full reasoning; in short, evidence recorded above under an unmappable tenant must not
+  // become fleet knowledge just because no CMS-Agent id was given. Nothing about the observations
+  // just written changes — only promotion is withheld, and the result says so by name rather than
+  // reading identically to "nothing was stable yet".
+  if (!params.cmsAgentProjectId) {
+    result.promotionSkipped = "unknown_tenant";
+    return result;
+  }
+
+  // Promotion reads the store back (this window's entries included), so the stability rule is applied
+  // to the full observed history and not just to what this run happened to fetch.
+  try {
+    const stored = await deps.learningRepository.listObservations();
+    // The ingest is per project, so its promotion is per project: these lessons belong to this
+    // tenant's playbooks and to no other tenant's.
+    result.promotion = await promoteStrategySignals(
+      strategySightingsFromObservations(stored, params.projectId),
+      deps,
+      // The sightings are read by the SINK's id; the playbook is written under CMS-AGENT's. See
+      // StrategyLearningParams.cmsAgentProjectId for why those must not be the same field. FIX (d):
+      // an explicit recipient list threaded from the caller overrides the module default for this
+      // call only.
+      { scope: { site: params.cmsAgentProjectId }, ...(params.playbookTargetNodes ? { nodeIds: params.playbookTargetNodes } : {}) }
+    );
+  } catch (error) {
+    result.errors.push({ scope: "promotion", error: error instanceof Error ? error.message : String(error) });
+  }
+  return result;
+}
