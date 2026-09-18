@@ -23,6 +23,7 @@ import { compileSiteContentObjects } from "../../../src/agent/operations/siteCon
 import { applySiteContentPlan } from "../../../src/agent/operations/siteContentObjectApplier.js";
 import { createInMemorySiteContextSource, DEFAULT_REGISTRIES } from "./fixtures/inMemorySiteContextSource.js";
 import type { FixtureTenantData } from "./fixtures/inMemorySiteContextSource.js";
+import { LIVE_PAGE_TYPES, LIVE_SECTION_REGISTRY } from "./fixtures/liveObjectContractCapture.js";
 
 const TENANT = "kugel-platform";
 
@@ -382,8 +383,33 @@ describe("compilePagePlanV2 — one inline page body, or named blockers", () => 
   });
 });
 
+// The v1 compiler (siteContentObjectCompiler.ts) now enforces the LIVE page contract read from
+// object_contract("page") on 2026-09-18: five required fields (route, pageType, title, seo, sections)
+// and a top-level `section_types` registry it reads off the PAGE contract. The guard tests below do
+// not care about that dialect — they only need SOME successful v1 plan to prove a v1 plan carries no
+// v2 schemaVersion — so they compile against the live shape rather than the pre-correction one.
+const V1_LIVE_PAGE_CONTRACT: SiteObjectFieldContract = {
+  objectType: "page",
+  required: ["route", "pageType", "title", "seo", "sections"],
+  schema: {
+    type: "object",
+    additionalProperties: true,
+    required: ["route", "pageType", "title", "seo", "sections"],
+    properties: {
+      route: { type: "string", minLength: 1 },
+      pageType: { type: "string" },
+      title: { type: "string", minLength: 1 },
+      seo: { type: "object", additionalProperties: true },
+      sections: { type: "array" }
+    }
+  },
+  sectionRegistry: LIVE_SECTION_REGISTRY,
+  pageTypes: LIVE_PAGE_TYPES
+};
+const V1_LIVE_PAGE_FIELDS = { route: "/about", pageType: "standard", title: "About", seo: { title: "About" } };
+
 describe("v1/v2 version guard — the boundary these two compilers must never cross", () => {
-  it("marks a v2 plan with the v2 schemaVersion, and a v1 plan carries no schemaVersion at all", async () => {
+  it("tells a v2 plan from a v1 plan STRUCTURALLY — both compilers stamp the identical schemaVersion string", async () => {
     const snapshot = await snapshotOf(fixture());
     const v2 = compilePagePlanV2({
       projectId: TENANT,
@@ -396,47 +422,34 @@ describe("v1/v2 version guard — the boundary these two compilers must never cr
     if (!v2.ok) return;
     expect(isSitePageMaterializationV2Plan(v2.plan)).toBe(true);
 
-    const v1PageContract: SiteObjectFieldContract = {
-      objectType: "page",
-      required: ["pageType", "slug", "title", "sections"],
-      schema: {
-        type: "object",
-        additionalProperties: true,
-        required: ["pageType", "slug", "title", "sections"],
-        properties: { pageType: { type: "string" }, slug: { type: "string" }, title: { type: "string" }, sections: { type: "array" } }
-      }
-    };
-    const v1SnapshotFixture = fixture({ contractsByType: { section: sectionContract(LIVE_COMPONENT_TYPES), page: v1PageContract } });
+    const v1SnapshotFixture = fixture({ contractsByType: { section: sectionContract(LIVE_COMPONENT_TYPES), page: V1_LIVE_PAGE_CONTRACT } });
     const v1Snapshot = await snapshotOf(v1SnapshotFixture);
     const v1 = compileSiteContentObjects({
       projectId: TENANT,
       drafted: [{ order: 0, sectionType: "about_overview", draft: { narrativeKind: "organization", title: "Who we are", body: "<p>x</p>" } }],
       snapshot: v1Snapshot,
-      target: { pageObjectId: null, pageFields: { pageType: "standard", slug: "about", title: "About" } }
+      target: { pageObjectId: null, pageFields: V1_LIVE_PAGE_FIELDS }
     });
     expect(v1.ok).toBe(true);
     if (!v1.ok) return;
     expect(isSitePageMaterializationV2Plan(v1.plan)).toBe(false);
-    expect((v1.plan as unknown as Record<string, unknown>).schemaVersion).toBeUndefined();
+    // The version string is NOT what separates them: siteContentObjectCompiler.ts stamps the
+    // byte-identical "site-page-materialization.v2". Both compilers were rebuilt against the same
+    // live contract in parallel and landed on the same name, so a version-only guard accepted a v1
+    // plan as v2. `units` is the discriminator — a v1 plan carries `write`/`sectionProvenance`/
+    // `changeSets` and has none.
+    expect((v1.plan as unknown as Record<string, unknown>).schemaVersion).toBe(SITE_PAGE_MATERIALIZATION_V2_SCHEMA_VERSION);
+    expect((v1.plan as unknown as Record<string, unknown>).units).toBeUndefined();
+    expect(Array.isArray((v2.plan as unknown as Record<string, unknown>).units)).toBe(true);
   });
 
   it("assertSitePageMaterializationV2Plan refuses a v1 SiteContentObjectPlan — never reinterpreted as v2", async () => {
-    const v1PageContract: SiteObjectFieldContract = {
-      objectType: "page",
-      required: ["pageType", "slug", "title", "sections"],
-      schema: {
-        type: "object",
-        additionalProperties: true,
-        required: ["pageType", "slug", "title", "sections"],
-        properties: { pageType: { type: "string" }, slug: { type: "string" }, title: { type: "string" }, sections: { type: "array" } }
-      }
-    };
-    const v1Snapshot = await snapshotOf(fixture({ contractsByType: { section: sectionContract(LIVE_COMPONENT_TYPES), page: v1PageContract } }));
+    const v1Snapshot = await snapshotOf(fixture({ contractsByType: { section: sectionContract(LIVE_COMPONENT_TYPES), page: V1_LIVE_PAGE_CONTRACT } }));
     const v1 = compileSiteContentObjects({
       projectId: TENANT,
       drafted: [{ order: 0, sectionType: "about_overview", draft: { narrativeKind: "organization", title: "Who we are", body: "<p>x</p>" } }],
       snapshot: v1Snapshot,
-      target: { pageObjectId: null, pageFields: { pageType: "standard", slug: "about", title: "About" } }
+      target: { pageObjectId: null, pageFields: V1_LIVE_PAGE_FIELDS }
     });
     expect(v1.ok).toBe(true);
     if (!v1.ok) return;
