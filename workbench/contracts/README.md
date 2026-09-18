@@ -206,3 +206,22 @@ this session was intercepted before the request left the client.
   mutation language) makes it safe to capture in a follow-up pass, it just wasn't reached.
 
 All other verbs listed in the WP-00 brief were captured successfully with a real live payload.
+
+## Addendum — CMS-Agent track A (2026-09-18), source-verified, not live-captured
+
+No live MCP session was available in this track's isolated worktree, so the three items below are
+**not** live captures in the sense the rest of this file is — they are read directly off backend
+source (cited per file) and marked `sourceVerifiedAddendum` / `sourceVerifiedOnly` in their JSON so a
+future live-capture pass can tell them apart from a verified server response at a glance.
+
+- **`playbook_get.json`** — the existing 2026-08-26 live capture predates `projectId` scope support
+  and the `composed` field. Its `sourceVerifiedAddendum` block documents the current envelope shape
+  without discarding the original capture.
+- **`playbook_apply_delta.json`** (new) — the workbench previously sent a `{op:'remove', lessonId}`
+  payload this verb's real `.strict()` schema has never accepted (see improvement/playbook.ts's
+  `applyPlaybookDelta` for the real `add`/`markHelpful`/`markHarmful`/`retire` shape).
+- **`playbook_migrate_observations.json`** (new) — the workbench previously sent a `nodeId` this
+  verb's real schema (`{dryRun?}`, no node filter — it is a global sweep) rejects.
+
+`tests/contract.playbook.spec.ts` holds these three files against `src/api/verbs.ts`'s actual argument
+shapes, the same pattern `contract.stageSaveOutput.spec.ts` established.
