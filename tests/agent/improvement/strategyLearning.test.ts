@@ -101,6 +101,7 @@ const page = (rows: unknown[]) => ({ rows });
 // the exact thing these tests are about. These fakes hold only what this module reads and writes.
 const fakeLearning = () => {
   const observations: LearningObservation[] = [];
+  const claimedIngestionKeys = new Map<string, Set<string>>();
   let sequence = 0;
   const repository = {
     async recordObservation(observation: string, metadata?: Record<string, unknown>) {
@@ -108,7 +109,18 @@ const fakeLearning = () => {
       observations.push(record);
       return structuredClone(record);
     },
-    async listObservations() { return observations.map((record) => structuredClone(record)); }
+    async listObservations() { return observations.map((record) => structuredClone(record)); },
+    // Track B — a plain per-project Set is a faithful double of the real CAS ledger's OBSERVABLE
+    // contract here: nothing in these tests calls this concurrently (no `await` sits between one
+    // test's calls), so there is nothing for a retry loop to protect against that a synchronous
+    // check-and-add does not already give.
+    async claimStrategyIngestionKeys(projectId: string, keys: readonly string[]) {
+      const claimed = claimedIngestionKeys.get(projectId) ?? new Set<string>();
+      claimedIngestionKeys.set(projectId, claimed);
+      const newlyClaimed = new Set<string>();
+      for (const key of keys) { if (!claimed.has(key)) { claimed.add(key); newlyClaimed.add(key); } }
+      return newlyClaimed;
+    }
   } as unknown as LearningRepository;
   return repository;
 };
@@ -118,10 +130,28 @@ const fakeLearning = () => {
 // playbook apart from the fleet's, which a nodeId-only fake could never do.
 const fakeImprovement = () => {
   const playbooks = new Map<string, NodePlaybook>();
+  const promotionEffectClaims = new Map<string, Set<string>>();
   const key = (nodeId: string, scope?: PolicyScope) => `${scopeKey(scope)}::${nodeId}`;
   const repository = {
     async getPlaybook(nodeId: string, scope?: PolicyScope) { const playbook = playbooks.get(key(nodeId, scope)); return playbook ? structuredClone(playbook) : undefined; },
-    async savePlaybook(playbook: NodePlaybook) { playbooks.set(key(playbook.nodeId, playbook.scope), structuredClone(playbook)); return structuredClone(playbook); }
+    async savePlaybook(playbook: NodePlaybook) { playbooks.set(key(playbook.nodeId, playbook.scope), structuredClone(playbook)); return structuredClone(playbook); },
+    // Track B — same no-real-concurrency justification as fakeLearning's claim double: a plain
+    // read-mutate-store is a faithful stand-in for the CAS retry loop when nothing in these tests
+    // calls it concurrently.
+    async mutatePlaybook(nodeId: string, scope: PolicyScope | undefined, mutate: (existing: NodePlaybook | undefined) => NodePlaybook) {
+      const existing = playbooks.get(key(nodeId, scope));
+      const next = mutate(existing ? structuredClone(existing) : undefined);
+      playbooks.set(key(nodeId, scope), structuredClone(next));
+      return structuredClone(next);
+    },
+    async claimPromotionEffects(scope: PolicyScope | undefined, effectIds: readonly string[]) {
+      const ledgerKey = scopeKey(scope);
+      const claimed = promotionEffectClaims.get(ledgerKey) ?? new Set<string>();
+      promotionEffectClaims.set(ledgerKey, claimed);
+      const newlyClaimed = new Set<string>();
+      for (const effectId of effectIds) { if (!claimed.has(effectId)) { claimed.add(effectId); newlyClaimed.add(effectId); } }
+      return newlyClaimed;
+    }
   } as unknown as ImprovementRepository;
   return repository;
 };
@@ -544,6 +574,30 @@ describe("ingestStrategyRollups", () => {
       }
     });
 
+    it("treats a whitespace-only cmsAgentProjectId the same as a fully-absent one", async () => {
+      // The reviewer gap: `!cmsAgentProjectId` alone lets a blank-after-trim string ("  ") through as
+      // "known", because a non-empty string is truthy — but `normalizeScope`/`isFleetScope`
+      // (policyScope.ts) trim it away and treat it as UNNAMED, which would silently collapse
+      // `{ site: "  " }` to the literal fleet scope. That is the exact leak this fix exists to close,
+      // reopened by a value that cannot name a tenant any more than an absent one can. The guard must
+      // therefore quarantine a whitespace-only id exactly like `undefined`.
+      const rows = [strategyRow(), ordinaryRow(), thirdRow()];
+      await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "   ", from: WINDOW_1.from, to: WINDOW_1.to }, deps(jsonFetch(page(rows))));
+      const second = await ingestStrategyRollups({ projectId: "trk_demo", cmsAgentProjectId: "   ", from: WINDOW_2.from, to: WINDOW_2.to }, deps(jsonFetch(page(rows))));
+
+      expect(second.promotionSkipped).toBe("unknown_tenant");
+      expect(second.promotion.promoted).toEqual([]);
+      for (const nodeId of STRATEGY_PLAYBOOK_TARGET_NODES) {
+        // Same assertion as the fully-absent case: nothing this evidence produced reaches the FLEET
+        // playbook a tenant-blind dispatch would read.
+        expect(await improvementRepository.getPlaybook(nodeId)).toBeUndefined();
+      }
+      // And the evidence itself is still recorded, exactly as the fully-absent case is (see the first
+      // test in this block) — quarantine withholds promotion only, never the observation.
+      const stored = (await learningRepository.listObservations()).filter((entry) => entry.metadata?.source === STRATEGY_OBSERVATION_SOURCE);
+      expect(stored).toHaveLength(2);
+    });
+
     it("does not withhold promotion once the SAME evidence is re-ingested with a named tenant", async () => {
       // Quarantine is about missing attribution, not about the evidence itself: the exact same rows,
       // ingested with a resolvable tenant id, promote normally. This also pins that the guard is not
@@ -747,8 +801,11 @@ describe("promoteStrategySignals", () => {
   it("records, never throws, when a repository refuses one node's playbook", async () => {
     const real = improvementRepository;
     const failing = {
-      getPlaybook: async (nodeId: string) => { if (nodeId === "draft_writer") throw new Error("blob unavailable"); return real.getPlaybook(nodeId); },
-      savePlaybook: (playbook: NodePlaybook) => real.savePlaybook(playbook)
+      claimPromotionEffects: (scope: PolicyScope | undefined, effectIds: readonly string[]) => real.claimPromotionEffects(scope, effectIds),
+      mutatePlaybook: (nodeId: string, scope: PolicyScope | undefined, mutate: (existing: NodePlaybook | undefined) => NodePlaybook) => {
+        if (nodeId === "draft_writer") throw new Error("blob unavailable");
+        return real.mutatePlaybook(nodeId, scope, mutate);
+      }
     } as unknown as ImprovementRepository;
     const sightings = [WINDOW_1, WINDOW_2].map((window) => ({
       strategy: "objection_first", intent: "objection_handling", metric: "p75_dwell_ms" as const, direction: "above" as const, n: 400, window,

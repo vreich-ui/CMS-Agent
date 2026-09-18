@@ -106,9 +106,17 @@ describe("runStrategyLearningJob", () => {
     // The cross-tenant leak, closed: this ingest reads ONE tenant's tracking rollups, so the lessons
     // it promotes are that tenant's. Before scope they landed on the global per-node playbook that
     // every other tenant's dispatch of the same node reads.
+    //
+    // Track B — the two `now()`s are exactly STRATEGY_LEARNING_DEFAULT_WINDOW_DAYS (14) apart, not
+    // one day apart. This job's own header comment names the reason: on a DAILY schedule the 14-day
+    // trailing window advances by one day at a time, so two "consecutive" daily runs overlap by 13
+    // of their 14 days and are not independent evidence — exactly the gap stableStrategySignals now
+    // refuses to count as two windows (strategyWindowsOverlap). Fourteen days apart is the module's
+    // own suggested fix ("a schedule whose period matches its window"), and is what this test needs
+    // in order to keep pinning C2's scope-isolation behavior without depending on the overlap bug.
     const env = { ...CONFIGURED_ENV, CMS_AGENT_PROJECT_ID: "dr-lurie" };
     await runStrategyLearningJob({ env, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-08-31T06:00:00Z") });
-    const second = await runStrategyLearningJob({ env, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-09-01T06:00:00Z") });
+    const second = await runStrategyLearningJob({ env, fetchImpl: jsonFetch(rows()), now: () => new Date("2026-09-14T06:00:00Z") });
 
     expect(second.status).toBe("completed");
     if (second.status === "completed") expect(second.result.promotion.scopeKey).toBe("site=dr-lurie");
