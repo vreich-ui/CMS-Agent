@@ -704,8 +704,8 @@ export async function promoteStrategySignals(
   const contradictions = contradictingStrategySightings(sightings);
   if (!stable.length && !contradictions.length) return outcome;
 
-  const stableEffectKey = (nodeId: string, signal: StableStrategySignal) => nodeId + " " + strategySignalKeyOf(signal) + " " + signal.direction + " " + signal.through;
-  const counterEffectKey = (nodeId: string, sighting: StrategySignalSighting) => nodeId + " " + strategySignalKeyOf(sighting) + " " + strategyWindowKey(sighting.window);
+  const stableEffectKey = (nodeId: string, signal: StableStrategySignal) => nodeId + "\u0000" + strategySignalKeyOf(signal) + "\u0000" + signal.direction + "\u0000" + signal.through;
+  const counterEffectKey = (nodeId: string, sighting: StrategySignalSighting) => nodeId + "\u0000" + strategySignalKeyOf(sighting) + "\u0000" + strategyWindowKey(sighting.window);
   const effectIdByKey = new Map<string, string>();
   const candidateEffectIds: string[] = [];
   for (const nodeId of nodeIds) {
@@ -727,11 +727,6 @@ export async function promoteStrategySignals(
     const nodeContradictions = contradictions.filter((sighting) => claimedEffects.has(effectIdByKey.get(counterEffectKey(nodeId, sighting))!));
     if (!nodeStable.length && !nodeContradictions.length) continue;
 
-    // Track B -- these three accumulate the LAST attempt `mutatePlaybook` made, not every attempt:
-    // a CAS retry re-runs `mutate` against the freshly re-read playbook, and only the attempt whose
-    // write actually lands is the one this pass reports against. `mutate` itself stays a pure
-    // function of `existing` (plus the already-claimed nodeStable/nodeContradictions, which are
-    // fixed for this call) -- nothing here closes over a decision made against stale data.
     let promotedThisPass: Array<{ signal: string; text: string }> = [];
     let reinforcedThisPass: Array<{ signal: string; itemId: string }> = [];
     let counteredThisPass: Array<{ signal: string; itemId: string }> = [];
@@ -768,13 +763,6 @@ export async function promoteStrategySignals(
           countered.push({ signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
         }
 
-        // Track B -- a contradiction CANDIDATE (picked up because it sits in the newest window,
-        // before any lookup against the actual playbook) does not mean a contradiction APPLIES:
-        // that only happens if `counteredItem` is found above. A node with claimed candidates but
-        // no item they actually oppose, and no stable signal to add or reinforce, has nothing to
-        // persist -- returning `undefined` here (rather than an empty-delta `applyPlaybookDelta`
-        // call) tells `mutatePlaybook` to skip the write, so merely CONSIDERING a node for
-        // promotion never fabricates an empty playbook document for it.
         if (!add.length && !markHelpful.length && !markHarmful.size) return undefined;
         if (add.length) delta.add = add;
         if (markHelpful.length) delta.markHelpful = markHelpful;
