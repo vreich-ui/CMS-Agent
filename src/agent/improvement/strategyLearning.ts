@@ -763,6 +763,13 @@ export async function promoteStrategySignals(
           countered.push({ signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
         }
 
+        // Track B -- a contradiction CANDIDATE (picked up because it sits in the newest window,
+        // before any lookup against the actual playbook) does not mean a contradiction APPLIES:
+        // that only happens if `counteredItem` is found above. A node with claimed candidates but
+        // no item they actually oppose, and no stable signal to add or reinforce, has nothing to
+        // persist -- returning `undefined` here (rather than an empty-delta `applyPlaybookDelta`
+        // call) tells `mutatePlaybook` to skip the write, so merely CONSIDERING a node for
+        // promotion never fabricates an empty playbook document for it.
         if (!add.length && !markHelpful.length && !markHarmful.size) return undefined;
         if (add.length) delta.add = add;
         if (markHelpful.length) delta.markHelpful = markHelpful;
