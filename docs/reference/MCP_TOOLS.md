@@ -5370,7 +5370,7 @@ Compile a site_content.draft_page result against the CURRENT tenant state and ap
         },
         "fields": {
           "type": "object",
-          "description": "The page object's own top-level fields (pageType, slug, title, …) -- NEVER `sections`, which is derived from `drafted` and `sectionTargets`. Validated against this tenant's page contract. Never defaulted here."
+          "description": "The page object's own top-level fields: `route` (starts with '/'), `pageType`, `title` and `seo` are required -- `seo` is `{title?, description?, ogImage?, robots{index,follow}}`. There is no `slug` field. NEVER `sections` (assembled here from `drafted`/`sectionTargets`) and NEVER `tracking` (the tenant's live `tracking_attribute` constraint makes `set_tracking` its one writer). Validated against this tenant's live page contract; unknown keys are rejected. Never defaulted here."
         },
         "sectionTargets": {
           "type": "object",
@@ -5469,7 +5469,7 @@ Compile a site_content.draft_page result into the ONE page-level write it would 
         },
         "fields": {
           "type": "object",
-          "description": "The page object's own top-level fields (pageType, slug, title, …) -- NEVER `sections`, which is derived from `drafted` and `sectionTargets`. Validated against this tenant's page contract. Never defaulted here."
+          "description": "The page object's own top-level fields: `route` (starts with '/'), `pageType`, `title` and `seo` are required -- `seo` is `{title?, description?, ogImage?, robots{index,follow}}`. There is no `slug` field. NEVER `sections` (assembled here from `drafted`/`sectionTargets`) and NEVER `tracking` (the tenant's live `tracking_attribute` constraint makes `set_tracking` its one writer). Validated against this tenant's live page contract; unknown keys are rejected. Never defaulted here."
         },
         "sectionTargets": {
           "type": "object",
