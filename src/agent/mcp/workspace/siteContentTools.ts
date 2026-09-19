@@ -163,7 +163,7 @@ const siteContentCompilePageObjectsJsonSchema = objectSchema({
   },
   page: objectSchema({
     objectId: { type: ["string", "null"], description: "The page to revise; omit or null to compile a new page." },
-    fields: { type: "object", description: "The page object's own top-level fields (pageType, slug, title, …) -- NEVER `sections`, which is derived from `drafted` and `sectionTargets`. Validated against this tenant's page contract. Never defaulted here." },
+    fields: { type: "object", description: "The page object's own top-level fields: `route` (starts with '/'), `pageType`, `title` and `seo` are required -- `seo` is `{title?, description?, ogImage?, robots{index,follow}}`. There is no `slug` field. NEVER `sections` (assembled here from `drafted`/`sectionTargets`) and NEVER `tracking` (the tenant's live `tracking_attribute` constraint makes `set_tracking` its one writer). Validated against this tenant's live page contract; unknown keys are rejected. Never defaulted here." },
     sectionTargets: { type: "object", description: "Existing INLINE section ids (from the target page's own current `sections` array) to revise, keyed by the planner order they correspond to. An order absent from this map compiles a new inline section." },
     expectedPageContentRevision: { type: "integer", minimum: 0, description: "What you believe the page's contentRevision is. A page's content_revision covers its whole body, sections included, so one guard here is the whole check. A mismatch is refused as stale_target rather than applied." }
   }, ["fields"])
