@@ -537,6 +537,24 @@ export const strategyWindowSequence = (sightings: StrategySignalSighting[]): str
   [...new Set(sightings.map((sighting) => strategyWindowKey(sighting.window)))].sort();
 
 /**
+ * Track B — a CONSERVATIVE, DETERMINISTIC overlap test between two windows, treating `from`/`to`
+ * as a half-open [from, to) range (matching how this module has always built them —
+ * `ingestStrategyRollups`'s consecutive daily windows share a boundary date, e.g.
+ * `{from:"...29",to:"...30"}` then `{from:"...30",to:"...31"}`, and that shared boundary is NOT
+ * an overlap here, or every ordinary consecutive pair would wrongly fail this check).
+ *
+ * This does not claim statistical independence — two non-overlapping windows can still share
+ * sessions (a reader active across the boundary instant) and this module has never modeled that.
+ * It closes a narrower, checkable gap: a caller that reports windows sliding by less than their
+ * own width (a rolling 7-day window advanced by 1 day, say) would have the SAME sessions counted
+ * as "two independent windows" by the position-adjacency check alone, satisfying
+ * STRATEGY_PROMOTION_MIN_WINDOWS on data that is mostly one window repeated. Rejecting an overlap
+ * outright is the conservative call: an evidence pair this module cannot prove independent does
+ * not count as two.
+ */
+export const strategyWindowsOverlap = (a: StrategyWindow, b: StrategyWindow): boolean => a.from < b.to && b.from < a.to;
+
+/**
  * Findings that have EARNED a playbook item: the same direction, at or above the n bar, across at
  * least STRATEGY_PROMOTION_MIN_WINDOWS windows adjacent in the observed sequence, ending at the most
  * recent window the signal was seen in. A window below the n bar breaks the streak — it is not
@@ -562,6 +580,10 @@ export function stableStrategySignals(sightings: StrategySignalSighting[]): Stab
       const head = streak[0]!;
       if (candidate.direction !== head.direction) break;
       if (position.get(strategyWindowKey(candidate.window))! !== position.get(strategyWindowKey(head.window))! - 1) break;
+      // Track B — adjacent in the observed SEQUENCE is not the same fact as independent evidence:
+      // a candidate whose date range overlaps the streak's current head cannot extend it, however
+      // adjacent the two windows are in the position ordering (see strategyWindowsOverlap).
+      if (strategyWindowsOverlap(candidate.window, head.window)) break;
       streak.unshift(candidate);
     }
     if (streak.length < STRATEGY_PROMOTION_MIN_WINDOWS) continue;
@@ -606,6 +628,43 @@ export type StrategyPromotionOutcome = {
 const findItemByPrefix = (items: PlaybookItem[], prefix: string): PlaybookItem | undefined => items.find((item) => item.text.startsWith(prefix));
 
 /**
+ * Track B — the identity of ONE PROMOTION EFFECT: this scope, this recipient node, this signal,
+ * holding this exact evidence (direction + through + windows-count). Two calls that recompute the
+ * SAME stable streak (a retried job, a second scheduler fire, a re-run against unchanged history)
+ * produce the SAME id and therefore claim nothing the second time — see
+ * ImprovementRepository.claimPromotionEffects. A genuinely NEW window that extends or breaks the
+ * streak changes `through`/`windows`/`direction` and therefore the id, so real new evidence is
+ * never blocked by an old claim.
+ */
+export const strategyPromotionEffectId = (params: { scope?: PolicyScope; nodeId: string; signal: StableStrategySignal }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    kind: "promote",
+    scopeKey: scopeKey(params.scope),
+    nodeId: params.nodeId,
+    signal: strategySignalKeyOf(params.signal),
+    direction: params.signal.direction,
+    through: params.signal.through,
+    windows: params.signal.windows
+  });
+
+/**
+ * Track B — the identity of ONE COUNTER EFFECT: this scope, this recipient node, this signal,
+ * contradicted in this exact window. `contradictingStrategySightings` only ever reports the newest
+ * observed window, so the window alone (with the signal and recipient) is enough to make this
+ * stable across replays of the same pass.
+ */
+export const strategyCounterEffectId = (params: { scope?: PolicyScope; nodeId: string; sighting: StrategySignalSighting }): string =>
+  stableHash({
+    contract: STRATEGY_OBSERVATION_SOURCE,
+    kind: "counter",
+    scopeKey: scopeKey(params.scope),
+    nodeId: params.nodeId,
+    signal: strategySignalKeyOf(params.sighting),
+    window: params.sighting.window
+  });
+
+/**
  * Fold stable signals — and this window's contradictions — into the writer/planning playbooks.
  *
  * Every write goes through applyPlaybookDelta, which is the ONE mechanism this repo has for this:
@@ -645,44 +704,84 @@ export async function promoteStrategySignals(
   const contradictions = contradictingStrategySightings(sightings);
   if (!stable.length && !contradictions.length) return outcome;
 
+  const stableEffectKey = (nodeId: string, signal: StableStrategySignal) => nodeId + "\u0000" + strategySignalKeyOf(signal) + "\u0000" + signal.direction + "\u0000" + signal.through;
+  const counterEffectKey = (nodeId: string, sighting: StrategySignalSighting) => nodeId + "\u0000" + strategySignalKeyOf(sighting) + "\u0000" + strategyWindowKey(sighting.window);
+  const effectIdByKey = new Map<string, string>();
+  const candidateEffectIds: string[] = [];
   for (const nodeId of nodeIds) {
+    for (const signal of stable) {
+      const id = strategyPromotionEffectId({ scope, nodeId, signal });
+      effectIdByKey.set(stableEffectKey(nodeId, signal), id);
+      candidateEffectIds.push(id);
+    }
+    for (const sighting of contradictions) {
+      const id = strategyCounterEffectId({ scope, nodeId, sighting });
+      effectIdByKey.set(counterEffectKey(nodeId, sighting), id);
+      candidateEffectIds.push(id);
+    }
+  }
+  const claimedEffects = await deps.improvementRepository.claimPromotionEffects(scope, candidateEffectIds);
+
+  for (const nodeId of nodeIds) {
+    const nodeStable = stable.filter((signal) => claimedEffects.has(effectIdByKey.get(stableEffectKey(nodeId, signal))!));
+    const nodeContradictions = contradictions.filter((sighting) => claimedEffects.has(effectIdByKey.get(counterEffectKey(nodeId, sighting))!));
+    if (!nodeStable.length && !nodeContradictions.length) continue;
+
+    let promotedThisPass: Array<{ signal: string; text: string }> = [];
+    let reinforcedThisPass: Array<{ signal: string; itemId: string }> = [];
+    let counteredThisPass: Array<{ signal: string; itemId: string }> = [];
+
     try {
-      const existing = await deps.improvementRepository.getPlaybook(nodeId, scope);
-      const items = existing?.items ?? [];
-      const delta: PlaybookDelta = {};
-      const add: NonNullable<PlaybookDelta["add"]> = [];
-      const markHelpful: string[] = [];
-      const markHarmful = new Set<string>();
-      const promotedThisPass: Array<{ signal: string; text: string }> = [];
+      await deps.improvementRepository.mutatePlaybook(nodeId, scope, (existing) => {
+        const items = existing?.items ?? [];
+        const delta: PlaybookDelta = {};
+        const add: NonNullable<PlaybookDelta["add"]> = [];
+        const markHelpful: string[] = [];
+        const markHarmful = new Set<string>();
+        const promoted: Array<{ signal: string; text: string }> = [];
+        const reinforced: Array<{ signal: string; itemId: string }> = [];
+        const countered: Array<{ signal: string; itemId: string }> = [];
 
-      for (const signal of stable) {
-        const prefix = strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]);
-        const current = findItemByPrefix(items, prefix);
-        if (current) {
-          markHelpful.push(current.itemId);
-          outcome.reinforced.push({ nodeId, signal: strategySignalKeyOf(signal), itemId: current.itemId });
-          continue;
+        for (const signal of nodeStable) {
+          const prefix = strategyPlaybookItemPrefix(signal, signal.metric, signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]);
+          const current = findItemByPrefix(items, prefix);
+          if (current) {
+            markHelpful.push(current.itemId);
+            reinforced.push({ signal: strategySignalKeyOf(signal), itemId: current.itemId });
+            continue;
+          }
+          const text = renderStrategyPlaybookItem(signal);
+          add.push({ text, kind: strategyPlaybookItemKind(signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]), provenance: { source: "tracking" } });
+          promoted.push({ signal: strategySignalKeyOf(signal), text });
         }
-        const text = renderStrategyPlaybookItem(signal);
-        add.push({ text, kind: strategyPlaybookItemKind(signal.direction, STRATEGY_METRIC_DIRECTIONS[signal.metric]), provenance: { source: "tracking" } });
-        promotedThisPass.push({ signal: strategySignalKeyOf(signal), text });
-      }
 
-      for (const sighting of contradictions) {
-        const opposite: StrategyDirection = sighting.direction === "above" ? "below" : "above";
-        const counteredItem = findItemByPrefix(items, strategyPlaybookItemPrefix(sighting, sighting.metric, opposite, STRATEGY_METRIC_DIRECTIONS[sighting.metric]));
-        if (!counteredItem) continue;
-        markHarmful.add(counteredItem.itemId);
-        outcome.countered.push({ nodeId, signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
-      }
+        for (const sighting of nodeContradictions) {
+          const opposite: StrategyDirection = sighting.direction === "above" ? "below" : "above";
+          const counteredItem = findItemByPrefix(items, strategyPlaybookItemPrefix(sighting, sighting.metric, opposite, STRATEGY_METRIC_DIRECTIONS[sighting.metric]));
+          if (!counteredItem) continue;
+          markHarmful.add(counteredItem.itemId);
+          countered.push({ signal: strategySignalKeyOf(sighting), itemId: counteredItem.itemId });
+        }
 
-      if (add.length) delta.add = add;
-      if (markHelpful.length) delta.markHelpful = markHelpful;
-      if (markHarmful.size) delta.markHarmful = [...markHarmful];
-      if (!delta.add && !delta.markHelpful && !delta.markHarmful) continue;
-
-      await deps.improvementRepository.savePlaybook(applyPlaybookDelta(existing, nodeId, delta, now(), scope));
+        // Track B -- a contradiction CANDIDATE (picked up because it sits in the newest window,
+        // before any lookup against the actual playbook) does not mean a contradiction APPLIES:
+        // that only happens if `counteredItem` is found above. A node with claimed candidates but
+        // no item they actually oppose, and no stable signal to add or reinforce, has nothing to
+        // persist -- returning `undefined` here (rather than an empty-delta `applyPlaybookDelta`
+        // call) tells `mutatePlaybook` to skip the write, so merely CONSIDERING a node for
+        // promotion never fabricates an empty playbook document for it.
+        if (!add.length && !markHelpful.length && !markHarmful.size) return undefined;
+        if (add.length) delta.add = add;
+        if (markHelpful.length) delta.markHelpful = markHelpful;
+        if (markHarmful.size) delta.markHarmful = [...markHarmful];
+        promotedThisPass = promoted;
+        reinforcedThisPass = reinforced;
+        counteredThisPass = countered;
+        return applyPlaybookDelta(existing, nodeId, delta, now(), scope);
+      });
       for (const entry of promotedThisPass) outcome.promoted.push({ nodeId, ...entry });
+      for (const entry of reinforcedThisPass) outcome.reinforced.push({ nodeId, ...entry });
+      for (const entry of counteredThisPass) outcome.countered.push({ nodeId, ...entry });
     } catch (error) {
       outcome.errors.push({ scope: nodeId, error: error instanceof Error ? error.message : String(error) });
     }
@@ -767,6 +866,17 @@ export type StrategyLearningResult = {
    * from "this window was already ingested" and from "everything was below the bar".
    */
   duplicates: Array<{ strategy?: string; intent?: string }>;
+  /**
+   * Track B — a duplicate whose STORED evidence disagrees with what this pass just computed for
+   * the same ingestion key (a metric's material direction flipped, or the set of metrics with a
+   * material finding changed) rather than merely drifting by the "a late-arriving row nudges a
+   * rate by a hundredth of a point" amount `strategyIngestionKey` was designed to absorb. The
+   * stored observation is left exactly as it was — no destructive migration, no silent acceptance
+   * of the new numbers as independent support — and this array is the explicit conflict signal an
+   * operator (or a later reconciliation pass) needs in order to decide what a changed source
+   * window means, instead of it reading identically to an ordinary idempotent replay.
+   */
+  revisionConflicts: Array<{ strategy?: string; intent?: string; ingestionKey: string }>;
   promotion: StrategyPromotionOutcome;
   /** Set when the pull did not happen at all and that is NOT a failure: the sink is not configured on
    * this deployment, or its `by=strategy` grain has not been migrated yet (503). */
@@ -780,7 +890,7 @@ export type StrategyLearningResult = {
   errors: Array<{ scope?: string; error: string }>;
 };
 
-const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], duplicates: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
+const emptyResult = (): StrategyLearningResult => ({ rows: 0, rowsLabelled: 0, groups: 0, observations: [], withheld: [], duplicates: [], revisionConflicts: [], promotion: { scopeKey: FLEET_SCOPE_KEY, promoted: [], reinforced: [], countered: [], errors: [] }, errors: [] });
 
 /** The sink's `by=strategy` grain answers 503 until kugel-data serves it (migration 012, 2026-09).
  * That is a grain that does not exist on this deployment yet, not a failure — the same no-op an
@@ -851,21 +961,17 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
   result.groups = groups.length;
   const baseline = strategySiteBaseline(page.rows);
 
-  // FIX (b) — idempotency. Load which of THIS tenant's ingestion keys are already on file before
-  // writing anything this pass, so replaying the identical window (a retried job, a second scheduler
-  // fire, an operator's manual re-run) leaves the store exactly as it was rather than doubling the
-  // evidence a rate is computed from. `recordObservation` has no update-in-place primitive, so a
-  // matched key is skipped outright — see `strategyIngestionKey`'s own comment for what keeps the key
-  // stable across re-runs and distinct across genuinely different evidence.
-  const priorObservations = await deps.learningRepository.listObservations();
-  const alreadyIngested = new Set(
-    priorObservations
-      .map((entry) => readMetadata(entry))
-      .filter((metadata) => metadata.source === STRATEGY_OBSERVATION_SOURCE && asLabel(metadata.projectId) === params.projectId)
-      .map((metadata) => asLabel(metadata.ingestionKey))
-      .filter((key): key is string => Boolean(key))
-  );
-
+  // Track B — idempotency, made ATOMIC. This used to be "listObservations() snapshot, decide,
+  // then write": two concurrent or retried passes computing the same candidate set could each read
+  // the same snapshot, each conclude the key is absent, and both proceed to `recordObservation` —
+  // the store has no notion of "this key already exists", only `strategyLearning.ts` does, so a
+  // stale-read decision landed as two real observations. `claimStrategyIngestionKeys` is the single
+  // compare-and-set point instead: every candidate this pass would write is claimed in ONE call,
+  // and only the keys THIS call actually won are written below. A key not won was already claimed
+  // — by an earlier successful ingest, or by whichever concurrent/retried caller reached the claim
+  // first — and is a duplicate, full stop, without a second read to race on.
+  type StrategyCandidate = { group: StrategyGroup; findings: StrategyFinding[]; ingestionKey: string };
+  const candidates: StrategyCandidate[] = [];
   for (const group of groups) {
     const findings = strategyFindings(group, baseline);
     if (!findings.length) continue;
@@ -876,9 +982,45 @@ export async function ingestStrategyRollups(params: StrategyLearningParams, deps
       result.withheld.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), n: group.n, findings: findings.length });
       continue;
     }
-    const ingestionKey = strategyIngestionKey({ projectId: params.projectId, window, group });
-    if (alreadyIngested.has(ingestionKey)) {
+    candidates.push({ group, findings, ingestionKey: strategyIngestionKey({ projectId: params.projectId, window, group }) });
+  }
+
+  const claimed = candidates.length
+    ? await deps.learningRepository.claimStrategyIngestionKeys(params.projectId, candidates.map((candidate) => candidate.ingestionKey))
+    : new Set<string>();
+  const duplicateCandidates = candidates.filter((candidate) => !claimed.has(candidate.ingestionKey));
+
+  // Track B — revision-conflict detection, ONLY for the keys that turned out to be duplicates, and
+  // only a plain read (this does not gate the claim above, so it carries none of the claim's race).
+  // `strategyIngestionKey` is deliberately insensitive to a value nudging by a hundredth of a point
+  // (see its own comment) — that is by design, not this check's concern. What this catches is a
+  // replay whose material FINDINGS (which metrics are material, and which way) disagree with what
+  // is already on file for the exact same tenant/window/group: a changed source window, not a
+  // harmless re-fetch. The existing record is never touched — only reported.
+  const findingSignature = (entries: ReadonlyArray<{ metric: string; direction: string }>): string =>
+    [...entries].map((entry) => `${entry.metric}:${entry.direction}`).sort().join(",");
+  let storedByIngestionKey: Map<string, Record<string, unknown>> | undefined;
+  if (duplicateCandidates.length) {
+    storedByIngestionKey = new Map();
+    for (const entry of await deps.learningRepository.listObservations()) {
+      const metadata = readMetadata(entry);
+      if (metadata.source !== STRATEGY_OBSERVATION_SOURCE) continue;
+      const key = asLabel(metadata.ingestionKey);
+      if (key) storedByIngestionKey.set(key, metadata);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const { group, findings, ingestionKey } = candidate;
+    if (!claimed.has(ingestionKey)) {
       result.duplicates.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}) });
+      const stored = storedByIngestionKey?.get(ingestionKey);
+      if (stored) {
+        const storedFindings = Array.isArray(stored.findings) ? (stored.findings as Array<{ metric: string; direction: string }>) : [];
+        if (findingSignature(storedFindings) !== findingSignature(findings)) {
+          result.revisionConflicts.push({ ...(group.strategy ? { strategy: group.strategy } : {}), ...(group.intent ? { intent: group.intent } : {}), ingestionKey });
+        }
+      }
       continue;
     }
     const observation = renderStrategyObservation(group, findings, group.n, window);

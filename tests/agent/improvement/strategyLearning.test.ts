@@ -101,6 +101,7 @@ const page = (rows: unknown[]) => ({ rows });
 // the exact thing these tests are about. These fakes hold only what this module reads and writes.
 const fakeLearning = () => {
   const observations: LearningObservation[] = [];
+  const claimedIngestionKeys = new Map<string, Set<string>>();
   let sequence = 0;
   const repository = {
     async recordObservation(observation: string, metadata?: Record<string, unknown>) {
@@ -108,7 +109,18 @@ const fakeLearning = () => {
       observations.push(record);
       return structuredClone(record);
     },
-    async listObservations() { return observations.map((record) => structuredClone(record)); }
+    async listObservations() { return observations.map((record) => structuredClone(record)); },
+    // Track B — a plain per-project Set is a faithful double of the real CAS ledger's OBSERVABLE
+    // contract here: nothing in these tests calls this concurrently (no `await` sits between one
+    // test's calls), so there is nothing for a retry loop to protect against that a synchronous
+    // check-and-add does not already give.
+    async claimStrategyIngestionKeys(projectId: string, keys: readonly string[]) {
+      const claimed = claimedIngestionKeys.get(projectId) ?? new Set<string>();
+      claimedIngestionKeys.set(projectId, claimed);
+      const newlyClaimed = new Set<string>();
+      for (const key of keys) { if (!claimed.has(key)) { claimed.add(key); newlyClaimed.add(key); } }
+      return newlyClaimed;
+    }
   } as unknown as LearningRepository;
   return repository;
 };
@@ -118,10 +130,28 @@ const fakeLearning = () => {
 // playbook apart from the fleet's, which a nodeId-only fake could never do.
 const fakeImprovement = () => {
   const playbooks = new Map<string, NodePlaybook>();
+  const promotionEffectClaims = new Map<string, Set<string>>();
   const key = (nodeId: string, scope?: PolicyScope) => `${scopeKey(scope)}::${nodeId}`;
   const repository = {
     async getPlaybook(nodeId: string, scope?: PolicyScope) { const playbook = playbooks.get(key(nodeId, scope)); return playbook ? structuredClone(playbook) : undefined; },
-    async savePlaybook(playbook: NodePlaybook) { playbooks.set(key(playbook.nodeId, playbook.scope), structuredClone(playbook)); return structuredClone(playbook); }
+    async savePlaybook(playbook: NodePlaybook) { playbooks.set(key(playbook.nodeId, playbook.scope), structuredClone(playbook)); return structuredClone(playbook); },
+    // Track B — same no-real-concurrency justification as fakeLearning's claim double: a plain
+    // read-mutate-store is a faithful stand-in for the CAS retry loop when nothing in these tests
+    // calls it concurrently.
+    async mutatePlaybook(nodeId: string, scope: PolicyScope | undefined, mutate: (existing: NodePlaybook | undefined) => NodePlaybook) {
+      const existing = playbooks.get(key(nodeId, scope));
+      const next = mutate(existing ? structuredClone(existing) : undefined);
+      playbooks.set(key(nodeId, scope), structuredClone(next));
+      return structuredClone(next);
+    },
+    async claimPromotionEffects(scope: PolicyScope | undefined, effectIds: readonly string[]) {
+      const ledgerKey = scopeKey(scope);
+      const claimed = promotionEffectClaims.get(ledgerKey) ?? new Set<string>();
+      promotionEffectClaims.set(ledgerKey, claimed);
+      const newlyClaimed = new Set<string>();
+      for (const effectId of effectIds) { if (!claimed.has(effectId)) { claimed.add(effectId); newlyClaimed.add(effectId); } }
+      return newlyClaimed;
+    }
   } as unknown as ImprovementRepository;
   return repository;
 };
@@ -771,8 +801,11 @@ describe("promoteStrategySignals", () => {
   it("records, never throws, when a repository refuses one node's playbook", async () => {
     const real = improvementRepository;
     const failing = {
-      getPlaybook: async (nodeId: string) => { if (nodeId === "draft_writer") throw new Error("blob unavailable"); return real.getPlaybook(nodeId); },
-      savePlaybook: (playbook: NodePlaybook) => real.savePlaybook(playbook)
+      claimPromotionEffects: (scope: PolicyScope | undefined, effectIds: readonly string[]) => real.claimPromotionEffects(scope, effectIds),
+      mutatePlaybook: (nodeId: string, scope: PolicyScope | undefined, mutate: (existing: NodePlaybook | undefined) => NodePlaybook) => {
+        if (nodeId === "draft_writer") throw new Error("blob unavailable");
+        return real.mutatePlaybook(nodeId, scope, mutate);
+      }
     } as unknown as ImprovementRepository;
     const sightings = [WINDOW_1, WINDOW_2].map((window) => ({
       strategy: "objection_first", intent: "objection_handling", metric: "p75_dwell_ms" as const, direction: "above" as const, n: 400, window,

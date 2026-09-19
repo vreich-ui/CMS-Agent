@@ -16,8 +16,8 @@ const playbookMapKey = (nodeId: string, scope?: PolicyScope): string => {
 const clone = <T>(value: T): T => structuredClone(value);
 const newestFirst = <T extends { createdAt: string }>(records: T[]) => sortNewestFirst(records).map(clone);
 
-type ImprovementState = { proposals: Map<string, ImprovementProposal>; trials: Map<string, TrialRecord>; datasets: Map<string, EvalDataset>; playbooks: Map<string, NodePlaybook> };
-const createState = (): ImprovementState => ({ proposals: new Map(), trials: new Map(), datasets: new Map(), playbooks: new Map() });
+type ImprovementState = { proposals: Map<string, ImprovementProposal>; trials: Map<string, TrialRecord>; datasets: Map<string, EvalDataset>; playbooks: Map<string, NodePlaybook>; promotionEffectClaims: Map<string, Set<string>> };
+const createState = (): ImprovementState => ({ proposals: new Map(), trials: new Map(), datasets: new Map(), playbooks: new Map(), promotionEffectClaims: new Map() });
 
 export class MemoryImprovementRepository implements ImprovementRepository {
   private static states = new Map<string, ImprovementState>();
@@ -59,4 +59,41 @@ export class MemoryImprovementRepository implements ImprovementRepository {
     return playbook ? clone(playbook) : undefined;
   }
   async savePlaybook(playbook: NodePlaybook) { this.state().playbooks.set(playbookMapKey(playbook.nodeId, playbook.scope), clone(playbook)); return clone(playbook); }
+
+  // Track B — see ImprovementRepository.mutatePlaybook. No real concurrency inside one process
+  // (no `await` sits between the read and the write below), so this is a faithful double of the
+  // Blob CAS loop's OBSERVABLE contract — read-current, mutate, store — without needing the retry
+  // machinery a networked store requires.
+  async mutatePlaybook(
+    nodeId: string,
+    scope: PolicyScope | undefined,
+    mutate: (existing: NodePlaybook | undefined) => NodePlaybook | undefined
+  ): Promise<NodePlaybook | undefined> {
+    const key = playbookMapKey(nodeId, scope);
+    const existing = this.state().playbooks.get(key);
+    // Fleet-only seeding, mirroring getPlaybook above.
+    const seeded = existing ?? (isFleetScope(scope) && playbookSeeds.has(nodeId)
+      ? applyPlaybookDelta(undefined, nodeId, playbookSeeds.get(nodeId)!, new Date().toISOString())
+      : undefined);
+    const next = mutate(seeded ? clone(seeded) : undefined);
+    // Track B -- see BlobImprovementRepository.mutatePlaybook: `undefined` is "nothing to persist",
+    // never a fabricated empty playbook.
+    if (next === undefined) return seeded ? clone(seeded) : undefined;
+    this.state().playbooks.set(key, clone(next));
+    return clone(next);
+  }
+
+  async claimPromotionEffects(scope: PolicyScope | undefined, effectIds: readonly string[]): Promise<Set<string>> {
+    const ledgerKey = scopeKey(scope);
+    const claims = this.state().promotionEffectClaims;
+    const claimed = claims.get(ledgerKey) ?? new Set<string>();
+    claims.set(ledgerKey, claimed);
+    const newlyClaimed = new Set<string>();
+    for (const effectId of effectIds) {
+      if (claimed.has(effectId)) continue;
+      claimed.add(effectId);
+      newlyClaimed.add(effectId);
+    }
+    return newlyClaimed;
+  }
 }
