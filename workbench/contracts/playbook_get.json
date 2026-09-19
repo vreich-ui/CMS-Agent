@@ -23,5 +23,37 @@
       },
       "notes": "[draft_writer] no playbook exists yet for this node in the live workspace"
     }
-  ]
+  ],
+  "sourceVerifiedAddendum": {
+    "addedAt": "2026-09-18T00:00:00Z",
+    "reason": "CMS-Agent track A: the 2026-08-26 live capture above predates projectId scope support and the composed field, so it under-documents the real envelope. This addendum is NOT a fresh live capture (no live MCP session was available in this track's isolated worktree) - it is read directly off src/agent/mcp/workspace/improvementTools.ts's playbook.get handler and src/agent/improvement/{playbook,playbookRetrieval}.ts, cited below. workbench/src/api/adapters.ts's toPlaybookView() is normalized against this shape, not the 2026-08-26 sample above.",
+    "verifiedAgainst": [
+      "src/agent/mcp/workspace/improvementTools.ts (playbook.get tool: return ok({ playbook, scope: scopeKey(scope), rendered: playbook ? renderPlaybookForPrompt(playbook) : '', composed }))",
+      "src/agent/improvement/improvementTypes.ts (NodePlaybook, PlaybookItem shapes)",
+      "src/agent/improvement/playbookRetrieval.ts (ComposedPlaybook: {text, scopeKeys, unreadableScopeKeys})",
+      "src/agent/scope/policyScope.ts (scopeKey(): 'fleet' | 'site=<projectId>')"
+    ],
+    "call": {
+      "args": { "nodeId": "draft_writer", "projectId": "dr-lurie" },
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "playbook": "NodePlaybook | null - {nodeId, items: PlaybookItem[], budget: {maxItems, maxChars}, version, updatedAt, scope?}",
+          "scope": "string - scopeKey(scope): 'fleet' when projectId is omitted, 'site=<projectId>' otherwise",
+          "rendered": "string - renderPlaybookForPrompt(playbook) for THIS scope's own record alone, '' if playbook is null",
+          "composed": "{ text: string, scopeKeys: string[], unreadableScopeKeys: string[] } - the live dispatch-time composition across the scope chain (site then fleet), NOT a record of any past run's actual prompt"
+        }
+      },
+      "sample": {
+        "ok": true,
+        "data": {
+          "playbook": null,
+          "scope": "site=dr-lurie",
+          "rendered": "",
+          "composed": { "text": "", "scopeKeys": [], "unreadableScopeKeys": [] }
+        }
+      },
+      "notes": "Sample shown is the empty case (no record at this scope yet) - the shape a brand-new tenant's dispatch sees, and what workbench's mock store (mockStore.ts's playbooks map) also starts every scope from. A populated playbook.items[] entry has shape {itemId, text, kind: 'strategy'|'pitfall'|'constraint', helpfulCount, harmfulCount, status: 'active'|'retired', provenance?: {source?, runIds?, evalIds?}, createdAt, updatedAt} per improvementTypes.ts's PlaybookItem."
+    }
+  }
 }

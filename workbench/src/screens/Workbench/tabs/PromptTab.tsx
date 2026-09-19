@@ -11,6 +11,17 @@
 // component unmounts) or to another node (Center.tsx keeps this component
 // mounted, only the `nodeId`/`node` props change) never silently drops
 // work — the draft reloads either way, marked dirty, with Discard available.
+//
+// CMS-Agent track A (2026-09-18): the playbook section of the effective
+// preview used to render `playbookQ.data?.lessons` — a field the real
+// `playbook_get` response has never returned (see api/adapters.ts's
+// toPlaybookView and the track-A report). It now reads the same
+// normalized PlaybookView every other playbook surface reads, scoped to
+// this run's own tenant when a run is bound (a run's `proj` IS the tenant
+// whose dispatch would read this node's playbook) and to fleet otherwise —
+// that inference is stated explicitly in the UI rather than left implicit,
+// since "no run bound" and "this tenant's playbook is empty" are different
+// facts.
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -18,6 +29,7 @@ import { useSkills } from '../../../api/hooks';
 import { ActionCancelledError } from '../../../api/confirmAction';
 import { IS_READ_ONLY } from '../../../api/client';
 import { workspaceUpdateNodePrompt } from '../../../api/verbs';
+import type { PlaybookView } from '../../../api/adapters';
 import { setNextConfirmTrigger } from '../../../components/ConfirmDialog';
 import { Btn, Card } from '../../../components/primitives';
 import { toast } from '../../../components/Toasts';
@@ -39,7 +51,12 @@ import {
 
 export function PromptTab({ node, nodeId, wfName, run }: { node: WorkflowNode; nodeId: string; wfName: string; run: Run | null }) {
   const promptQ = useEffectivePrompt(nodeId);
-  const playbookQ = usePlaybook(nodeId);
+  // A run's `proj` is the tenant whose dispatch would read this node's
+  // playbook — see Runs/HistoryTab.tsx's own use of `run.proj` as a project
+  // id. With no run bound there is no tenant to infer, so this reads the
+  // fleet record (the same "omit projectId" spelling playbook.get uses) —
+  // never a silent guess at some other tenant.
+  const playbookQ = usePlaybook(nodeId, run?.proj);
   // W3 — `skill_list` is the single slowest read on this plane (20 s for 63 KB, measured
   // 2026-09-16: it re-scans three blob prefixes and opens every object under all of them). This
   // tab wants it only to turn this node's skill ids into names, so a node with no skills must not
@@ -194,10 +211,11 @@ export function PromptTab({ node, nodeId, wfName, run }: { node: WorkflowNode; n
             dirty={dirty}
             skillIds={skillIds}
             skillVersions={skillsQ.data}
-            playbookNote={playbookQ.data?.note}
-            lessons={playbookQ.data?.lessons ?? []}
+            runProjectId={run?.proj}
+            playbookView={playbookQ.data}
             loadingSkills={skillsQ.isLoading}
             loadingPlaybook={playbookQ.isLoading}
+            playbookError={playbookQ.isError ? playbookQ.error?.message : undefined}
           />
         </Disclosure>
         {/* W6 — "⇄ Replay vs dataset" sat here, permanently disabled, since U7. Replaying against a
@@ -216,20 +234,27 @@ function EffectivePreview({
   dirty,
   skillIds,
   skillVersions,
-  playbookNote,
-  lessons,
+  runProjectId,
+  playbookView,
   loadingSkills,
   loadingPlaybook,
+  playbookError,
 }: {
   base: string;
   dirty: boolean;
   skillIds: string[];
   skillVersions: Array<{ id: string; version: string }> | undefined;
-  playbookNote: string | undefined;
-  lessons: unknown[];
+  runProjectId: string | undefined;
+  playbookView: PlaybookView | undefined;
   loadingSkills: boolean;
   loadingPlaybook: boolean;
+  playbookError: string | undefined;
 }) {
+  const scopeDesc = runProjectId
+    ? `tenant ${runProjectId} — inferred from this tab's bound run`
+    : 'Fleet — no run is bound, so this shows the shared fleet record, not a tenant’s';
+  const activeCount = playbookView?.items.filter((i) => i.status === 'active').length ?? 0;
+
   return (
     <div>
       {dirty && (
@@ -268,18 +293,41 @@ function EffectivePreview({
       )}
 
       <div className="lbl" style={{ margin: '12px 0 6px', color: 'var(--ok)' }}>
-        playbook lessons
+        playbook lessons · scope: {scopeDesc}
       </div>
       {loadingPlaybook ? (
         <p style={{ color: 'var(--muted)', fontSize: 12, margin: 0 }}>loading playbook…</p>
-      ) : lessons.length > 0 ? (
-        <div style={{ borderLeft: '3px solid var(--ok)', paddingLeft: 10 }}>
-          <div className="promptbox" style={{ background: 'color-mix(in srgb, var(--ok) 10%, transparent)', color: 'var(--ink)' }}>
-            {JSON.stringify(lessons, null, 2)}
-          </div>
-        </div>
+      ) : playbookError ? (
+        <ErrorNote message={playbookError} />
+      ) : !playbookView ? (
+        <p style={{ color: 'var(--faint)', fontSize: 12, margin: 0 }}>No response from playbook_get.</p>
+      ) : !playbookView.exists ? (
+        <p style={{ color: 'var(--faint)', fontSize: 12, margin: 0 }}>
+          No playbook record exists yet at this scope — nothing would be injected from it right now.
+        </p>
+      ) : activeCount === 0 ? (
+        <p style={{ color: 'var(--faint)', fontSize: 12, margin: 0 }}>
+          A playbook record exists at this scope (v{playbookView.version}) but every lesson in it is retired —
+          nothing from it is injected right now.
+        </p>
       ) : (
-        <p style={{ color: 'var(--faint)', fontSize: 12, margin: 0 }}>{playbookNote ?? 'No curated playbook lessons for this node yet.'}</p>
+        <div style={{ borderLeft: '3px solid var(--ok)', paddingLeft: 10 }}>
+          <p className="note" style={{ marginTop: 0 }}>
+            {activeCount} active lesson{activeCount === 1 ? '' : 's'} · {playbookView.activeChars} /{' '}
+            {playbookView.budgetMaxChars} chars (this scope&rsquo;s own record only — the composed text below folds
+            in the fleet contribution too). This is a live preview of what a dispatch would receive right now, not
+            a record of what any past run actually received.
+          </p>
+          <div className="promptbox" style={{ background: 'color-mix(in srgb, var(--ok) 10%, transparent)', color: 'var(--ink)' }}>
+            {playbookView.composedText || '(nothing would be injected — no active lessons at any scope in the chain)'}
+          </div>
+          {playbookView.composedUnreadableScopeKeys.length > 0 && (
+            <p className="note" style={{ color: 'var(--acc)' }}>
+              Warning: {playbookView.composedUnreadableScopeKeys.join(', ')} failed to read — this preview may be
+              missing lessons from that scope.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

@@ -718,3 +718,182 @@ export function toFinetuneReadiness(raw: RawFinetuneReadiness): FinetuneReadines
     recommendation: raw.reason ?? raw.recommendation,
   };
 }
+
+// =================================== playbook ======================================
+// CMS-Agent track A (2026-09-18) — `playbook_get` / `playbook_apply_delta`.
+// Source-verified against src/agent/mcp/workspace/improvementTools.ts,
+// src/agent/improvement/{improvementTypes,playbook,playbookRetrieval}.ts,
+// not a fresh live capture (see CMS-Agent-track-A-report.md). Replaces the
+// old `Playbook {nodeId, lessons: unknown[], version, note?}` shape, which
+// matched neither the live tool's actual response nor anything a real
+// backend has ever returned — see that report for how this was found.
+//
+// ONE normalization path for BOTH the node's Learning tab
+// (Workbench/tabs/LearningTab.tsx) and the Learning → Playbooks screen: both
+// now call verbs.playbookGet, which calls toPlaybookView. Neither screen
+// hand-rolls its own reading of `data.playbook`/`data.composed` — see
+// Learning/PlaybookPanel.tsx, the one component both screens render.
+
+export type PlaybookItemKind = 'strategy' | 'pitfall' | 'constraint';
+export type PlaybookItemStatus = 'active' | 'retired';
+export type PlaybookProvenanceSource = 'reflector' | 'human' | 'migration' | 'tracking';
+
+export interface RawPlaybookItem {
+  itemId: string;
+  text: string;
+  kind: PlaybookItemKind;
+  helpfulCount: number;
+  harmfulCount: number;
+  status: PlaybookItemStatus;
+  provenance?: { source?: string; runIds?: string[]; evalIds?: string[] };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RawNodePlaybook {
+  nodeId: string;
+  items: RawPlaybookItem[];
+  budget: { maxItems: number; maxChars: number };
+  version: number;
+  updatedAt: string;
+  scope?: Record<string, string>;
+}
+
+export interface RawComposedPlaybook {
+  text: string;
+  scopeKeys: string[];
+  unreadableScopeKeys: string[];
+}
+
+/** `playbook_get`'s full envelope (`data`, after callVerb unwraps `{ok,data}`). */
+export interface RawPlaybookGetResult {
+  playbook: RawNodePlaybook | null;
+  scope: string;
+  rendered: string;
+  composed: RawComposedPlaybook;
+}
+
+/** `playbook_apply_delta`'s full envelope. */
+export interface RawPlaybookApplyDeltaResult {
+  playbook: RawNodePlaybook;
+  scope: string;
+}
+
+export interface PlaybookItemView {
+  id: string;
+  text: string;
+  kind: PlaybookItemKind;
+  status: PlaybookItemStatus;
+  helpfulCount: number;
+  harmfulCount: number;
+  provenanceSource: PlaybookProvenanceSource;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One node's playbook AT ONE SCOPE, plus the composed chain that scope's
+ * dispatch actually reads. `exists: false` means the backend genuinely has
+ * no record at this scope yet (`data.playbook === null`) — distinct from an
+ * existing record whose active item list happens to be empty (every item
+ * retired), which is `exists: true, items` all `status: 'retired'`. Never
+ * collapse those two into one "empty" state — item 5 of the task brief.
+ *
+ * `composedText`/`composedScopeKeys` are a LIVE preview of what a dispatch
+ * right now would receive, computed by the same composePlaybookForDispatch
+ * the runners call — it is NOT a record of what any past run actually got
+ * (nothing in this repo persists that; see the track-A report's dependency
+ * note). `rendered` is narrower: just this one scope's own record, with no
+ * fleet contribution folded in — useful for showing what THIS record alone
+ * would look like before composition.
+ */
+export interface PlaybookView {
+  nodeId: string;
+  exists: boolean;
+  scopeKey: string;
+  items: PlaybookItemView[];
+  budgetMaxItems: number;
+  budgetMaxChars: number;
+  /** Real character count of the rendered ACTIVE items — not a token estimate. See renderedActiveChars' doc comment at the call site for why this, not `.length` of `rendered`, is the number to bar-chart against `budgetMaxChars`. */
+  activeChars: number;
+  version: number;
+  updatedAt: string | null;
+  rendered: string;
+  composedText: string;
+  composedScopeKeys: string[];
+  composedUnreadableScopeKeys: string[];
+}
+
+/** Mirrors improvement/playbook.ts's DEFAULT_PLAYBOOK_BUDGET — display fallback ONLY for a scope with no record yet (there is nothing else to show a budget bar against); a real record's own `budget` always wins once one exists. */
+const DEFAULT_DISPLAY_BUDGET = { maxItems: 12, maxChars: 2000 } as const;
+
+function toPlaybookItemView(raw: RawPlaybookItem): PlaybookItemView {
+  const source = raw.provenance?.source;
+  const provenanceSource: PlaybookProvenanceSource =
+    source === 'reflector' || source === 'human' || source === 'migration' || source === 'tracking' ? source : 'reflector';
+  return {
+    id: raw.itemId,
+    text: raw.text,
+    kind: raw.kind,
+    status: raw.status,
+    helpfulCount: raw.helpfulCount,
+    harmfulCount: raw.harmfulCount,
+    provenanceSource,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+  };
+}
+
+/** Exactly the rendering rule improvement/playbook.ts's renderPlaybookForPrompt uses per line, summed over ACTIVE items only — matches what the budget bar is actually bounding. */
+function renderedActiveChars(items: PlaybookItemView[]): number {
+  return items
+    .filter((item) => item.status === 'active')
+    .reduce((sum, item) => sum + `- (${item.kind}) ${item.text}`.length + 1, 0);
+}
+
+/** `playbook_get`. The single normalization path Learning/PlaybookPanel.tsx (shared by the Learning → Playbooks screen and the node's Learning tab) reads. */
+export function toPlaybookView(nodeId: string, raw: RawPlaybookGetResult): PlaybookView {
+  const record = raw.playbook;
+  const items = (record?.items ?? []).map(toPlaybookItemView);
+  return {
+    nodeId,
+    exists: record !== null,
+    scopeKey: raw.scope,
+    items,
+    budgetMaxItems: record?.budget.maxItems ?? DEFAULT_DISPLAY_BUDGET.maxItems,
+    budgetMaxChars: record?.budget.maxChars ?? DEFAULT_DISPLAY_BUDGET.maxChars,
+    activeChars: renderedActiveChars(items),
+    version: record?.version ?? 0,
+    updatedAt: record?.updatedAt ?? null,
+    rendered: raw.rendered,
+    composedText: raw.composed.text,
+    composedScopeKeys: raw.composed.scopeKeys,
+    composedUnreadableScopeKeys: raw.composed.unreadableScopeKeys,
+  };
+}
+
+/** The playbook record alone, as `playbook_apply_delta` echoes it back — no `rendered`/`composed` (that envelope doesn't carry them; verbs.playbookApplyDelta invalidates the `playbook_get` query for a full re-read instead of fabricating them). */
+export interface PlaybookRecordView {
+  nodeId: string;
+  scopeKey: string;
+  items: PlaybookItemView[];
+  budgetMaxItems: number;
+  budgetMaxChars: number;
+  activeChars: number;
+  version: number;
+  updatedAt: string;
+}
+
+export function toPlaybookRecordView(raw: RawPlaybookApplyDeltaResult): PlaybookRecordView {
+  const items = raw.playbook.items.map(toPlaybookItemView);
+  return {
+    nodeId: raw.playbook.nodeId,
+    scopeKey: raw.scope,
+    items,
+    budgetMaxItems: raw.playbook.budget.maxItems,
+    budgetMaxChars: raw.playbook.budget.maxChars,
+    activeChars: renderedActiveChars(items),
+    version: raw.playbook.version,
+    updatedAt: raw.playbook.updatedAt,
+  };
+}

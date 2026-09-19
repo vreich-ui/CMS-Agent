@@ -42,6 +42,10 @@ function optNum(args: Args, key: string): number | undefined {
   const v = args[key];
   return typeof v === 'number' ? v : undefined;
 }
+function optBool(args: Args, key: string): boolean | undefined {
+  const v = args[key];
+  return typeof v === 'boolean' ? v : undefined;
+}
 
 let mockIdCounter = 0;
 let mockWorkspaceVersion = 1;
@@ -699,12 +703,15 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
   // fetches everything and filters client-side on the raw item's `nodeId`
   // field, which this fixture set's items already carry natively.
   learning_list_observations: () => ({ observations: mockStore.getObservations() }),
-  playbook_get: (a) => ({
-    nodeId: str(a, 'nodeId'),
-    lessons: [],
-    version: 0,
-    note: 'No playbook captured in fixtures for this node yet.',
-  }),
+  // CMS-Agent track A (2026-09-18) — real, PERSISTING mock playbook state:
+  // mockStore.getPlaybook()/applyPlaybookDelta() implement the same
+  // scope-chain + dedup + budget-eviction rules as the live backend (see
+  // mockStore.ts's own header comment on that section), so an operator
+  // curating a lesson in mock mode sees it survive a reload and never sees
+  // one tenant's lessons leak into another's — the fixture set never
+  // captured a playbook (fixtures/README.md), so every scope starts empty,
+  // same as a brand-new tenant against a live backend.
+  playbook_get: (a): adapters.RawPlaybookGetResult => mockStore.getPlaybook(str(a, 'nodeId'), optStr(a, 'projectId')),
 
   // -- evaluation --
   evaluation_list_rubrics: () => ({ rubrics: mockStore.getRubrics() }),
@@ -913,11 +920,37 @@ const MOCK_HANDLERS: Record<string, (args: Args) => unknown> = {
       runId: optStr(a, 'runId') ?? null,
       createdAt: new Date().toISOString(),
     }),
-  learning_archive_observation: (a) => mockStore.archiveObservation(str(a, 'id')) ?? null,
+  // W7-style fixture correction — the live tool wraps its result in
+  // `{observation}` (improvementTools.ts's archiveObservation handler,
+  // matching every other single-record verb's envelope); this used to
+  // return the bare record, which a live-shaped adapter (adapters.ts's
+  // toObservation, called on `.observation`) would silently read as
+  // `undefined` on the wire while looking fine against this fixture alone.
+  learning_archive_observation: (a) => ({ observation: mockStore.archiveObservation(str(a, 'id')) ?? null }),
 
-  playbook_curate: (a) => ({ nodeId: str(a, 'nodeId'), lesson: a.lesson ?? null, applied: true }),
-  playbook_apply_delta: (a) => ({ nodeId: str(a, 'nodeId'), delta: a.delta ?? null, applied: true }),
-  playbook_migrate_observations: () => ({ migrated: 0 }),
+  // Honest about what this mock does NOT do: playbook.curate is the
+  // Reflector→Curator pass over a node's EVALUATION evidence
+  // (improvement/curator.ts), which this fixture set has none of wired up.
+  // Returning a fabricated `{applied: true}` here would be exactly the
+  // "an unsuccessful mutation cannot look saved" failure mode the track-A
+  // acceptance criteria call out — so this mock is a real, typed no-op
+  // instead of a fake success. Nothing in the UI calls this verb any more
+  // (Observations.tsx's curate flow uses playbook_apply_delta — see
+  // verbs.ts's own doc comment on why); kept correctly-shaped for when a
+  // future work package wires up the automatic pass.
+  playbook_curate: (a) => ({
+    playbook: null,
+    curated: false,
+    mode: (a.mode === 'openai' ? 'openai' : 'mock') as 'mock' | 'openai',
+    reason: 'Mock fixtures carry no evaluation evidence for the reflector pass to read; nothing to curate.',
+  }),
+  playbook_apply_delta: (a): adapters.RawPlaybookApplyDeltaResult =>
+    mockStore.applyPlaybookDelta(
+      str(a, 'nodeId'),
+      (a.delta ?? {}) as Parameters<typeof mockStore.applyPlaybookDelta>[1],
+      optStr(a, 'projectId'),
+    ),
+  playbook_migrate_observations: (a) => mockStore.migratePlaybookObservations(optBool(a, 'dryRun')),
 
   feedback_record: (a) => {
     mockStore.recordPreferencePair();

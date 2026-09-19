@@ -1,0 +1,29 @@
+{
+  "verb": "playbook_migrate_observations",
+  "sourceVerifiedOnly": true,
+  "note": "No live capture exists for this verb — added new in CMS-Agent track A (2026-09-18) because the workbench previously sent a `nodeId` argument this verb's real schema rejects (it is a GLOBAL, one-shot sweep with no per-node filter). This file is read directly off source, not a live MCP session (none was available in this track's isolated worktree).",
+  "verifiedAgainst": [
+    "src/agent/mcp/workspace/improvementTools.ts (playbook.migrate_observations tool: zodSchema is `{dryRun?: boolean}` only — no `nodeId` property, `.strict()` would reject one)"
+  ],
+  "calls": [
+    {
+      "args": { "dryRun": true },
+      "ok": true,
+      "shape": {
+        "ok": "boolean",
+        "data": {
+          "migratedNodes": "number — count of distinct nodeIds with at least one node-tagged, non-archived observation",
+          "migratedObservations": "number — total observation texts that would be (or were) folded into a playbook add-delta",
+          "skippedWithoutNodeId": "number — observations with no nodeId (top-level or in metadata), which this migration cannot attribute to any node",
+          "dryRun": "boolean — echoes the request; true means nothing was written"
+        }
+      },
+      "notes": "The prior workbench code read a nonexistent `res.migrated` field from this verb's response; the real fields are migratedNodes/migratedObservations/skippedWithoutNodeId/dryRun, all always present."
+    },
+    {
+      "args": {},
+      "ok": true,
+      "notes": "dryRun is optional; omitting it runs the migration for real (dryRun defaults falsy in the zod schema, matching Observations.tsx's global 'migrate all node-tagged observations' button, which sends no args)."
+    }
+  ]
+}

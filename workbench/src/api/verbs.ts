@@ -237,20 +237,6 @@ export interface RepositoryHealth {
   issues: string[];
 }
 
-export interface Playbook {
-  nodeId: string;
-  lessons: unknown[];
-  version: number;
-  note?: string;
-}
-
-export interface PlaybookMutationResult {
-  nodeId: string;
-  applied?: boolean;
-  migrated?: number;
-  [key: string]: unknown;
-}
-
 export interface EvaluationResult {
   nodeId: string;
   score: number | null;
@@ -1580,34 +1566,110 @@ export const learningRecordObservation = (args: { nodeId?: string; runId?: strin
     args,
   );
 
-export const learningArchiveObservation = (args: { id: string }) =>
-  mutate<Observation | null>(
+/** `learning_archive_observation` returns `{observation: <the archived record>}`, not the record itself — a plain `mutate<Observation | null>(...)` cast to the raw envelope was never actually an Observation at runtime. Unwrap and adapt it like every other list/get verb does. */
+export const learningArchiveObservation = async (args: { id: string; reason?: string }): Promise<Observation> => {
+  const raw = await mutate<{ observation: adapters.RawObservation }>(
     'learning_archive_observation',
     `Archive observation ${args.id}.`,
     args,
   );
+  return adapters.toObservation(raw.observation);
+};
 
-export const playbookGet = (args: { nodeId: string }) => callVerb<Playbook>('playbook_get', args);
-
-export const playbookCurate = (args: { nodeId: string; observationId?: string; lesson: string }) =>
-  mutate<PlaybookMutationResult>(
-    'playbook_curate',
-    `Curate a lesson into the playbook for node ${args.nodeId}.`,
-    args,
+/**
+ * `playbook_get`. Omit `projectId` for the FLEET record — that is the
+ * backend's own spelling of "no tenant scope" (improvementTools.ts's
+ * playbook.get doc comment), not something this client invents. Callers
+ * (Learning/PlaybookPanel.tsx) gate this on an explicit scope selection —
+ * see Learning/scope.ts for why "no projectId" and "operator hasn't picked
+ * a scope yet" must never be the same client-side state even though they
+ * produce the same wire call.
+ */
+export const playbookGet = async (args: { nodeId: string; projectId?: string }): Promise<adapters.PlaybookView> => {
+  const raw = await callVerb<adapters.RawPlaybookGetResult>(
+    'playbook_get',
+    args.projectId ? { nodeId: args.nodeId, projectId: args.projectId } : { nodeId: args.nodeId },
   );
+  return adapters.toPlaybookView(args.nodeId, raw);
+};
 
-export const playbookApplyDelta = (args: { nodeId: string; delta: unknown }) =>
-  mutate<PlaybookMutationResult>(
+export interface PlaybookDeltaInput {
+  add?: Array<{ text: string; kind: adapters.PlaybookItemKind }>;
+  markHelpful?: string[];
+  markHarmful?: string[];
+  retire?: string[];
+}
+
+/**
+ * `playbook_apply_delta`. Real schema is `{nodeId, delta, projectId?}` where
+ * `delta` is `{add?, markHelpful?, markHarmful?, retire?}` — there is no
+ * `{op, lessonId}` shape and no hard delete; "remove" a lesson by passing
+ * its id in `retire` (one-way), and "restore" a retired one by re-`add`ing
+ * its EXACT original text — applyPlaybookDelta (improvement/playbook.ts)
+ * dedupes adds by normalized text and flips a matching retired item back to
+ * `active` rather than inserting a duplicate. Both are real, existing
+ * backend semantics; neither is an invented tool. See
+ * Learning/PlaybookPanel.tsx for where this is used that way.
+ */
+export const playbookApplyDelta = (args: { nodeId: string; delta: PlaybookDeltaInput; projectId?: string }) =>
+  mutate<adapters.RawPlaybookApplyDeltaResult>(
     'playbook_apply_delta',
-    `Apply a playbook delta to node ${args.nodeId}.`,
-    args,
-  );
+    `Apply a playbook delta to ${args.nodeId} (${args.projectId ?? 'fleet'}).`,
+    args.projectId ? { nodeId: args.nodeId, delta: args.delta, projectId: args.projectId } : { nodeId: args.nodeId, delta: args.delta },
+  ).then((raw) => adapters.toPlaybookRecordView(raw));
 
-export const playbookMigrateObservations = (args: { nodeId: string }) =>
-  mutate<PlaybookMutationResult>(
+export interface PlaybookCurateResult {
+  playbook: adapters.PlaybookRecordView | null;
+  curated: boolean;
+  mode: 'mock' | 'openai';
+  reason?: string;
+}
+
+/**
+ * `playbook.curate` — the Reflector→Curator pass that derives a delta from a
+ * node's EVALUATION evidence and applies it. Real schema is
+ * `{nodeId, mode, projectId?}`; it does NOT take a lesson's text or an
+ * observationId at all, so it was never the right verb for "curate this one
+ * observation into a lesson" (see the track-A report — that was
+ * `playbookCurate({nodeId, observationId, lesson})` before this fix, which
+ * `.strict()`-rejected on a live backend). Kept here, correctly typed, for
+ * when a future WP wires up the automatic pass; Observations.tsx's curate
+ * flow now calls playbookApplyDelta instead, which is what it always meant.
+ */
+export const playbookCurate = async (args: { nodeId: string; mode: 'mock' | 'openai'; projectId?: string }): Promise<PlaybookCurateResult> => {
+  const raw = await mutate<{ playbook: adapters.RawPlaybookApplyDeltaResult['playbook'] | null; curated: boolean; mode: 'mock' | 'openai'; reason?: string }>(
+    'playbook_curate',
+    `Run the reflector/curator pass for ${args.nodeId} (${args.projectId ?? 'fleet'}).`,
+    args.projectId ? { nodeId: args.nodeId, mode: args.mode, projectId: args.projectId } : { nodeId: args.nodeId, mode: args.mode },
+  );
+  return {
+    playbook: raw.playbook ? adapters.toPlaybookRecordView({ playbook: raw.playbook, scope: '' }) : null,
+    curated: raw.curated,
+    mode: raw.mode,
+    reason: raw.reason,
+  };
+};
+
+export interface PlaybookMigrateObservationsResult {
+  migratedNodes: number;
+  migratedObservations: number;
+  skippedWithoutNodeId: number;
+  dryRun: boolean;
+}
+
+/**
+ * `playbook.migrate_observations`. Real schema is `{dryRun?}` — GLOBAL, no
+ * `nodeId` parameter at all: it sweeps every node-tagged observation in one
+ * pass (improvementTools.ts). The UI used to send `{nodeId}` (an argument
+ * the tool's `.strict()` zod schema rejects outright on a live backend, as
+ * if a per-node migration existed; it doesn't), so this is now a single
+ * global action, not one scoped to a node filter.
+ */
+export const playbookMigrateObservations = (args?: { dryRun?: boolean }) =>
+  mutate<PlaybookMigrateObservationsResult>(
     'playbook_migrate_observations',
-    `Migrate accumulated observations into the playbook for node ${args.nodeId}.`,
-    args,
+    'Migrate every node-tagged legacy observation into its playbook (fleet scope, all nodes).',
+    args?.dryRun !== undefined ? { dryRun: args.dryRun } : {},
   );
 
 // =============================== evaluation ==================================
